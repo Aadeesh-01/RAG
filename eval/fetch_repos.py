@@ -8,34 +8,15 @@ commit; nothing from the repos is executed.
 
 import glob
 import os
-import subprocess
 import sys
 
 import yaml
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REPOS_DIR = os.path.join(ROOT, "eval", ".repos")
+sys.path.insert(0, ROOT)
 
-
-def git(*args, cwd=None):
-    subprocess.run(["git", *args], cwd=cwd, check=True,
-                   env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
-
-
-def fetch(url, sha):
-    dest = os.path.join(REPOS_DIR, url.rstrip("/").split("/")[-1])
-    if os.path.isdir(dest):
-        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=dest,
-                              capture_output=True, text=True).stdout.strip()
-        if head == sha:
-            print(f"[fetch] {dest} already at {sha[:12]}")
-            return
-    os.makedirs(dest, exist_ok=True)
-    if not os.path.isdir(os.path.join(dest, ".git")):
-        git("init", "-q", cwd=dest)
-    git("fetch", "-q", "--depth", "1", url, sha, cwd=dest)
-    git("checkout", "-q", "--detach", "FETCH_HEAD", cwd=dest)
-    print(f"[fetch] {url} @ {sha[:12]} -> {dest}")
+from coderag.gitfetch import fetch_commit  # noqa: E402
 
 
 def main():
@@ -43,7 +24,9 @@ def main():
         with open(path, encoding="utf-8") as f:
             spec = yaml.safe_load(f)
         if "url" in spec:
-            fetch(spec["url"], spec["sha"])
+            dest = os.path.join(REPOS_DIR, spec["url"].rstrip("/").split("/")[-1])
+            fetch_commit(spec["url"], spec["sha"], dest)
+            print(f"[fetch] {spec['url']} @ {spec['sha'][:12]} -> {dest}")
     return 0
 
 

@@ -90,6 +90,37 @@ A saved index stores the config fields that shape it (chunking, embedding model,
 and refuses to load with different ones. Query-time settings (`top_k`, hops, context budget, LLM) can
 be changed when loading.
 
+## Web server
+
+A FastAPI server answers questions about pre-indexed demo repositories
+([demos.yaml](demos.yaml): `sample_repo`, psf/requests and pallets/click, pinned to commits).
+
+```bash
+pip install -e ".[web]"
+python scripts/build_demos.py                     # fetch + index the demos into data/ (~30 s)
+uvicorn coderag.web.app:app --port 7860           # API docs at http://127.0.0.1:7860/docs
+```
+
+| Endpoint | |
+|---|---|
+| `GET /api/health`, `GET /api/demos`, `GET /api/repos/{id}` | status, demo list, demo info and example questions |
+| `GET /api/repos/{id}/graph` | call/inheritance graph; node ids match `chunk_id` in sources |
+| `POST /api/repos/{id}/retrieve` | retrieved sources with GitHub links, no LLM |
+| `POST /api/repos/{id}/ask` | Server-Sent Events: `sources`, then `token`s, then `done` (or `error`) |
+
+```bash
+curl -N -X POST http://127.0.0.1:7860/api/repos/requests/ask \
+     -H "Content-Type: application/json" -d '{"question": "Who calls resolve_redirects?"}'
+```
+
+Answers use the server's key (`GROQ_API_KEY`) unless the request brings its own
+(`"llm": {"provider": "groq", "api_key": "..."}`). A visitor's key is used for that request only and
+is never logged, cached or returned. Limits are per IP and per hour, with a daily cap on the server
+key. Popular questions are cached. If no LLM is available, the retrieved sources are still returned.
+Configuration uses `CODERAG_*` environment variables (see
+[coderag/web/settings.py](coderag/web/settings.py)). Behind a reverse proxy, set
+`CODERAG_TRUSTED_PROXY_HOPS=1` so rate limits use the real client address.
+
 ## Layout
 
 ```
@@ -105,6 +136,10 @@ coderag/
   agent.py      RAGCodebaseAgent: ties the pipeline together
   visualize.py  D3 chunk-graph HTML
   cli.py        command-line interface
+  gitfetch.py   safe shallow fetch of one GitHub commit
+  web/          FastAPI server: app, rate limits + answer cache, demo registry, settings
+scripts/        build_demos.py
+demos.yaml      demo repositories served by the web server
 sample_repo/    toy target: inheritance zoo + CSV -> clean -> SQLite pipeline
 eval/           retrieval benchmark: question sets, harness, results
 tests/          pytest suite (no ML models needed: uses fake index/LLM)

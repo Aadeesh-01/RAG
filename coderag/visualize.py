@@ -9,6 +9,7 @@ import json
 
 from .chunking import load_chunks
 from .config import get_config
+from .context import display_name, source_location
 from .graph import build_graph, build_reverse_index
 
 
@@ -232,6 +233,37 @@ window.addEventListener("resize", () => sim.force("center", d3.forceCenter(W()/2
 </body>
 </html>
 """
+
+
+def graph_data(agent):
+    """
+    JSON graph of an agent's chunks for a web view. Node ids are chunk
+    indexes, the same as Source.chunk_id, so retrieved sources can be
+    highlighted. Links: calls (with how they were resolved), inherits, and
+    member (class -> its method chunks).
+    """
+    docs = agent.documents
+    nodes = []
+    for i, d in enumerate(docs):
+        path, lo, hi = source_location(d)
+        nodes.append({"id": i, "name": display_name(d), "kind": d["type"], "file": path,
+                      "start_line": lo, "end_line": hi, "qname": d.get("qname", d["name"])})
+
+    links = []
+    g = agent.code_graph
+    if g is not None:                                   # scoped resolution (v7+)
+        for i, edges in enumerate(g.callees):
+            links += [{"source": i, "target": j, "type": "calls", "resolution": how}
+                      for j, how in edges]
+        for i, bases in enumerate(g.bases):
+            links += [{"source": i, "target": j, "type": "inherits"} for j in bases]
+        links += [{"source": p, "target": i, "type": "member"}
+                  for i, p in enumerate(g.parent) if p is not None]
+    elif docs and "calls" in docs[0]:                   # name-based (v1-v6)
+        _, edges = build_graph(docs)
+        links = [{"source": e["source"], "target": e["target"], "type": e["kind"],
+                  "resolution": "name"} for e in edges]
+    return {"nodes": nodes, "links": links}
 
 
 def render_graph_html(nodes, edges):

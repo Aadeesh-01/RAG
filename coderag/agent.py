@@ -61,6 +61,7 @@ class RAGCodebaseAgent:
         self.code_graph = code_graph
         self._name_index = build_name_index(documents)
         self.chunks = [d["content"] for d in documents]
+        self._position = {id(d): i for i, d in enumerate(documents)}   # meta -> chunk index
         self._log(f"[RAG] {len(self.chunks)} chunks ready.")
 
     def _set_llm(self, llm, load_llm):
@@ -196,7 +197,8 @@ class RAGCodebaseAgent:
         t0 = time.perf_counter()
         retrieved = self.retrieve(question, cfg)
         context = build_context(question, retrieved, cfg)
-        sources = [Source.from_meta(n, meta, hop) for n, (_, meta, hop) in enumerate(retrieved, 1)]
+        sources = [Source.from_meta(n, meta, hop, self._position[id(meta)])
+                   for n, (_, meta, hop) in enumerate(retrieved, 1)]
         yield {"type": "sources", "sources": [asdict(s) for s in sources], "context": context,
                "retrieve_ms": round((time.perf_counter() - t0) * 1000, 1)}
         self._log(f"\n--- CONTEXT SENT TO LLM ---\n{context[:1000]}")
@@ -275,12 +277,14 @@ class Source:
     end_line: int
     hop: int            # 0 = vector hit, n = reached through the call graph
     qname: str
+    chunk_id: int = -1  # position in agent.documents (= graph node id)
 
     @classmethod
-    def from_meta(cls, n, meta, hop):
+    def from_meta(cls, n, meta, hop, chunk_id=-1):
         path, lo, hi = source_location(meta)
         return cls(id=n, name=display_name(meta), kind=meta["type"], file=path,
-                   start_line=lo, end_line=hi, hop=hop, qname=meta.get("qname", meta["name"]))
+                   start_line=lo, end_line=hi, hop=hop, qname=meta.get("qname", meta["name"]),
+                   chunk_id=chunk_id)
 
 
 @dataclass

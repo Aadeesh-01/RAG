@@ -23,3 +23,6 @@ chunk_graph.html
 
 # Eval checkouts
 eval/.repos/
+
+# Built demo indexes (python scripts/build_demos.py)
+data/

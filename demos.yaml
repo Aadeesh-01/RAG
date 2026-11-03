@@ -1,0 +1,36 @@
+# Repositories the website serves pre-indexed. Build with:
+#   python scripts/build_demos.py
+# Remote demos are pinned to a commit so links and answers are reproducible.
+versions: [v7]          # an index is built per version; the API can switch between them
+
+demos:
+  - id: sample
+    name: coderag sample repo
+    description: Toy inheritance zoo plus a CSV -> clean -> SQLite pipeline.
+    repo: sample_repo
+    questions:
+      - Which functions call normalize_name?
+      - Trace what happens to a CSV row from loading until it is stored.
+      - How does a bat both walk and fly?
+
+  - id: requests
+    name: psf/requests
+    description: The HTTP library for Python.
+    url: https://github.com/psf/requests
+    sha: 3c7baaa05ab4aa49cc819ce3a819d260de19c157
+    root: src/requests
+    questions:
+      - Who calls resolve_redirects?
+      - How does requests decide whether a proxy should be bypassed for a URL?
+      - How is the digest authentication header computed?
+
+  - id: click
+    name: pallets/click
+    description: Composable command line interface toolkit.
+    url: https://github.com/pallets/click
+    sha: 2247b35ea1c47c727d7a06e51fa280e12a863ff6
+    root: src/click
+    questions:
+      - What happens when a click command is invoked from the command line?
+      - Which classes subclass ShellComplete?
+      - How does a Group resolve and invoke a subcommand?
