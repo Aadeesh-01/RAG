@@ -1,10 +1,27 @@
 import os
 import shutil
+import zlib
 
+import numpy as np
 import pytest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SAMPLE_REPO = os.path.join(ROOT, "sample_repo")
+
+
+class HashEncoder:
+    """Deterministic bag-of-words embedding: no model download, real FAISS search."""
+
+    def __init__(self):
+        self.encoded = 0
+
+    def encode(self, texts, show_progress_bar=False):
+        self.encoded += len(texts)
+        out = np.zeros((len(texts), 64), dtype="float32")
+        for row, text in enumerate(texts):
+            for word in text.lower().split():
+                out[row, zlib.crc32(word.encode()) % 64] += 1
+        return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-9)
 
 
 class FakeIndex:

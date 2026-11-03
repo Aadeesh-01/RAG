@@ -79,9 +79,11 @@ class CodeGraph:
     def _load_imports(self, repo_path):
         self.imports = {}                         # rel -> {alias: [module, symbol, level]}
         self.modules = {}                         # dotted module -> rel
+        self.packages = set()                     # directory names along module paths
         for path in iter_source_files(repo_path, (".py",)):
             rel = os.path.relpath(path, repo_path).replace("\\", "/")
             self.modules[_module_of(rel)] = rel
+            self.packages.update(rel.split("/")[:-1])
             try:
                 with open(path, encoding="utf-8", errors="ignore") as f:
                     self.imports[rel] = get_imports(ast.parse(f.read()))
@@ -118,6 +120,12 @@ class CodeGraph:
         head, _, rest = dotted.partition(".")
         if head == self.root_package:        # absolute import of the indexed package
             return self.modules.get(rest)
+        # whole-repo checkouts: `requests.models` lives at src/requests/models.py.
+        # Only for packages that exist in the repo, and only if the match is unique.
+        if head in self.packages:
+            matches = [m for m in self.modules if m.endswith("." + dotted)]
+            if len(matches) == 1:
+                return self.modules[matches[0]]
         return None
 
     def _absolute(self, rel, module, level):

@@ -1,6 +1,7 @@
 """Dense vector index: sentence-transformers embeddings in a flat FAISS index."""
 
 import os
+import threading
 
 import numpy as np
 
@@ -13,6 +14,23 @@ def _load_model(model_name):
     return SentenceTransformer(model_name)
 
 
+class SharedEncoder:
+    """
+    One embedding model shared by several indexes and threads. Hugging Face
+    fast tokenizers fail when two threads use them at once ("Already
+    borrowed"), so encode() runs under a lock; long jobs encode in batches so
+    queries can slip in between.
+    """
+
+    def __init__(self, model):
+        self.model = model
+        self.lock = threading.Lock()
+
+    def encode(self, texts, **kwargs):
+        with self.lock:
+            return self.model.encode(texts, **kwargs)
+
+
 class VectorIndex:
 
     def __init__(self, model_name="all-MiniLM-L6-v2", model=None):
@@ -21,10 +39,18 @@ class VectorIndex:
         self.model = model if model is not None else _load_model(model_name)
         self.index = None
 
-    def build(self, texts, show_progress=False):
+    def build(self, texts, show_progress=False, progress=None, batch_size=64):
+        """Embed `texts`. progress(fraction) is called after each batch when given."""
         import faiss
 
-        embeddings = self.model.encode(texts, show_progress_bar=show_progress)
+        if progress is None:
+            embeddings = self.model.encode(texts, show_progress_bar=show_progress)
+        else:
+            parts = []
+            for start in range(0, len(texts), batch_size):
+                parts.append(self.model.encode(texts[start:start + batch_size]))
+                progress(min(start + batch_size, len(texts)) / len(texts))
+            embeddings = np.vstack(parts)
         self.index = faiss.IndexFlatL2(embeddings.shape[1])
         self.index.add(np.asarray(embeddings, dtype="float32"))
 

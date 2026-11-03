@@ -1,34 +1,18 @@
 import json
 import os
 import shutil
-import zlib
 
-import numpy as np
 import pytest
 
 from coderag import RAGCodebaseAgent, get_config
 from coderag.persist import check_index
+from conftest import HashEncoder
 
 faiss = pytest.importorskip("faiss")
 from coderag.index import VectorIndex  # noqa: E402
 
 QUESTIONS = ["Which functions call normalize_name?", "How are records stored?",
              "What does a bat do?", "How is the moving average computed?"]
-
-
-class HashEncoder:
-    """Deterministic bag-of-words embedding: no model download, real FAISS search."""
-
-    def __init__(self):
-        self.encoded = 0
-
-    def encode(self, texts, show_progress_bar=False):
-        self.encoded += len(texts)
-        out = np.zeros((len(texts), 64), dtype="float32")
-        for row, text in enumerate(texts):
-            for word in text.lower().split():
-                out[row, zlib.crc32(word.encode()) % 64] += 1
-        return out / np.maximum(np.linalg.norm(out, axis=1, keepdims=True), 1e-9)
 
 
 def build(repo, version="v7", encoder=None, **overrides):

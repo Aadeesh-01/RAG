@@ -18,6 +18,16 @@ class Settings:
     server_daily_cap: int = 800                 # all visitors, server key; keep below quota
     trusted_proxy_hops: int = 0                 # 1 behind one reverse proxy (HF Spaces)
     answer_cache_size: int = 500
+    # Indexing visitors' GitHub repos
+    index_per_ip_per_hour: int = 3              # new repos (already indexed ones are free)
+    submit_per_ip_per_hour: int = 30            # URL submissions, including cached repos
+    max_index_queue: int = 10
+    max_loaded_repos: int = 6                   # visitor repos kept in memory (LRU)
+    max_stored_repos: int = 100                 # visitor repo indexes kept on disk
+    max_py_files: int = 2000
+    max_py_mb: int = 25
+    fetch_timeout: int = 120
+    index_ignore_dirs: tuple = ("tests", "test", "docs", "examples", "benchmarks")
 
     @classmethod
     def from_env(cls, environ=None):

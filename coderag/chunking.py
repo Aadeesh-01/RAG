@@ -21,21 +21,25 @@ from .config import SKIP_DIRS
 # =============================================================================
 # FILE DISCOVERY
 # =============================================================================
-def iter_source_files(repo_path, extensions, prune_dirs=True):
-    """Yield paths of files under `repo_path` whose name ends with `extensions`."""
+def iter_source_files(repo_path, extensions, prune_dirs=True, ignore_dirs=()):
+    """
+    Yield paths of files under `repo_path` whose name ends with `extensions`.
+    Symlinked directories are not followed (os.walk default).
+    """
+    skip = SKIP_DIRS | set(ignore_dirs)
     for root, dirs, files in os.walk(repo_path, topdown=True):
         if prune_dirs:
             # prune IN PLACE so os.walk doesn't descend into noise dirs
-            dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+            dirs[:] = [d for d in dirs if d not in skip and not d.startswith(".")]
         for file in files:
             if file.endswith(tuple(extensions)):
                 yield os.path.join(root, file)
 
 
-def source_fingerprint(repo_path, extensions, prune_dirs=True):
+def source_fingerprint(repo_path, extensions, prune_dirs=True, ignore_dirs=()):
     """sha256 over the relative paths and bytes of every indexed file."""
     digest = hashlib.sha256()
-    paths = sorted(iter_source_files(repo_path, extensions, prune_dirs))
+    paths = sorted(iter_source_files(repo_path, extensions, prune_dirs, ignore_dirs))
     for path in paths:
         rel = os.path.relpath(path, repo_path).replace("\\", "/")
         digest.update(rel.encode() + b"\0")
@@ -443,7 +447,8 @@ def dedup_chunks(chunks, verbose=True):
 def load_ast_chunks(repo_path, config, verbose=True):
     chunks = []
     file_count = 0
-    for file_path in iter_source_files(repo_path, config.extensions, config.prune_dirs):
+    for file_path in iter_source_files(repo_path, config.extensions, config.prune_dirs,
+                                       config.ignore_dirs):
         if verbose:
             print(f"[RAG]   Parsing: {os.path.relpath(file_path, repo_path)}")
         chunks.extend(parse_python_file(

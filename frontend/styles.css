@@ -237,3 +237,27 @@ button.primary:disabled { opacity: .5; cursor: default; }
 .dialog-actions .reset { margin-right: auto; }
 .graph-hint.caption { inset: auto auto 12px 16px; margin: 0; max-width: none; text-align: left;
                       font-size: 12.5px; padding: 0; }
+
+/* ── adding repositories ─────────────────────────────────────────────── */
+.add-repo { border: 1px dashed var(--border); background: transparent; border-radius: 999px; padding: 5px 12px;
+            color: var(--accent); cursor: pointer; white-space: nowrap; font-weight: 600; font-size: 13.5px; }
+.add-repo:hover { border-color: var(--accent); background: var(--accent-soft); }
+.repo-tabs button.user { display: inline-flex; align-items: center; gap: 6px; }
+.repo-tabs .close { font-size: 15px; line-height: 1; opacity: .6; padding: 0 2px; border-radius: 4px; }
+.repo-tabs .close:hover { opacity: 1; background: var(--surface-2); }
+.form-error { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--danger-soft); font-size: 13.5px; }
+.form-error[hidden] { display: none; }
+.jobs { display: flex; flex-direction: column; gap: 8px; padding: 0 20px; }
+.jobs:not(:empty) { padding-top: 14px; }
+.job { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+       padding: 10px 14px; box-shadow: var(--shadow); font-size: 13.5px; }
+.job .row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.job b { font-family: var(--mono); font-weight: 600; }
+.job .msg { color: var(--muted); }
+.job .bar { height: 6px; border-radius: 999px; background: var(--surface-2); margin-top: 8px; overflow: hidden; }
+.job .bar i { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit;
+              transition: width .4s ease; }
+.job.failed { border-color: var(--danger); }
+.job.failed .msg { color: var(--danger); }
+.job.ready .bar i { background: var(--hop1); }
+@media (max-width: 820px) { .jobs { padding: 0 16px; } .add-repo { padding: 5px 10px; } }

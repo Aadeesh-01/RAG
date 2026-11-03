@@ -25,9 +25,12 @@ from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
 
 from ..config import get_config
+from ..gitfetch import FetchError
 from ..llm import DEFAULT_REMOTE_MODELS, FallbackChain, LLMUnavailable, RemoteLLM
 from ..visualize import graph_data
+from .jobs import Indexer, NotAllowed, QueueFull
 from .limits import AnswerCache, RateLimiter, client_ip
+from .registry import Repos, load_demos
 from .settings import Settings
 
 log = logging.getLogger("coderag.web")
@@ -60,6 +63,10 @@ class RetrieveRequest(BaseModel):
     def overrides(self):
         return {"top_k": self.top_k, "max_hops": self.max_hops,
                 "max_expansion": self.max_expansion, "include_callers": self.include_callers}
+
+
+class IndexRequest(BaseModel):
+    url: str = Field(min_length=3, max_length=300)
 
 
 class AskRequest(RetrieveRequest):
@@ -113,17 +120,24 @@ def _sse(event):
     return f"event: {event['type']}\ndata: {json.dumps(data)}\n\n"
 
 
-def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
+def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedder=None,
+               indexer=None):
     """
     settings    : Settings (default: from CODERAG_* env vars)
     demos       : {id: Demo} (default: loaded from settings.data_dir)
     llm_factory : callable(LLMChoice) -> backend or None (default: LLMFactory)
+    embedder    : embedding model shared by all indexes (default: loaded, behind a lock)
+    indexer     : jobs.Indexer for visitors' repos (default: built from the above)
     """
     settings = settings or Settings.from_env()
+    if embedder is None:
+        from ..index import SharedEncoder, _load_model
+        embedder = SharedEncoder(_load_model(get_config().embed_model))
     if demos is None:
-        from ..index import _load_model
-        from .registry import load_demos
-        demos = load_demos(settings.data_dir, embedder=_load_model(get_config().embed_model))
+        demos = load_demos(settings.data_dir, embedder=embedder)
+    repos = Repos(settings.data_dir, demos, embedder, settings.max_loaded_repos,
+                  settings.max_stored_repos)
+    indexer = indexer or Indexer(settings, repos, embedder)
     llm_factory = llm_factory or LLMFactory(settings)
     limiter = limiter or RateLimiter()
     cache = AnswerCache(settings.answer_cache_size)
@@ -131,9 +145,10 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
 
     app = FastAPI(title="coderag", version="0.1.0",
                   description="Ask questions about a Python codebase, with cited sources.")
+    app.state.repos, app.state.indexer = repos, indexer
 
     def resolve(repo_id, version):
-        demo = demos.get(repo_id)
+        demo = repos.get(repo_id)
         if demo is None:
             raise HTTPException(404, f"Unknown repository {repo_id!r}")
         version = version or demo.versions[-1]
@@ -174,11 +189,39 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
                         "provider": settings.server_llm_provider,
                         "models": list(settings.server_llm_models)},
                 "defaults": {"version": defaults.name, "top_k": defaults.top_k,
-                             "max_hops": defaults.max_hops}}
+                             "max_hops": defaults.max_hops},
+                "indexing": {"max_py_files": settings.max_py_files,
+                             "max_py_mb": settings.max_py_mb,
+                             "skipped_dirs": list(settings.index_ignore_dirs),
+                             "per_hour": settings.index_per_ip_per_hour}}
 
     @app.get("/api/demos")
     def list_demos():
         return [d.info() for d in demos.values()]
+
+    @app.post("/api/repos")
+    def index_repo(body: IndexRequest, request: Request):
+        """Index a public GitHub repo (202 + job), or 200 if this commit is already indexed."""
+        limit(request, "submit", settings.submit_per_ip_per_hour)
+        ip = client_ip(request, settings.trusted_proxy_hops)
+        try:
+            job, queued = indexer.submit(
+                body.url, allow_new=lambda: limiter.hit(f"index:{ip}",
+                                                        settings.index_per_ip_per_hour, HOUR))
+        except FetchError as e:
+            raise HTTPException(400, str(e))
+        except NotAllowed as e:
+            raise HTTPException(429, str(e), headers={"Retry-After": str(int(e.retry_after))})
+        except QueueFull as e:
+            raise HTTPException(503, str(e), headers={"Retry-After": "60"})
+        return JSONResponse(job.public(indexer.position(job)), status_code=202 if queued else 200)
+
+    @app.get("/api/jobs/{job_id}")
+    def job_status(job_id: str):
+        job = indexer.get(job_id)
+        if job is None:
+            raise HTTPException(404, "Unknown job")
+        return job.public(indexer.position(job))
 
     @app.get("/api/repos/{repo_id}")
     def repo_info(repo_id: str):

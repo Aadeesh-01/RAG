@@ -51,7 +51,8 @@ def save_agent(agent, directory):
         "format":      INDEX_FORMAT,
         "created":     datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "repo_path":   agent.repo_path,
-        "source_hash": source_fingerprint(agent.repo_path, cfg.extensions, cfg.prune_dirs),
+        "source_hash": source_fingerprint(agent.repo_path, cfg.extensions, cfg.prune_dirs,
+                                          cfg.ignore_dirs),
         "n_chunks":    len(agent.documents),
         "config":      asdict(cfg),
     })
@@ -78,7 +79,8 @@ def check_index(directory, config, repo_path=None):
     if repo_path is not None and os.path.isdir(repo_path):    # gone repo: trust the index
         if os.path.normcase(os.path.abspath(repo_path)) != os.path.normcase(meta["repo_path"]):
             return False, f"built for another repo ({meta['repo_path']})"
-        current = source_fingerprint(repo_path, config.extensions, config.prune_dirs)
+        current = source_fingerprint(repo_path, config.extensions, config.prune_dirs,
+                                     config.ignore_dirs)
         if current != meta["source_hash"]:
             return False, "source files changed"
     return True, "up to date"

@@ -23,13 +23,14 @@ class RAGCodebaseAgent:
     llm       : object with generate(context, question) -> str;
                 defaults to the backend named in the config
     load_llm  : False skips loading the LLM (retrieval-only use)
+    progress  : optional callback(stage, fraction) reported while embedding
 
     Use save(directory) / RAGCodebaseAgent.load(directory) to reuse an index
     without re-chunking and re-embedding the repo.
     """
 
     def __init__(self, repo_path, config=None, index=None, llm=None,
-                 load_llm=True, verbose=True):
+                 load_llm=True, verbose=True, progress=None):
         self.config = config or get_config()
         self.verbose = verbose
         self.repo_path = os.path.abspath(repo_path)
@@ -54,7 +55,10 @@ class RAGCodebaseAgent:
             from .index import VectorIndex
             index = VectorIndex(self.config.embed_model)
         self.index = index
-        self.index.build(self._embed_texts())
+        if progress is not None:          # progress(stage, fraction) while embedding
+            self.index.build(self._embed_texts(), progress=lambda f: progress("embedding", f))
+        else:
+            self.index.build(self._embed_texts())
         self._set_llm(llm, load_llm)
 
     def _set_documents(self, documents, code_graph):

@@ -169,6 +169,27 @@ The project began as one standalone script per version (`baseline/baseline.py`, 
 (`git show f873a1c:v5_multihop.py`). The package reproduces their chunks, metadata and LLM
 contexts exactly.
 
+## Indexing any GitHub repository
+
+On the site, **+ Add repo** takes a public GitHub URL (`https://github.com/owner/repo`, `owner/repo`, or
+`…/tree/<branch-or-tag>`). The API equivalent is `POST /api/repos {"url": ...}`, then poll
+`GET /api/jobs/{job_id}`.
+
+- The branch is resolved to a commit with `git ls-remote`. A commit that was already indexed is
+  served immediately and doesn't count against limits.
+- Only `*.py` files are downloaded (blob-less partial fetch and sparse checkout), so data and media in
+  the repo are never transferred. Code is only parsed with `ast`, never run. Symlinks are not followed,
+  and the clone is deleted after indexing.
+- `tests/`, `test/`, `docs/`, `examples/` and `benchmarks/` are skipped. A repo may have up to 2,000
+  Python files / 25 MB. Each IP can index 3 new repos per hour. One job runs at a time, with a queue of
+  10. Progress is reported by stage: fetching → parsing → embedding → ready.
+- Indexes are saved under `data/repos/<owner>__<repo>__<sha12>/` (the 100 most recent are kept) and
+  loaded on demand (at most 6 in memory). All limits are `CODERAG_*` settings
+  ([coderag/web/settings.py](coderag/web/settings.py)).
+
+Typical times on a laptop CPU: pallets/itsdangerous 9 s, pallets/flask 33 s (362 chunks).
+django/django is rejected after about 20 s (2,939 Python files).
+
 ## Debugging retrieval
 
 Add `?debug=1` to the site's URL, or call `agent.stream(question, debug=True)` / `POST

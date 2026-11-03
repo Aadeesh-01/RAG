@@ -1,4 +1,5 @@
 import json
+import os
 
 import pytest
 
@@ -11,7 +12,7 @@ from coderag.web.app import create_app  # noqa: E402
 from coderag.web.limits import RateLimiter, client_ip  # noqa: E402
 from coderag.web.registry import Demo  # noqa: E402
 from coderag.web.settings import Settings  # noqa: E402
-from conftest import FakeIndex, FakeLLM  # noqa: E402
+from conftest import FakeIndex, FakeLLM, HashEncoder  # noqa: E402
 
 
 class Factory:
@@ -27,14 +28,15 @@ class Factory:
         return None if choice.provider == "none" else self.llm
 
 
-def make_client(sample_repo, factory=None, **settings):
+def make_client(sample_repo, factory=None, tmp_dir=None, indexer=None, **settings):
     agent = RAGCodebaseAgent(sample_repo, get_config("v7"), index=FakeIndex(),
                              load_llm=False, verbose=False)
     demo = Demo(id="sample", name="Sample", url="https://github.com/o/r", sha="a" * 40,
                 root="src", questions=["q?"], agents={"v7": agent})
     factory = factory or Factory()
+    settings.setdefault("data_dir", str(tmp_dir or os.path.join(os.path.dirname(sample_repo), "_unused")))
     app = create_app(Settings(**settings), demos={"sample": demo}, llm_factory=factory,
-                     limiter=RateLimiter())
+                     limiter=RateLimiter(), embedder=HashEncoder(), indexer=indexer)
     return TestClient(app), factory
 
 

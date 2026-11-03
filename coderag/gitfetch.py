@@ -76,8 +76,12 @@ def prepare_repo(dest):
                        env=_env(dest), capture_output=True)
 
 
-def fetch_commit(url, sha, dest, timeout=120):
-    """Check out commit `sha` of `url` into `dest` (reused if already there)."""
+def fetch_commit(url, sha, dest, timeout=120, python_only=False):
+    """
+    Check out commit `sha` of `url` into `dest` (reused if already there).
+    python_only: download only *.py files (blob-less partial fetch + sparse
+    checkout), so large data or media files in the repo are never transferred.
+    """
     url = url.rstrip("/").removesuffix(".git")
     if not GITHUB_URL.match(url):
         raise FetchError(f"not a https://github.com/<owner>/<repo> URL: {url!r}")
@@ -87,9 +91,65 @@ def fetch_commit(url, sha, dest, timeout=120):
     if head_sha(dest) == sha:
         return dest
     prepare_repo(dest)
-    # "--" ends option parsing: url and sha are positional no matter what they contain
-    _git(dest, "fetch", "-q", "--depth", "1", "--no-tags", "--", url + ".git", sha,
-         timeout=timeout)
+    if python_only:
+        _git(dest, "remote", "add", "origin", url + ".git")
+        # a partial fetch through a named remote lets checkout fetch the missing blobs
+        _git(dest, "fetch", "-q", "--depth", "1", "--no-tags", "--filter=blob:none",
+             "--", "origin", sha, timeout=timeout)
+        _git(dest, "sparse-checkout", "set", "--no-cone", "*.py", timeout=timeout)
+    else:
+        # "--" ends option parsing: url and sha are positional no matter what they contain
+        _git(dest, "fetch", "-q", "--depth", "1", "--no-tags", "--", url + ".git", sha,
+             timeout=timeout)
     _git(dest, "-c", "core.symlinks=false", "checkout", "-q", "--detach", "FETCH_HEAD",
          timeout=timeout)
     return dest
+
+
+# =============================================================================
+# GitHub URLs from visitors
+# =============================================================================
+_REPO_INPUT = re.compile(
+    r"^(?:(?:https?://)?(?:www\.)?github\.com/)?"
+    r"(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9-]{0,38}))/(?P<repo>[A-Za-z0-9._-]{1,100}?)"
+    r"(?:\.git)?/?(?:(?:tree|commit)/(?P<ref>[A-Za-z0-9._/-]{1,100}))?/?$"
+)
+
+
+def parse_github_url(text):
+    """
+    'https://github.com/o/r', 'github.com/o/r.git', 'o/r', '.../tree/<branch>'
+    -> (owner, repo, ref or None). Raises FetchError for anything else.
+    """
+    m = _REPO_INPUT.match((text or "").strip())
+    if not m or m["repo"] in (".", ".."):
+        raise FetchError("Enter a GitHub repository like https://github.com/owner/repo")
+    ref = m["ref"]
+    if ref and (ref.startswith(("-", "/")) or ".." in ref or ref.endswith("/")):
+        raise FetchError(f"Unsupported branch or tag name: {ref!r}")
+    return m["owner"], m["repo"], ref
+
+
+def resolve_sha(owner, repo, ref=None, timeout=30):
+    """
+    Commit SHA of `ref` (branch, tag or full SHA; default branch if None),
+    without cloning. Raises FetchError if the repo or ref doesn't exist or
+    isn't public.
+    """
+    if ref and SHA.match(ref):
+        return ref
+    url = f"https://github.com/{owner}/{repo}.git"
+    try:
+        result = subprocess.run(["git", "ls-remote", "--", url, *( [ref] if ref else ["HEAD"] )],
+                                capture_output=True, text=True, timeout=timeout,
+                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    except subprocess.TimeoutExpired:
+        raise FetchError("GitHub did not respond in time")
+    if result.returncode != 0:
+        raise FetchError("Repository not found, or it isn't public")
+    refs = dict(reversed(line.split("\t")) for line in result.stdout.splitlines() if "\t" in line)
+    for name in (["HEAD"] if not ref else
+                 [f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"]):
+        if name in refs and SHA.match(refs[name]):
+            return refs[name]
+    raise FetchError(f"Branch or tag {ref!r} not found" if ref else "Repository has no commits")

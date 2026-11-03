@@ -81,6 +81,7 @@ class RAGConfig:
     chunker: str = "ast"                    # "fixed" (character windows) | "ast"
     extensions: tuple = (".py",)
     prune_dirs: bool = True                 # skip SKIP_DIRS and dot-directories
+    ignore_dirs: tuple = ()                 # more directory names to skip (e.g. tests, docs)
     chunk_size: int = 1000                  # fixed chunker only
     chunk_overlap: int = 200                # fixed chunker only
     max_file_chars: int = 30_000            # ast: skip larger (generated) files
@@ -147,7 +148,7 @@ class RAGConfig:
 # Fields that shape the saved index (chunks, embeddings, call graph). Everything
 # else (retrieval depth, context budget, LLM) can change on an existing index.
 INDEX_FIELDS = (
-    "chunker", "extensions", "prune_dirs", "chunk_size", "chunk_overlap",
+    "chunker", "extensions", "prune_dirs", "ignore_dirs", "chunk_size", "chunk_overlap",
     "max_file_chars", "min_segment_chars", "min_chunk_chars", "chunk_methods", "skip_overloads",
     "dedup_content", "structural", "call_resolution", "max_ambiguous", "ignore_assert_calls",
     "embed_model",

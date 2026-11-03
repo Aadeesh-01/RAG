@@ -13,6 +13,7 @@ const state = {
   retrieved: new Map(),                // chunk_id -> hop for the latest answer
   busy: false, turn: 0,
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
+  userRepos: [],                       // [{id, name}] indexed by this visitor
 };
 const settings = loadSettings();
 
@@ -134,10 +135,117 @@ function githubUrl(demo, file, start, end) {
 
 function renderRepoTabs() {
   const nav = $("#repo-tabs");
-  nav.replaceChildren(...state.demos.map((d) => el("button", {
-    type: "button", text: d.name, "aria-pressed": String(d.id === state.demo?.id),
-    onclick: () => selectRepo(d.id),
-  })));
+  const tab = (repo, removable) => el("button", {
+    type: "button", class: removable ? "user" : null, title: removable ? repo.name : null,
+    "aria-pressed": String(repo.id === state.demo?.id), onclick: () => selectRepo(repo.id),
+  }, repo.name, removable ? el("span", {
+    class: "close", role: "button", "aria-label": `Remove ${repo.name}`, title: "Remove from this list",
+    text: "×", onclick: (e) => { e.stopPropagation(); removeUserRepo(repo.id); },
+  }) : null);
+  nav.replaceChildren(...state.demos.map((d) => tab(d, false)),
+                      ...state.userRepos.map((r) => tab(r, true)));
+}
+
+// ── visitor-indexed repositories (remembered in this browser) ───────────────
+const REPOS_KEY = "coderag.repos";
+
+function loadUserRepos() {
+  try { return JSON.parse(localStorage.getItem(REPOS_KEY) || "[]"); } catch { return []; }
+}
+
+function saveUserRepos() {
+  try { localStorage.setItem(REPOS_KEY, JSON.stringify(state.userRepos)); } catch { /* not persisted */ }
+}
+
+function rememberUserRepo(id, name) {
+  state.userRepos = [{ id, name }, ...state.userRepos.filter((r) => r.id !== id)].slice(0, 12);
+  saveUserRepos();
+}
+
+function removeUserRepo(id) {
+  state.userRepos = state.userRepos.filter((r) => r.id !== id);
+  saveUserRepos();
+  if (state.demo?.id === id) selectRepo(state.demos[0]?.id);
+  else renderRepoTabs();
+}
+
+const GENERIC_QUESTIONS = [
+  "What does this project do, and what are its main modules?",
+  "What is the main entry point and what does it call?",
+];
+
+function setupAddRepo() {
+  const dialog = $("#add-repo");
+  const error = $("#add-repo-error");
+  const open = (url = "") => {
+    $("#repo-url").value = url;
+    error.hidden = true;
+    const limits = state.health?.indexing;
+    $("#index-limits").textContent = limits
+      ? `Limits: ${limits.max_py_files.toLocaleString()} Python files / ${limits.max_py_mb} MB; `
+        + `${limits.skipped_dirs.join(", ")} folders are skipped.` : "";
+    dialog.showModal();
+  };
+  $("#add-repo-button").addEventListener("click", () => open());
+  $("#add-repo-cancel").addEventListener("click", () => dialog.close());
+  $("#add-repo-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const submit = $("#add-repo-submit");
+    submit.disabled = true;
+    error.hidden = true;
+    try {
+      const response = await fetch("/api/repos", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: $("#repo-url").value.trim() }),
+      });
+      const job = await response.json();
+      if (!response.ok) throw new Error(job.error || (job.detail && "Please enter a GitHub URL.") || `Request failed (${response.status})`);
+      dialog.close();
+      trackJob(job);
+    } catch (err) {
+      error.textContent = err.message;
+      error.hidden = false;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  return open;
+}
+
+function trackJob(job) {
+  const card = el("div", { class: "job", "data-job": job.job_id });
+  $("#jobs").append(card);
+  const render = (j) => {
+    card.className = `job ${j.status}`;
+    const waiting = j.status === "queued" && j.queue_position > 1 ? ` (${j.queue_position} in queue)` : "";
+    card.replaceChildren(
+      el("div", { class: "row" },
+        el("span", {}, j.status === "ready" ? "Indexed " : j.status === "failed" ? "Could not index " : "Indexing ",
+           el("b", { text: j.name })),
+        j.status === "failed" || j.status === "ready"
+          ? el("button", { type: "button", class: "link-button", text: "Dismiss", onclick: () => card.remove() }) : null),
+      el("div", { class: "msg", text: (j.status === "failed" ? j.error : j.message) + waiting }),
+      j.status === "failed" ? null : el("div", { class: "bar" }, el("i", { style: `width:${Math.round(j.progress * 100)}%` })));
+  };
+  const finish = (j) => {
+    render(j);
+    rememberUserRepo(j.repo_id, j.name);
+    selectRepo(j.repo_id);
+    setTimeout(() => card.remove(), 4000);
+  };
+  render(job);
+  if (job.status === "ready") { finish(job); return; }
+  const poll = setInterval(async () => {
+    try {
+      const j = await fetchJSON(`/api/jobs/${job.job_id}`);
+      if (j.status === "ready") { clearInterval(poll); finish(j); }
+      else if (j.status === "failed") { clearInterval(poll); render(j); }
+      else render(j);
+    } catch {
+      clearInterval(poll);
+      render({ ...job, status: "failed", error: "Lost track of this job (the server may have restarted)." });
+    }
+  }, 1000);
 }
 
 function renderRepoCard(demo) {
@@ -151,15 +259,29 @@ function renderRepoCard(demo) {
       el("span", {}, el("b", { text: s.chunks ?? "–" }), " code chunks"),
       el("span", {}, el("b", { text: s.call_edges ?? "–" }), " resolved calls"),
       demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null),
-    el("div", { class: "chips" }, demo.questions.map((q) => el("button", {
-      type: "button", class: "chip", text: q, onclick: () => ask(q),
-    }))),
+    el("div", { class: "chips" }, (demo.questions.length ? demo.questions : GENERIC_QUESTIONS)
+      .map((q) => el("button", { type: "button", class: "chip", text: q, onclick: () => ask(q) }))),
   );
 }
 
+async function repoInfo(id) {
+  // curated demo by id ("click") or GitHub name ("pallets/click"), else a visitor repo id
+  const demo = state.demos.find((d) => d.id === id || d.name === id);
+  if (demo) return demo;
+  const known = state.userRepos.find((r) => r.id === id || r.name === id);
+  try {
+    return await fetchJSON(`/api/repos/${encodeURIComponent(known ? known.id : id)}`);
+  } catch {
+    if (known) {
+      removeUserRepo(known.id);
+      banner(`${known.name} is no longer indexed on the server. Add it again to ask about it.`);
+    }
+    return null;
+  }
+}
+
 async function selectRepo(id) {
-  // accept the demo id ("click") or its GitHub name ("pallets/click")
-  const demo = state.demos.find((d) => d.id === id || d.name === id) || state.demos[0];
+  const demo = (id && await repoInfo(id)) || state.demos[0];
   if (!demo) return;
   state.demo = demo;
   state.retrieved = new Map();
@@ -514,6 +636,8 @@ function autosize() {
 
 async function start() {
   setupSettings();
+  const openAddRepo = setupAddRepo();
+  state.userRepos = loadUserRepos();
   showPanel("chat");
   document.querySelectorAll(".panel-tabs button").forEach((b) => b.addEventListener("click", () => showPanel(b.dataset.panel)));
   $("#graph-toggle").addEventListener("click", () => {
@@ -549,7 +673,14 @@ async function start() {
   updateLlmBanner();
 
   const params = new URL(window.location.href).searchParams;
-  await selectRepo(params.get("repo") || state.demos[0]?.id);
+  const wanted = params.get("repo");
+  const info = wanted ? await repoInfo(wanted) : null;
+  await selectRepo(info ? info.id : state.demos[0]?.id);
+  if (wanted && !info) {
+    // a shared link to a repo that isn't indexed yet: offer to index it
+    if (/^[\w.-]+\/[\w.-]+$/.test(wanted)) openAddRepo(`https://github.com/${wanted}`);
+    return;
+  }
   // shared links (?repo=...&q=...) open the repo and run the question; popular
   // questions are served from the server's answer cache
   if (params.get("q")) ask(params.get("q"));
