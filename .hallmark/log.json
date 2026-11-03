@@ -1,0 +1,25 @@
+[
+ {
+  "mode": "redesign",
+  "depth": "full",
+  "scope": "app",
+  "shape": "app screen",
+  "theme": "console",
+  "axes": "dark/grotesk-sans/chromatic-amber",
+  "nav": "kept top bar",
+  "footer": "none (app)",
+  "imagery": "none (the product is live)",
+  "photos": [],
+  "signature": "the evidence chain: citation chip, source row and graph node share one key",
+  "sections": [
+   "repo header",
+   "conversation",
+   "sources table",
+   "call graph",
+   "dialogs"
+  ],
+  "waived": [],
+  "prompt": "developers exploring an unfamiliar Python repository ask questions and check the answers against cited source code and a call graph",
+  "date": "2026-11-03"
+ }
+]

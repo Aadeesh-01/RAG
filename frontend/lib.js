@@ -68,11 +68,11 @@ export function citedSources(text, nSources) {
 }
 
 export function hopLabel(hop) {
-  return hop === 0 ? "direct match" : `call graph · hop ${hop}`;
+  return hop === 0 ? "Direct match" : `Call graph, hop ${hop}`;
 }
 
 export function formatLocation(source) {
-  return source.start_line ? `${source.file}:${source.start_line}–${source.end_line}` : source.file;
+  return source.start_line ? `${source.file}:${source.start_line}-${source.end_line}` : source.file;
 }
 
 const ERRORS = {

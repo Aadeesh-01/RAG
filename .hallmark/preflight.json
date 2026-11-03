@@ -1,0 +1,8 @@
+{ "scanned": "2026-11-04",
+  "findings": { "fonts": "system-ui body (frontend/styles.css:55), ui-monospace stack for code (styles.css:21)",
+                "palette": "hex custom properties at :root, light + dark via prefers-color-scheme; accent #4f46e5 (stock Tailwind indigo-600)",
+                "motion": "CSS only", "spacing": "ad-hoc px, off the 4px scale",
+                "framework": "none: static HTML/CSS/ES modules served by FastAPI; D3 7.9.0, marked 12.0.2, DOMPurify 3.1.6 from jsDelivr with SRI",
+                "product": "running at http://localhost:7860, captured in .hallmark/before" },
+  "preserve": ["every id/class/hook app.js and lib.js read", "mono face for code", "D3 call graph", "light + dark"],
+  "introduce": ["theme", "type and spacing scale", "screen composition", "control states", "gates"] }

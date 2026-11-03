@@ -145,6 +145,8 @@ function renderRepoTabs() {
   }) : null);
   nav.replaceChildren(...state.demos.map((d) => tab(d, false)),
                       ...state.userRepos.map((r) => tab(r, true)));
+  // on a narrow bar the tab row scrolls: keep the open repo in view
+  nav.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
 // ── visitor-indexed repositories (remembered in this browser) ───────────────
@@ -227,7 +229,7 @@ function trackJob(job) {
         j.status === "failed" || j.status === "ready"
           ? el("button", { type: "button", class: "link-button", text: "Dismiss", onclick: () => card.remove() }) : null),
       el("div", { class: "msg", text: (j.status === "failed" ? j.error : j.message) + waiting }),
-      j.status === "failed" ? null : el("div", { class: "bar" }, el("i", { style: `width:${Math.round(j.progress * 100)}%` })));
+      j.status === "failed" ? null : el("div", { class: "bar" }, el("i", { style: `--progress:${j.progress}` })));
   };
   const finish = (j) => {
     render(j);
@@ -257,15 +259,15 @@ function renderRepoCard(demo) {
     el("h1", {}, demo.url ? el("a", { href: `${demo.url}/tree/${demo.sha}`, target: "_blank", rel: "noopener", text: demo.name }) : demo.name),
     el("p", { text: demo.description }),
     el("div", { class: "stats" },
-      el("span", {}, el("b", { text: s.files ?? "–" }), " files"),
-      el("span", {}, el("b", { text: s.chunks ?? "–" }), " code chunks"),
-      el("span", {}, el("b", { text: s.call_edges ?? "–" }), " resolved calls"),
+      el("span", {}, el("b", { text: s.files ?? 0 }), " files"),
+      el("span", {}, el("b", { text: s.chunks ?? 0 }), " code chunks"),
+      el("span", {}, el("b", { text: s.call_edges ?? 0 }), " resolved calls"),
       demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null,
       el("button", { type: "button", class: "link-button clear-chat", text: "Clear chat",
         title: "Remove this repository's questions and answers (saved answers are kept)",
         onclick: clearChat })),
     el("div", { class: "chips" }, (demo.questions.length ? demo.questions : GENERIC_QUESTIONS)
-      .map((q) => el("button", { type: "button", class: "chip", text: q, onclick: () => ask(q) }))),
+      .map((q) => el("button", { type: "button", class: "chip", text: q, title: q, onclick: () => ask(q) }))),
   );
 }
 
@@ -422,8 +424,9 @@ async function ask(question) {
             backend: data.backend, sources: sources.map(slimSource),
           });
           answer.insertBefore(el("div", { class: "meta" },
-            `Answered by ${data.backend}${data.cached ? " · cached" : ` in ${seconds}s`} · `,
-            copy, " · ", save), answer.querySelector(".sources"));
+            el("span", { class: "by" }, "Answered by", el("span", { class: "measured", text: data.backend }),
+              data.cached ? "from the cache" : el("span", { class: "measured", text: `${seconds} s` })),
+            el("span", { class: "actions" }, copy, save)), answer.querySelector(".sources"));
         } else if (event.type === "error") {
           status.remove();
           answer.insertBefore(el("div", { class: "notice", text: errorMessage(data.code, data.message) }), answer.querySelector(".sources"));
@@ -442,7 +445,6 @@ async function ask(question) {
 
 function renderSources(turnId, sources, { graph = true } = {}) {
   const rows = sources.map((s) => {
-    const hopColor = s.hop === 0 ? "var(--hop0)" : s.hop === 1 ? "var(--hop1)" : "var(--hop2)";
     const details = el("details", { class: "source", "data-sid": s.id, "data-chunk": s.chunk_id },
       el("summary", {},
         el("span", { class: "sid", text: `S${s.id}` }),
@@ -451,24 +453,25 @@ function renderSources(turnId, sources, { graph = true } = {}) {
           el("span", { class: "where", text: formatLocation(s) }),
           // debug mode: how it was retrieved, visible without expanding the row
           s.debug ? el("span", { class: "debug", text: debugLine(s.debug) }) : null),
-        el("span", { class: "hop" }, el("i", { style: `background:${hopColor}` }), hopLabel(s.hop))),
+        el("span", { class: "hop" },
+          el("i", { class: s.hop === 0 ? "key" : "key key--graph", "aria-hidden": "true" }), hopLabel(s.hop))),
       s.code ? el("pre", {}, el("code", { text: s.code })) : null,
       el("div", { class: "source-actions" },
-        s.url ? el("a", { class: "open", href: s.url, target: "_blank", rel: "noopener", text: "Open on GitHub ↗" }) : null,
+        s.url ? el("a", { class: "open", href: s.url, target: "_blank", rel: "noopener", text: "Open on GitHub" }) : null,
         el("button", { type: "button", class: "link-button", text: "Copy location",
           onclick: (e) => copyText(`${formatLocation(s)}  ${s.name}`, e.currentTarget) })));
     if (graph) details.addEventListener("toggle", () => { if (details.open) pulseNode(s.chunk_id); });
     return details;
   });
-  return el("section", { class: "sources" }, el("h3", { text: `Sources (${sources.length})` }), rows);
+  return el("section", { class: "sources" }, el("h2", { text: `Sources (${sources.length})` }), rows);
 }
 
-/** "vector rank 2 · similarity 0.51 · 1,056 chars" or "should_bypass_proxies —calls:exact→ … · 893 chars" */
+/** "vector rank 2, similarity 0.51, 1,056 chars" or "should_bypass_proxies → is_valid_cidr (calls:exact), 893 chars" */
 function debugLine(d) {
   const size = `${d.context_chars.toLocaleString()} chars in context`;
-  if (!d.path) return `vector rank ${d.rank}${d.similarity !== null ? ` · similarity ${d.similarity}` : ""} · ${size}`;
-  const hops = d.path.map((e) => ` —${e.edge}→ ${e.to}`).join("");
-  return `${d.seed}${hops} · ${size}`;
+  if (!d.path) return `vector rank ${d.rank}${d.similarity !== null ? `, similarity ${d.similarity}` : ""}, ${size}`;
+  const hops = d.path.map((e) => ` → ${e.to} (${e.edge})`).join("");
+  return `${d.seed}${hops}, ${size}`;
 }
 
 async function copyText(text, button) {
@@ -503,7 +506,7 @@ function saveButton(record) {
   const button = el("button", { type: "button", class: "link-button save",
     title: "Keep this answer in this browser. Unsaved chats are cleared when the page is closed or reloaded." });
   const sync = () => {
-    button.textContent = savedId ? "★ Saved" : "☆ Save";
+    button.textContent = savedId ? "Saved" : "Save";
     button.setAttribute("aria-pressed", String(Boolean(savedId)));
   };
   button.addEventListener("click", () => {
@@ -557,7 +560,7 @@ function renderSaved() {
   const box = $("#saved-list");
   if (!list.length) {
     box.replaceChildren(el("p", { class: "note",
-      text: "No saved answers yet. Use ☆ Save under an answer to keep it after the page is closed." }));
+      text: "No saved answers yet. Use Save under an answer to keep it after the page is closed." }));
     return;
   }
   box.replaceChildren(...list.map((r) => {
@@ -568,14 +571,17 @@ function renderSaved() {
     return el("details", { class: "saved-item" },
       el("summary", {},
         el("span", { class: "q", text: r.question }),
-        el("span", { class: "where", text: `${r.repoName} · saved ${new Date(r.savedAt).toLocaleDateString()}` })),
+        el("span", { class: "where" }, el("span", { text: r.repoName }),
+          el("time", { datetime: r.savedAt, text: `Saved ${new Date(r.savedAt).toLocaleDateString()}` }))),
       el("div", { class: "answer" },
         body,
-        el("div", { class: "meta" }, `Answered by ${r.backend} · `,
-          el("button", { type: "button", class: "link-button", text: "Open repo",
-            onclick: () => openSavedRepo(r) }), " · ", copy, " · ",
-          el("button", { type: "button", class: "link-button danger", text: "Delete",
-            onclick: () => { storeSaved(loadSaved().filter((x) => x.id !== r.id)); updateSavedCount(); renderSaved(); } })),
+        el("div", { class: "meta" },
+          el("span", { class: "by" }, "Answered by", el("span", { class: "measured", text: r.backend })),
+          el("span", { class: "actions" },
+            el("button", { type: "button", class: "link-button", text: "Open repo",
+              onclick: () => openSavedRepo(r) }), copy,
+            el("button", { type: "button", class: "link-button danger", text: "Delete",
+              onclick: () => { storeSaved(loadSaved().filter((x) => x.id !== r.id)); updateSavedCount(); renderSaved(); } }))),
         renderSources(`saved-${r.id}`, r.sources, { graph: false })));
   }));
 }
@@ -651,10 +657,6 @@ function drawGraph() {
   const nodes = data.nodes.map((n) => ({ ...n }));
   const links = data.links.map((l) => ({ ...l }));
   const big = nodes.length > 250;
-  const color = (n) => {
-    const hop = state.retrieved.get(n.id);
-    return hop === undefined ? cssVar("--node") : hop === 0 ? cssVar("--hop0") : hop === 1 ? cssVar("--hop1") : cssVar("--hop2");
-  };
   const radius = (n) => (state.retrieved.has(n.id) ? 7 : 3.5) + (n.kind === "class" ? 2 : 0);
   // label everything only in small views; otherwise just the retrieved code
   const labelled = (n) => state.retrieved.has(n.id) || nodes.length <= (state.retrieved.size ? 25 : 60);
@@ -679,13 +681,17 @@ function drawGraph() {
     .attr("marker-end", (l) => (l.type === "calls" ? "url(#arrow)" : null));
 
   const node = root.append("g").selectAll("g").data(nodes).join("g")
-    .attr("class", (n) => (state.retrieved.size && !state.retrieved.has(n.id) ? "node neighbour" : "node"))
+    .attr("class", (n) => {
+      const hop = state.retrieved.get(n.id);
+      if (hop === undefined) return state.retrieved.size ? "node neighbour" : "node";
+      return hop === 0 ? "node direct" : "node hop";
+    })
     .call(d3.drag()
       .on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.2).restart(); d.fx = d.x; d.fy = d.y; })
       .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
       .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }))
     .on("click", (e, d) => showNodeCard(d));
-  node.append("circle").attr("r", radius).attr("fill", color);
+  node.append("circle").attr("r", radius);
   node.append("title").text((n) => `${n.name}\n${formatLocation(n)}`);
   // labels centred under the node, so the collision circle below covers them
   node.filter(labelled).append("text").attr("text-anchor", "middle")
@@ -746,8 +752,8 @@ function showNodeCard(n) {
   const card = $("#node-card");
   const url = githubUrl(state.demo, n.file, n.start_line, n.end_line);
   card.replaceChildren(
-    el("h4", { text: n.name }),
-    el("p", { text: `${n.kind} · ${formatLocation(n)}` }),
+    el("h2", { text: n.name }),
+    el("p", {}, `${n.kind[0].toUpperCase()}${n.kind.slice(1)} in `, el("code", { text: formatLocation(n) })),
     el("div", { class: "row" },
       el("button", { type: "button", class: "ghost", text: "Ask about this", onclick: () => {
         $("#question").value = `What does \`${n.label || n.name}\` do and who calls it?`;
@@ -797,7 +803,13 @@ async function start() {
     openSource(cite.closest(".turn"), Number(cite.dataset.source));
   });
   let resizeTimer;
-  window.addEventListener("resize", () => { clearTimeout(resizeTimer); resizeTimer = setTimeout(drawGraph, 200); });
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      drawGraph();
+      $('#repo-tabs [aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    }, 200);
+  });
 
   // Free hosting sleeps when idle: say so if the first response is slow.
   const wakeTimer = setTimeout(() => banner("Waking up the server (free hosting sleeps when idle). This can take up to a minute…"), 3000);
