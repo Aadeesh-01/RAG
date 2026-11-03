@@ -95,12 +95,56 @@ def build_rich_header(meta, hop=0, hop_label=False):
     return "\n".join(lines)
 
 
-def format_chunk(chunk, meta, hop, question, config):
+def source_location(meta):
+    """(path, first_line, last_line) of a chunk; path is repo-relative for AST chunks."""
+    if "spans" in meta:                       # fixed-size window: first file it covers
+        if not meta["spans"]:
+            return "", 0, 0
+        path, lo, hi = meta["spans"][0]
+        return os.path.basename(path), lo, hi
+    path = meta["qname"].split("::")[0] if "qname" in meta else os.path.basename(meta["file"])
+    return path, meta.get("start_line", 0), meta.get("end_line", 0)
+
+
+def source_label(n, meta, hop):
+    """'[S1] pkg/mod.py:L10-L42  method Class.name  (direct)'"""
+    path, lo, hi = source_location(meta)
+    where = f"{path}:L{lo}-L{hi}" if lo else path
+    how = "direct" if hop == 0 else f"via call graph, hop {hop}"
+    return f"[S{n}] {where}  {meta['type']} {display_name(meta)}  ({how})"
+
+
+_CITATION = re.compile(r"\[\s*(S\d+(?:\s*[,;]\s*S\d+)*)\s*\]")
+_INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
+
+
+def normalize_citations(answer):
+    """
+    Rewrite citation variants models produce into plain [S3]: full-width
+    brackets 【S3】 (gpt-oss's native style) and zero-width characters inside
+    brackets ([​S3]).
+    """
+    return (answer or "").translate(_INVISIBLE).replace("【", "[").replace("】", "]")
+
+
+def parse_citations(answer, n_sources):
+    """(valid, invalid): sorted source numbers cited as [S3] / [S1, S4] in `answer`."""
+    cited = {int(ref.strip()[1:]) for group in _CITATION.findall(normalize_citations(answer))
+             for ref in re.split(r"[,;]", group)}
+    return (sorted(n for n in cited if 1 <= n <= n_sources),
+            sorted(n for n in cited if not 1 <= n <= n_sources))
+
+
+def format_chunk(chunk, meta, hop, question, config, n=None):
     body = clean_chunk(chunk, question) if config.clean_chunks else chunk
     budget = char_budget(config, hop)
     if budget is not None:
         body = body[:budget]
 
+    if config.header == "cite" or config.prompt_style == "cited":
+        # numbered source the LLM can cite; relationship lines from the rich header
+        extra = build_rich_header(meta, hop).split("\n")[1:]
+        return "\n".join([source_label(n, meta, hop)] + extra + ["```python", body, "```"])
     if config.header == "none":
         return body
     if config.header == "name":
@@ -114,6 +158,6 @@ def format_chunk(chunk, meta, hop, question, config):
 
 def build_context(question, retrieved, config):
     return "\n\n---\n\n".join(
-        format_chunk(chunk, meta, hop, question, config)
-        for chunk, meta, hop in retrieved
+        format_chunk(chunk, meta, hop, question, config, n)
+        for n, (chunk, meta, hop) in enumerate(retrieved, 1)
     )

@@ -22,12 +22,19 @@ class FakeIndex:
 
 
 class FakeLLM:
-    def __init__(self):
-        self.calls = []
+    name = "fake"
 
-    def generate(self, context, question):
+    def __init__(self, reply=None):
+        self.calls = []
+        self.reply = reply
+
+    def stream(self, context, question, config=None):
         self.calls.append((context, question))
-        return f"answer to {question}"
+        text = self.reply or f"answer to {question}"
+        yield from (text[i:i + 4] for i in range(0, len(text), 4))    # several tokens
+
+    def generate(self, context, question, config=None):
+        return "".join(self.stream(context, question, config))
 
 
 @pytest.fixture

@@ -1,11 +1,15 @@
 """RAGCodebaseAgent: chunk -> embed -> retrieve (+ graph expansion) -> prompt -> answer."""
 
 import os
+import time
+from dataclasses import asdict, dataclass, field
 
 from .chunking import load_chunks
 from .config import get_config
-from .context import asks_for_callers, build_context, display_name, keyword_filter
+from .context import (asks_for_callers, build_context, display_name, keyword_filter,
+                      parse_citations, source_location)
 from .graph import build_name_index, build_reverse_index, expand_bfs
+from .llm import LLMError, LLMRateLimited, LLMUnavailable
 
 
 class RAGCodebaseAgent:
@@ -172,21 +176,122 @@ class RAGCodebaseAgent:
         cfg = config or self.config
         return build_context(question, self.retrieve(question, cfg), cfg)
 
-    def query(self, question, **overrides):
+    def stream(self, question, llm=None, **overrides):
         """
-        Answer `question`. Keyword overrides (top_k, max_hops, max_expansion,
-        include_callers, ...) apply to this call only.
+        Answer `question` as a stream of events (dicts with a "type"):
+          sources  {"sources": [Source dicts], "retrieve_ms"}   always first
+          token    {"text"}                                     answer pieces
+          done     {"backend", "cited", "invalid_citations", "llm_ms"}
+          error    {"code", "message"}   rate_limited | unavailable | llm_error | no_llm
+        With no LLM (llm=None and none loaded) only sources + error/no_llm are
+        emitted: the retrieved code is still useful on its own.
+        Keyword overrides (top_k, max_hops, prompt_style, ...) apply to this call only.
         """
         cfg = self.config.with_overrides(**overrides)
+        llm = llm or self.llm
         self._log(f"\n{'='*60}\nQUERY: {question}")
         if overrides:
             self._log(f"OVERRIDES: {overrides}")
 
-        context = self.build_context(question, cfg)
+        t0 = time.perf_counter()
+        retrieved = self.retrieve(question, cfg)
+        context = build_context(question, retrieved, cfg)
+        sources = [Source.from_meta(n, meta, hop) for n, (_, meta, hop) in enumerate(retrieved, 1)]
+        yield {"type": "sources", "sources": [asdict(s) for s in sources], "context": context,
+               "retrieve_ms": round((time.perf_counter() - t0) * 1000, 1)}
         self._log(f"\n--- CONTEXT SENT TO LLM ---\n{context[:1000]}")
 
+        if llm is None:
+            yield {"type": "error", "code": "no_llm", "message": "No LLM configured; "
+                   "showing retrieved sources only."}
+            return
+
+        t1 = time.perf_counter()
+        pieces = []
+        try:
+            for piece in llm.stream(context, question, cfg):
+                pieces.append(piece)
+                yield {"type": "token", "text": piece}
+        except LLMRateLimited as e:
+            yield {"type": "error", "code": "rate_limited", "message": str(e),
+                   "retry_after": e.retry_after}
+            return
+        except LLMUnavailable as e:
+            yield {"type": "error", "code": "unavailable", "message": str(e)}
+            return
+        except LLMError as e:
+            yield {"type": "error", "code": "llm_error", "message": str(e)}
+            return
+
+        answer = "".join(pieces)
+        cited, invalid = parse_citations(answer, len(sources))
+        yield {"type": "done", "backend": llm.name, "cited": cited,
+               "invalid_citations": invalid,
+               "llm_ms": round((time.perf_counter() - t1) * 1000, 1)}
+
+    def ask(self, question, llm=None, **overrides):
+        """Answer `question` and return a QueryResult (see stream() for the arguments)."""
+        result = QueryResult(question=question,
+                             version=self.config.with_overrides(**overrides).name)
+        pieces = []
+        for event in self.stream(question, llm, **overrides):
+            kind = event["type"]
+            if kind == "sources":
+                result.sources = [Source(**s) for s in event["sources"]]
+                result.context = event["context"]
+                result.timings["retrieve_ms"] = event["retrieve_ms"]
+            elif kind == "token":
+                pieces.append(event["text"])
+            elif kind == "done":
+                result.backend = event["backend"]
+                result.cited = event["cited"]
+                result.invalid_citations = event["invalid_citations"]
+                result.timings["llm_ms"] = event["llm_ms"]
+            elif kind == "error":
+                result.error = event
+        result.answer = "".join(pieces) if pieces else None
+        self._log(f"\n--- MODEL OUTPUT ({result.backend or 'no answer'}) ---\n"
+                  f"{result.answer or result.error}")
+        return result
+
+    def query(self, question, **overrides):
+        """Answer text only. Raises if no LLM is loaded or the LLM call fails."""
         if self.llm is None:
             raise RuntimeError("LLM not loaded (agent was created with load_llm=False)")
-        answer = self.llm.generate(context, question)
-        self._log(f"\n--- MODEL OUTPUT ---\n{answer}")
-        return answer
+        result = self.ask(question, **overrides)
+        if result.error:
+            raise LLMError(f"{result.error['code']}: {result.error['message']}")
+        return result.answer
+
+
+@dataclass
+class Source:
+    """One retrieved chunk as shown to the LLM ([S<id>]) and to users."""
+    id: int
+    name: str           # display name, e.g. "Session.send"
+    kind: str           # class | method | function | file | text
+    file: str           # repo-relative path
+    start_line: int
+    end_line: int
+    hop: int            # 0 = vector hit, n = reached through the call graph
+    qname: str
+
+    @classmethod
+    def from_meta(cls, n, meta, hop):
+        path, lo, hi = source_location(meta)
+        return cls(id=n, name=display_name(meta), kind=meta["type"], file=path,
+                   start_line=lo, end_line=hi, hop=hop, qname=meta.get("qname", meta["name"]))
+
+
+@dataclass
+class QueryResult:
+    question: str
+    version: str
+    sources: list = field(default_factory=list)
+    context: str = ""
+    answer: str | None = None           # None: retrieve-only, or the LLM failed
+    backend: str | None = None
+    cited: list = field(default_factory=list)              # valid [S<n>] ids in the answer
+    invalid_citations: list = field(default_factory=list)  # [S<n>] ids that don't exist
+    error: dict | None = None
+    timings: dict = field(default_factory=dict)

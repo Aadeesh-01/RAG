@@ -34,8 +34,21 @@ python -m venv .venv
 pip install -e ".[dev]"         # or: pip install -r requirements.txt
 ```
 
-The first run downloads `all-MiniLM-L6-v2` (~90 MB) and the LLM: Qwen2.5-Coder-1.5B-Instruct (~3 GB)
-for v1–v5, or flan-t5-base (~1 GB) for v0. Everything runs on CPU. Set `device="cuda"` in the config to use a GPU.
+The first run downloads `all-MiniLM-L6-v2` (~90 MB). Answers come from one of these:
+
+| `--llm` | Model | Notes |
+|---|---|---|
+| `local` (default) | Qwen2.5-Coder-1.5B-Instruct (~3 GB download), flan-t5-base for v0 | offline, CPU, about 1 minute per answer |
+| `groq` | `openai/gpt-oss-120b` | free tier, about 1 s per answer, needs `GROQ_API_KEY` |
+| `openrouter` / `gemini` | provider default, or `--model` | needs `OPENROUTER_API_KEY` / `GEMINI_API_KEY` |
+| `none` | | retrieved sources only |
+
+Set `CODERAG_LLM=groq` to make a remote model the default. API keys are read from the environment and
+never logged.
+
+Remote models answer with numbered, cited sources (`--prompt cited`). In the answer eval,
+gpt-oss-120b made up no callers and cited sources in 92% of answers, while Qwen 1.5B invented
+callers and can't follow the citation format. See [eval/README.md](eval/README.md#answer-quality).
 
 ## Usage
 
@@ -46,6 +59,7 @@ Commands default to the bundled [sample_repo/](sample_repo/) and the `v7` preset
 python -m coderag versions                         # list presets
 python -m coderag chunks --version v4              # chunks + metadata, no models needed
 python -m coderag ask "How is data processed?"     # one question
+python -m coderag ask "Who calls resolve_redirects?" --llm groq   # remote model, cited answer
 python -m coderag ask                              # interactive session (models load once)
 python -m coderag ask "..." --retrieve-only        # print the LLM context, skip the LLM
 python -m coderag index --repo PATH --out .coderag/myrepo    # build once, save to disk
@@ -62,6 +76,11 @@ from coderag import RAGCodebaseAgent, get_config
 
 agent = RAGCodebaseAgent("path/to/repo", get_config("v7", top_k=6))
 agent.query("Which functions call the data processing logic?", include_callers=True)
+
+result = agent.ask("Who calls resolve_redirects?", prompt_style="cited")
+result.answer, result.cited, result.sources         # answer, cited [S<n>] ids, Source records
+for event in agent.stream("..."):                   # sources first, then tokens, then done
+    ...
 
 agent.save(".coderag/myrepo")                       # chunks + call graph + FAISS index
 agent = RAGCodebaseAgent.load(".coderag/myrepo")    # no repo, re-chunking or re-embedding needed
@@ -82,7 +101,7 @@ coderag/
   index.py      sentence-transformers + FAISS vector index
   persist.py    save/load an index, freshness check (source fingerprint + config)
   context.py    keyword filter, chunk cleaning, headers, hop-weighted budgets
-  llm.py        flan-t5 (seq2seq) and Qwen chat backends
+  llm.py        LLM backends: local flan-t5/Qwen, remote OpenAI-compatible APIs, fallback chain
   agent.py      RAGCodebaseAgent: ties the pipeline together
   visualize.py  D3 chunk-graph HTML
   cli.py        command-line interface

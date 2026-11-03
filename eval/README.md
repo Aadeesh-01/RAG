@@ -124,3 +124,67 @@ method.
 
 Caveat: each type has only 3–7 questions per repo, so one question moves a per-type score by
 0.14–0.33. Trust the overall rows more than the per-type ones.
+
+## Answer quality
+
+[run_answers.py](run_answers.py) runs the LLM on v7's retrieved context and scores what the answer
+*says*. No LLM judge is used; answers are matched against the gold symbols.
+
+```bash
+python eval/run_answers.py --runs groq:legacy groq:cited          # callers + flow questions
+python eval/run_answers.py --runs local:legacy --types callers
+python eval/run_answers.py --rescore --csv eval/results/answers-groq.csv   # re-score, no LLM calls
+```
+
+| Metric | Meaning |
+|---|---|
+| G-Rec | gold symbols the answer names |
+| Prec, Extra | callers questions: share of named functions that are gold; non-gold functions named per answer |
+| Cited | answers with at least one valid `[S<n>]` citation |
+| CiteGold | answers citing a source that contains a gold symbol |
+| Abstain | answers saying the sources don't contain the answer |
+
+`legacy` is the v1–v7 prompt ("Code context: …"). `cited` numbers the sources (`[S1] file:L10-L42
+Class.method`) and requires inline citations, exact names, call claims only when the code shows
+them, and saying so when the sources don't contain the answer.
+
+**gpt-oss-120b on Groq**, callers + flow questions (24). Rows in
+[results/answers-groq.csv](results/answers-groq.csv):
+
+| Prompt | G-Rec | Prec (callers) | Cited | CiteGold | Abstain | s/answer |
+|---|---|---|---|---|---|---|
+| legacy | 0.92 | 0.83 | 0.00 | 0.00 | 0.12 | 1.3 |
+| cited | 0.82 | 0.82 | **0.92** | **0.67** | 0.17 | 1.2 |
+
+**Qwen2.5-Coder-1.5B on CPU vs gpt-oss-120b**, callers questions only (13). Rows in
+[results/answers-local.csv](results/answers-local.csv):
+
+| Model, prompt | G-Rec | Prec | Extra/answer | Cited | s/answer |
+|---|---|---|---|---|---|
+| Qwen 1.5B, legacy | 0.54 | 0.49 | 0.92 | 0.00 | 61 |
+| Qwen 1.5B, cited | 0.38 | 0.42 | 0.15 | 0.62 | 52 |
+| gpt-oss-120b, legacy | 0.96 | 0.83 | 0.46 | 0.00 | 0.9 |
+| gpt-oss-120b, cited | 0.88 | 0.82 | 0.46 | **1.00** | 0.8 |
+
+10. **Model size matters more than the prompt.** Qwen 1.5B makes up callers even when the context
+    is right: "`SQLiteStore.save` calls `normalize_name`", "`resolve_redirects` is called by the
+    `send` method of `SessionRedirectMixin`", six unrelated functions for `resolve_command`. I read
+    every gpt-oss "extra" name and none was a false claim. They were legitimate context, such as
+    `main` calling `report`, or `dispatch_hook` for a question about hooks. Treat Extra as an upper
+    bound: it counts mentions, not claims.
+11. **Small models can't follow the citation format.** With the cited prompt, Qwen 1.5B makes up
+    less but often answers with nothing but `[O1] [S1]`. gpt-oss cites in 92% of answers. Reading
+    the answers also exposed a scorer bug: gpt-oss writes citations as `【S7】` or `[​S3]`, and
+    the parser missed them. `parse_citations` now normalises both.
+12. **The legacy prompt's extra recall partly comes from memory, not the code.** Its answers say
+    "`Session.send` (*not shown in the excerpt but*…)". gpt-oss knows `requests` and `click` from
+    training, so it fills retrieval gaps itself. That's right for famous libraries and a guess on a
+    private repo. With the cited prompt it says the sources don't show it instead. Answer scores on
+    requests and click are therefore inflated for any prompt that allows guessing. `sample_repo` is
+    the only test of grounding the model can't answer from memory.
+13. **The remaining failures are retrieval gaps on flow questions.** For example, `Session.send`
+    was not retrieved for "how does a Session send a request through an adapter". The cited prompt
+    makes these gaps visible instead of hiding them.
+
+Defaults that follow from this: remote models use the cited prompt, and the local model keeps
+the legacy prompt.

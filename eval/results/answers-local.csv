@@ -1,0 +1,61 @@
+set,run,type,q,G-Rec,Prec,Extra,Ground,Cited,CiteGold,Abstain,s,extra_names,answer
+sample_repo,local:cited,callers,Which functions call normalize_name?,0.0,0.0,0.0,,1.0,0.0,0.0,27.8794,,[O1] [S1]
+sample_repo,local:cited,callers,Who uses SQLiteStore?,0.5,0.5,1.0,1.0,0.0,0.0,0.0,21.4316,main,SQLiteStore is used by the `report` function in `pipeline/main.py`.
+sample_repo,local:cited,callers,What calls create_bat?,0.0,0.0,0.0,,1.0,0.0,0.0,19.015400000000003,,[O1] [S1]
+sample_repo,local:cited,callers,Which code calls rolling_average?,0.0,0.0,0.0,,1.0,1.0,0.0,29.5057,,[O1] [S2]
+sample_repo,local:legacy,callers,Which functions call normalize_name?,1.0,0.25,3.0,1.0,0.0,0.0,0.0,39.744800000000005,"run_pipeline, BaseProcessor.process, SQLiteStore.save","The `normalize_name` function is called by the following functions:
+
+1. The `transform` method in the `DataProcessor` class, which is called by the `process` method in the same class.
+2. The `save` method in the `SQLiteStore` class, which is called by the `run_pipeline` function.
+
+These calls are directly indicated in the code snippet provided."
+sample_repo,local:legacy,callers,Who uses SQLiteStore?,0.5,0.5,1.0,1.0,0.0,0.0,0.0,25.1207,main,"SQLiteStore is used by the `report` function in the `main` function, which prints stored people and a rolling average of their ages."
+sample_repo,local:legacy,callers,What calls create_bat?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,19.7015,,The `create_bat` function is called by the `run_zoo` function.
+sample_repo,local:legacy,callers,Which code calls rolling_average?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,24.9652,,The `report` function calls `rolling_average`.
+requests,local:cited,callers,Which functions call get_netrc_auth?,0.0,0.0,0.0,,1.0,1.0,0.0,59.8302,,[S5]
+requests,local:cited,callers,Who calls resolve_redirects?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,63.5516,,The `resolve_redirects` method is called directly by the `Session.send` method.
+requests,local:cited,callers,Where are response hooks dispatched?,0.0,0.0,1.0,1.0,1.0,0.0,0.0,46.616800000000005,dispatch_hook,"In the `dispatch_hook` function located at [S1], hooks are dispatched based on the specified key in the `hooks` dictionary."
+requests,local:cited,callers,Which code uses super_len to size a request body?,0.5,1.0,0.0,1.0,1.0,1.0,0.0,61.4729,,"The code that uses `super_len` to size a request body is found in the `prepare_body` method of the `PreparedRequest` class, specifically in the `models.py` file at lines [S5]."
+requests,local:cited,callers,Who calls should_bypass_proxies?,0.0,0.0,0.0,,1.0,0.0,0.0,63.4555,,[S1]
+requests,local:legacy,callers,Which functions call get_netrc_auth?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,79.5527,,"The `get_netrc_auth` function is called directly in the following functions:
+
+1. `Session.prepare_request`
+2. `SessionRedirectMixin.rebuild_auth`
+
+These functions are part of the `requests` library and are responsible for handling network authentication based on the `.netrc` file."
+requests,local:legacy,callers,Who calls resolve_redirects?,0.0,0.0,0.0,1.0,0.0,0.0,0.0,59.1267,,The `resolve_redirects` method is called by the `send` method of the `SessionRedirectMixin` class.
+requests,local:legacy,callers,Where are response hooks dispatched?,0.0,0.0,1.0,1.0,0.0,0.0,0.0,57.7285,dispatch_hook,"Response hooks are dispatched by the `dispatch_hook` function within the `hooks.py` file. This function takes a key, a hooks dictionary, a response object, and keyword arguments, then iterates over the hooks associated with the key. For each hook, it applies the hook function to the response data and updates the response data accordingly."
+requests,local:legacy,callers,Which code uses super_len to size a request body?,0.5,1.0,0.0,1.0,0.0,0.0,0.0,94.1663,,"The code snippet uses `super_len` to size a request body in the `prepare_body` method of the `PreparedRequest` class. Specifically, it checks if the body is not `None` and then calculates its length using `super_len`. If the length exists, it sets the `Content-Length` header in the request headers. If the body does not exist and the request method is not ""GET"" or ""HEAD"" and the `Content-Length` header is not already set, it sets the `Content-Length` header to ""0""."
+requests,local:legacy,callers,Who calls should_bypass_proxies?,0.5,0.5,1.0,1.0,0.0,0.0,0.0,63.7527,Session.send,"The `should_bypass_proxies` function is called by the `resolve_proxies` function, which is then called by the `Session.send` method."
+click,local:cited,callers,Which code calls resolve_command?,0.0,0.0,0.0,1.0,1.0,1.0,0.0,127.54939999999999,,"The code that calls `resolve_command` is found in the following sources:
+
+[S1] `_termui_impl.py:L423-L448`  
+[S2] `core.py:L2120-L2144`  
+[S3] `core.py:L3748-L3770`  
+[S4] `shell_completion.py:L696-L754`  
+[S5] `core.py:L1991-L1995`  
+[S6] `core.py:L2038-L2050`  
+[S7] `core.py:L2205-L2220`  
+[S8] `exceptions.py:L268-L301`  
+[S9] `parser.py:L111-L117`  
+[S10] `utils.py:L52-L59`  
+[S11] `core.py:L1703-L2163`  
+[S12] `core.py:L2052-L2118`"
+click,local:cited,callers,Who calls handle_parse_result for each parameter?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,61.7797,,The `handle_parse_result` method is called for each parameter in the `Command.parse_args` method.
+click,local:cited,callers,Who uses _resolve_context?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,64.8626,,The `_resolve_context` function is used by the `ShellComplete.get_completions` function.
+click,local:cited,callers,Which function calls get_completion_class?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,32.7768,,The function `shell_complete` calls `get_completion_class`.
+click,local:legacy,callers,Which code calls resolve_command?,0.5,0.14285714285714285,6.0,1.0,0.0,0.0,0.0,166.3005,"Command.make_context, Command.parse_args, Group.get_command, Group.parse_args, CommandCollection.get_command, Option.resolve_envvar_value","The `resolve_command` method is called by several functions within the codebase:
+
+1. In the `_resolve_context` method of the `shell_completion.py` file, which is used to produce the context hierarchy for shell completion.
+2. In the `Group.resolve_command` method of the `core.py` file, which is used to resolve a command from a context.
+3. In the `CommandCollection.get_command` method of the `core.py` file, which is used to retrieve a command from a collection.
+4. In the `Option.resolve_envvar_value` method of the `core.py` file, which is used to resolve an environment variable for an option.
+5. In the `Command.make_context` method of the `core.py` file, which is used to create a new context for a command.
+6. In the `Group.parse_args` method of the `core.py` file, which is used to parse arguments for a command.
+7. In the `Group.get_command` method of the `core.py` file, which is used to retrieve a command from a group.
+8. In the `NoSuchCommand` class of the `exceptions.py` file, which is used to raise an exception when a command does not exist.
+
+These"
+click,local:legacy,callers,Who calls handle_parse_result for each parameter?,0.0,0.0,0.0,1.0,0.0,0.0,0.0,65.0818,,The `handle_parse_result` method is called for each parameter during the parsing process. This method processes the value produced by the parser from user input and ensures that the parameter's value is correctly handled according to its specifications.
+click,local:legacy,callers,Who uses _resolve_context?,0.0,0.0,0.0,1.0,0.0,0.0,0.0,64.5988,,The `_resolve_context` function is used within the `shell_completion.py` module to produce the context hierarchy starting with the command and traversing the complete arguments.
+click,local:legacy,callers,Which function calls get_completion_class?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,29.9299,,The `shell_complete` function calls `get_completion_class`.

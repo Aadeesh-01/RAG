@@ -1,0 +1,540 @@
+set,run,type,q,G-Rec,Prec,Extra,Ground,Cited,CiteGold,Abstain,s,extra_names,answer
+sample_repo,groq:cited,callers,Which functions call normalize_name?,1.0,1.0,0.0,1.0,1.0,1.0,0.0,0.6397999999999999,,`DataProcessor.transform` calls `normalize_name` — as shown in its implementation [S3].
+sample_repo,groq:cited,callers,Who uses SQLiteStore?,0.5,1.0,0.0,1.0,1.0,1.0,0.0,0.633,,`run_pipeline` creates and uses a `SQLiteStore` instance【S7】.
+sample_repo,groq:cited,callers,What calls create_bat?,1.0,1.0,0.0,1.0,1.0,0.0,0.0,0.6123999999999999,,`run_zoo` calls `create_bat`【S1】.
+sample_repo,groq:cited,callers,Which code calls rolling_average?,1.0,0.5,1.0,1.0,1.0,1.0,0.0,0.6284,main,The function `report` in **pipeline/main.py** calls `rolling_average`【S2】.
+sample_repo,groq:cited,flow,Trace what happens to a CSV row from loading until it is stored.,1.0,,,1.0,1.0,1.0,0.0,1.2984,,"1. **Loading the raw CSV file** – `run_pipeline` calls `get_loader(input_path)` which returns a `CSVLoader` because the path ends with “.csv” [​S3].  
+2. The `CSVLoader` instance’s `load` method opens the file and reads it with `csv.DictReader`, returning a list of dictionaries, one per row [​S2].  
+3. **Processing the records** – `run_pipeline` passes that list to `DataProcessor().process(records)`. `DataProcessor` inherits `BaseProcessor`, whose `process` method first filters records with `validate` and then transforms each valid record [​S7].  
+4. `BaseProcessor.validate` checks that every field listed in `required_fields` is present and not empty [​S10].  
+5. For each record that passes validation, `BaseProcessor.transform` (overridden by `DataProcessor.transform`) normalises the keys, strips whitespace, lower‑cases them, normalises the name, and converts the age to an `int` [​S11].  
+6. **Storing the cleaned records** – `run_pipeline` creates a `SQLiteStore` and calls its `save` method with the cleaned list [​S4].  
+7. `SQLiteStore.save` builds a list of tuples `(name, age, city)` from each record (using an empty string if “city” is missing), inserts them into the SQLite table with `executemany`, commits the transaction, and returns the number of rows saved [​S8].  
+
+Thus a CSV row is read into a dict, validated, transformed into a cleaned dict, turned into a tuple, and finally persisted in the SQLite database."
+sample_repo,groq:cited,flow,What happens when run_zoo is executed?,1.0,,,1.0,1.0,1.0,0.0,1.4413,,"When `run_zoo()` is called the following steps occur, as shown by the call graph in the sources:
+
+1. `run_zoo` creates a new `Zoo` instance.  
+   *`run_zoo` → `Zoo()`*【S1】  
+
+2. It calls `create_bat()` to obtain an animal.  
+   *`run_zoo` → `create_bat`*【S1】  
+
+3. Inside `create_bat`, a `Bat` object is instantiated, its `special()` method is printed, and the `Bat` instance is returned.  
+   *`create_bat` → `Bat`*【S6】  
+   *`create_bat` → `Bat.special`*【S6】  
+
+4. The returned `Bat` object is added to the zoo’s collection via `Zoo.add_animal`.  
+   *`run_zoo` → `Zoo.add_animal`*【S1】  
+
+5. `run_zoo` then calls `Zoo.show_animals`.  
+   *`run_zoo` → `Zoo.show_animals`*【S1】  
+
+6. `Zoo.show_animals` iterates over the stored animals (the single `Bat`) and, for each animal, prints the result of `animal.info()` and `animal.speak()`.  
+   *`Zoo.show_animals` → `info`, `print`, `speak`*【S3】  
+
+7. The `info` and `speak` methods that are invoked belong to the `Bat` instance, which inherits them (directly or via `Mammal`/`Bird`) from the `Animal` hierarchy.  
+   *`Zoo.show_animals` is called by `run_zoo`*【S3】 and *`Animal` methods are called by `Zoo.show_animals`*【S5】  
+
+Thus, executing `run_zoo()` creates a zoo, adds a bat (printing its special behavior), and then prints a line showing the bat’s info and the sound it makes."
+sample_repo,groq:cited,flow,How does a bat both walk and fly?,0.6666666666666666,,,1.0,1.0,1.0,0.0,1.129,,"The `Bat` class inherits from both `Mammal` and `Bird` ([S1]).  
+`Mammal` defines a `walk` method ([S3]), and `Bird` defines a `fly` method ([S4]).  
+Because `Bat` subclasses both of these classes, it acquires the `walk` behavior from `Mammal` and the `fly` behavior from `Bird`, allowing a bat to both walk and fly."
+sample_repo,groq:legacy,callers,Which functions call normalize_name?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,0.6244,,`normalize_name` is called directly by **`DataProcessor.transform`**.
+sample_repo,groq:legacy,callers,Who uses SQLiteStore?,0.5,0.5,1.0,1.0,0.0,0.0,0.0,0.8501000000000001,main,"SQLiteStore is instantiated in **`run_pipeline`** (which creates a `SQLiteStore(db_path)`), and therefore it is used indirectly by **`main`** (which calls `run_pipeline`). No other components call it directly."
+sample_repo,groq:legacy,callers,What calls create_bat?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,0.6737000000000001,,`create_bat` is invoked by the `run_zoo` function.
+sample_repo,groq:legacy,callers,Which code calls rolling_average?,1.0,0.5,1.0,1.0,0.0,0.0,0.0,0.7142999999999999,main,`rolling_average` is invoked directly by the **`report`** function in **`main.py`**. (`report` calls `rolling_average` to compute the ages’ moving average.)
+sample_repo,groq:legacy,flow,Trace what happens to a CSV row from loading until it is stored.,1.0,,,1.0,0.0,0.0,0.0,1.782,,"1. **Loader selection** – `run_pipeline` calls `get_loader(input_path)`.  
+   *Because the path ends with “.csv”, `get_loader` returns a `CSVLoader` instance* (it falls‑through the `if` and creates `CSVLoader()`).
+
+2. **Reading the file** – `run_pipeline` then executes `records = loader.load(input_path)`.  
+   *`CSVLoader.load` opens the file, creates a `csv.DictReader` with the loader’s delimiter, and returns `list(reader)`.  
+   Each element of `records` is therefore a `dict` representing one CSV row (keys are the column headers, values are the raw cell strings).*
+
+3. **Processing the records** – `run_pipeline` calls `clean = DataProcessor().process(records)`.  
+   *`DataProcessor` inherits `BaseProcessor`, so `BaseProcessor.process` runs:*  
+
+   - **Validation** – for each `r` in `records` it calls `self.validate(r)`.  
+     `BaseProcessor.validate` checks that every field listed in `required_fields` is present and not `None`/empty. Only rows that pass are kept.  
+
+   - **Transformation** – for each validated row it calls `self.transform(r)`.  
+     `DataProcessor.transform` (overridden) normalises the row:  
+     * strips and lower‑cases each key, converts each value to a stripped string,  
+     * normalises the “name” field via `normalize_name`,  
+     * casts the “age” field to `int`.  
+     The result is a cleaned dict like `{'name': 'John Doe', 'age': 30, 'city': 'London', …}`.
+
+   The list `clean` now contains only validated, transformed dictionaries.
+
+4. **Storing the records** – `run_pipeline` creates `store = SQLiteStore(db_path)` and then `saved = store.save(clean)`.  
+   *`SQLiteStore.save` builds a list of tuples `rows = [(r[""name""], r[""age""], r.get(""city"", """")) for r in records]`.  
+   It executes `INSERT INTO people VALUES (?, ?, ?)` for all rows with `executemany`, commits the transaction, and returns `len(rows)` – the number of rows actually written.*
+
+5. **Result** – The cleaned CSV row has been turned into a tuple of column values and persisted in the `people` table of the SQLite database. The pipeline then prints “Saved X of Y records” and returns the `SQLiteStore` instance."
+sample_repo,groq:legacy,flow,What happens when run_zoo is executed?,1.0,,,1.0,0.0,0.0,0.0,1.3620999999999999,,"When `run_zoo()` is called the following sequence occurs:
+
+1. **Create a `Zoo` instance** – `zoo = Zoo()`.  
+   The `Zoo.__init__` method (not shown) creates an empty container (e.g., a list) to hold animals.
+
+2. **Create a `Bat` instance** – `zoo.add_animal(create_bat())`.  
+   * `create_bat()` is invoked. Inside it:  
+     * `bat = Bat(name)` constructs a `Bat`. `Bat` inherits from `Mammal` and `Bird`, which both inherit from `Animal`. The `Animal.__init__` runs (setting the name).  
+     * `print(bat.special())` calls `Bat.special()`, which returns a string describing the bat’s special ability; that string is printed.  
+     * `create_bat()` returns the `Bat` object.
+   * The returned `Bat` is passed to `Zoo.add_animal`, which appends it to the zoo’s internal animal collection.
+
+3. **Show the animals** – `zoo.show_animals()`.  
+   * `Zoo.show_animals` iterates over `self.animals`. For each animal (here only the `Bat`):  
+     * Calls `animal.info()` → `Animal.info()` returns a description (e.g., the name).  
+     * Calls `animal.speak()` → because `Bat` overrides `speak`, `Bat.speak()` is executed (it may delegate to one of its parents or provide its own implementation).  
+     * Prints the combined string: `<info> - <speak>`.
+
+So the overall effect is:
+
+- A zoo is created.  
+- A bat named “Bruce” is instantiated, its special ability is printed, and the bat is added to the zoo.  
+- The zoo then prints a line showing the bat’s info and the sound it makes."
+sample_repo,groq:legacy,flow,How does a bat both walk and fly?,1.0,,,1.0,0.0,0.0,0.0,0.7865,,"`Bat` uses multiple inheritance:
+
+* `Bat` **extends** both `Mammal` and `Bird`.
+* `Mammal` (which extends `Animal`) defines the method `walk`.
+* `Bird` (also extending `Animal`) defines the method `fly`.
+
+Because `Bat` inherits from both parent classes, it automatically gets `walk` from `Mammal` and `fly` from `Bird`. Thus a `Bat` instance can call `bat.walk()` and `bat.fly()` even though `Bat` itself only implements `speak` and `special`. The method resolution order (MRO) ensures that each method is resolved to the appropriate parent class."
+requests,groq:cited,callers,Which functions call get_netrc_auth?,1.0,1.0,0.0,1.0,1.0,1.0,0.0,0.7041000000000001,,"The only functions that invoke **`get_netrc_auth`** are:
+
+* `SessionRedirectMixin.rebuild_auth` – it lists `get_netrc_auth` among its calls. [S5]  
+* `Session.prepare_request` – its call list also includes `get_netrc_auth`. [S6]"
+requests,groq:cited,callers,Who calls resolve_redirects?,1.0,1.0,0.0,1.0,1.0,0.0,0.0,0.6648,,`Session.send` calls `SessionRedirectMixin.resolve_redirects` — as shown by the `called_by` entry for `resolve_redirects` in the source [S2].
+requests,groq:cited,callers,Where are response hooks dispatched?,1.0,0.5,1.0,1.0,1.0,0.0,0.0,0.8014,dispatch_hook,"Response hooks are dispatched by the `dispatch_hook` function, which is invoked from `Session.send` — `Session.send` calls `dispatch_hook` to run the hooks for the “response” event. [S1]"
+requests,groq:cited,callers,Which code uses super_len to size a request body?,0.5,1.0,0.0,1.0,1.0,1.0,0.0,0.8491000000000001,,`super_len` is used in **`PreparedRequest.prepare_content_length`** to determine the length of the request body and set the **Content‑Length** header【S1】. The function `super_len` itself is defined in `utils.py`【S4】.
+requests,groq:cited,callers,Who calls should_bypass_proxies?,1.0,1.0,0.0,1.0,1.0,1.0,0.0,1.3871,,"`should_bypass_proxies` is invoked by:
+
+* `resolve_proxies` – the `resolve_proxies` function calls `should_bypass_proxies` to decide whether to apply environment proxy settings【S2】.  
+* `get_environ_proxies` – the `get_environ_proxies` function calls `should_bypass_proxies` to determine whether to return an empty proxy dict or the system proxies【S3】."
+requests,groq:cited,flow,What happens under the hood when you call requests.get?,1.0,,,0.9333333333333333,1.0,1.0,0.0,1.5875,,"When you execute  
+
+```python
+requests.get(url, …)
+```  
+
+the following chain of calls is performed inside the library:
+
+1. **`api.get`** is invoked.  
+   *The `get` function in *api.py* simply forwards to the lower‑level `request` helper*【S3】.
+
+2. **`api.request`** is called with the method `""get""`.  
+   *`api.request` creates a new `Session` object and calls its `request` method*【S11】.
+
+3. **`Session.request`** (method of the `Session` class) receives the arguments.  
+   *This method constructs a `Request` object, prepares it, merges environment settings and finally sends it*【S2】.
+
+4. Inside `Session.request` the first step is to **prepare the request**:  
+   *`Session.prepare_request` is called, which builds a `PreparedRequest` from the user‑supplied `Request`*【S6】.
+
+5. After preparation, **`Session.send`** is used to transmit the `PreparedRequest`.  
+   *`Session.send` adds default values, resolves proxies and then passes the `PreparedRequest` to the appropriate adapter*【S7】.
+
+6. The adapter (e.g. `HTTPAdapter`) performs the actual network I/O and builds a **`Response`** object, which is returned up the call stack.  
+   *`Response` objects are defined in *models.py* and are created by adapters*【S4】.
+
+Putting it together, calling `requests.get` results in:
+
+```
+api.get → api.request → Session() → Session.request → Session.prepare_request
+→ Session.send → HTTPAdapter → Response
+```
+
+Each step is documented in the sources cited above."
+requests,groq:cited,flow,How does a Session send a prepared request through a transport adapter and build the response?,0.25,,,1.0,1.0,0.0,1.0,1.0472000000000001,,"The provided sources describe how a `Session` builds a `PreparedRequest` (`Session.prepare_request` [S2]) and how a `PreparedRequest` is created (`Request.prepare` [S4]), as well as the abstract `BaseAdapter.send` method that a transport adapter must implement (`BaseAdapter.send` [S3]). However, none of the listed sources include the implementation of `Session.send` (the method that selects a transport adapter, calls its `send` method, and constructs the `Response` object). Therefore, the code that actually sends a prepared request through a transport adapter and builds the response is not present in the given sources."
+requests,groq:cited,flow,What happens when a server answers a digest-auth request with 401?,1.0,,,1.0,0.0,0.0,1.0,3.6839,,"When a server returns **401 Unauthorized** for a request that is using `HTTPDigestAuth`, the auth handler’s `handle_401` method is invoked.  
+
+* It first verifies that the response status code is in the 4xx range; otherwise it returns the original response unchanged【S1†L273-L279】.  
+* If the response is a 401 and the `WWW‑Authenticate` header contains the word “digest”, the method parses that header (using `parse_dict_header`) and stores the challenge in a thread‑local dictionary (`self._thread_local.chal`)【S1†L285-L291】.  
+* The original response body is consumed and the connection is closed so the same connection can be reused【S1†L293-L295】.  
+* A copy of the original request is made, its cookies are re‑extracted from the 401 response (`extract_cookies_to_jar`), and the request’s cookies are re‑prepared【S1†L296-L301】.  
+* `build_digest_header` is called with the request’s method and URL to create the appropriate `Authorization` header for the digest challenge; if a header is produced it is added to the copied request【S1†L303-L307】.  
+* The modified request is then sent again (the surrounding code that actually sends it is not shown here, but the preparation steps are performed in `handle_401`).  
+
+In short, on a 401 response the handler parses the digest challenge, rebuilds the request with a proper `Authorization` header, and retries the request. If the response is not a 401 or does not contain a digest challenge, the original response is returned unchanged."
+requests,groq:cited,flow,How do cookies from a response end up stored in the session?,0.0,,,1.0,0.0,0.0,1.0,1.488,,"The provided sources do not include the code that transfers cookies from a `Response` object into a `Session`. They show how a `PreparedRequest` prepares cookies for an outgoing request (`PreparedRequest.prepare_cookies` → `cookiejar_from_dict` → `get_cookie_header`) and how a `RequestsCookieJar` works, but they do not contain the logic that extracts cookies from a response and adds them to the session’s cookie jar. Therefore, based on the given sources, the answer cannot be determined."
+requests,groq:legacy,callers,Which functions call get_netrc_auth?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,0.7002999999999999,,"`get_netrc_auth` is invoked by:
+
+1. **`Session.prepare_request`** (in *sessions.py*) – during request preparation it looks for netrc‑based credentials.  
+2. **`SessionRedirectMixin.rebuild_auth`** (in *sessions.py*) – when handling redirects it may re‑apply netrc authentication."
+requests,groq:legacy,callers,Who calls resolve_redirects?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,0.9336,,"`SessionRedirectMixin.resolve_redirects` is invoked by the session’s **`send`** method. In the code, `Session.send` (the concrete implementation in `sessions.py`) calls `self.resolve_redirects(...)` to handle any HTTP redirects that arise while sending a request. No other components directly call `resolve_redirects` in the provided context."
+requests,groq:legacy,callers,Where are response hooks dispatched?,1.0,0.5,1.0,1.0,0.0,0.0,0.0,0.8663,dispatch_hook,"Response hooks are dispatched in **`Session.send`**. The `Session.send` method calls the helper function **`dispatch_hook`**, passing the key `""response""` (along with the response object and any extra arguments). `dispatch_hook` looks up the hook list for that key in the request’s hook dictionary and invokes each hook, returning the (potentially modified) `Response`. Thus, the actual dispatch of response‑type hooks occurs inside `Session.send` via the `dispatch_hook` function."
+requests,groq:legacy,callers,Which code uses super_len to size a request body?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,1.1454000000000002,,"`super_len` is invoked in two places within the request‑preparation flow:
+
+1. **`PreparedRequest.prepare_content_length`** – after the body is built, this method calls `super_len(body)` to compute the body’s length and, if a non‑zero length is returned, sets the **`Content‑Length`** header.
+
+2. **`PreparedRequest.prepare_body`** – the body‑building routine also calls `super_len` (via the direct annotation) when it needs to determine the size of the data it is encoding.
+
+Thus, the request‑body sizing logic lives in `PreparedRequest.prepare_content_length` (the primary place that sets the header) and is also referenced from `PreparedRequest.prepare_body`."
+requests,groq:legacy,callers,Who calls should_bypass_proxies?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,1.0392000000000001,,"`should_bypass_proxies` is invoked by:
+
+* **`get_environ_proxies`** (utils.py) – it checks the NO_PROXY setting before returning environment proxies.  
+* **`resolve_proxies`** (utils.py) – it decides whether to apply environment‑proxy settings for a request."
+requests,groq:legacy,flow,What happens under the hood when you call requests.get?,1.0,,,0.96,0.0,0.0,1.0,2.2232,,"When you call **`requests.get(url, …)`** the following chain of objects and methods is executed:
+
+1. **`api.get`** (file *api.py*)  
+   ```python
+   def get(url, params=None, **kwargs):
+       return request(""get"", url, params=params, **kwargs)
+   ```  
+   * `get` simply forwards the call to the top‑level **`api.request`** function, passing the HTTP method string `""get""`.
+
+2. **`api.request`** (file *api.py*)  
+   ```python
+   def request(method, url, **kwargs):
+       return Session().request(method, url, **kwargs)
+   ```  
+   * A new **`Session`** object is instantiated.  
+   * The call is delegated to **`Session.request`**.
+
+3. **`Session.__init__`** (file *sessions.py*)  
+   * The freshly created `Session` is initialised with default attributes (`headers`, `cookies`, `auth`, `proxies`, …). No network activity occurs here.
+
+4. **`Session.request`** (file *sessions.py*)  
+   * Parameters (`method=""get""`, `url`, `params`, …) are received.  
+   * A **`Request`** object is constructed (calls `Request.__init__`).  
+   * The request is **prepared** by calling `self.prepare_request(request)`.  
+   * Environment‑specific settings are merged via `self.merge_environment_settings(...)`.  
+   * The prepared request is then sent with `self.send(prep, **merged_kwargs)`.
+
+5. **`Session.prepare_request`** (file *sessions.py*)  
+   * Takes the user‑level `Request` and builds a **`PreparedRequest`** (calls `PreparedRequest.__init__` and `request.prepare`).  
+   * Cookies from the `Request` are normalised (`cookiejar_from_dict`) and merged with the session’s cookie jar.  
+   * Returns the fully‑prepared `PreparedRequest`.
+
+6. **`Session.merge_environment_settings`** (file *sessions.py*)  
+   * Looks at `self.trust_env` and, if true, pulls proxy settings from the environment, merges them with any explicit `proxies` argument, and adds defaults for `stream`, `verify`, `cert`, etc.  
+   * Returns a dict of kwargs that will be passed to `send`.
+
+7. **`Session.send`** (file *sessions.py*)  
+   * Receives the `PreparedRequest`.  
+   * Ensures default values for `stream`, `verify`, `cert`, and resolves proxies (`resolve_proxies`).  
+   * Checks that the object is a `PreparedRequest` (raises `ValueError` if a raw `Request` is passed).  
+   * Calls the underlying **`HTTPAdapter.send`** (not shown in the excerpt) which actually opens a socket, writes the request, reads the response, and builds a **`Response`** object.
+
+8. **`HTTPAdapter.build_response`** (called by `send`) creates a **`Response`** instance (file *models.py*).  
+   * The `Response` object is populated with status code, headers, raw socket stream, etc., and is returned up the call stack.
+
+9. The **`Response`** object propagates back through `Session.send → Session.request → api.request → api.get` and is finally returned to the caller of `requests.get`.
+
+**Summary flow**
+
+```
+api.get → api.request → Session() → Session.request
+   → Request → Session.prepare_request → PreparedRequest
+   → Session.merge_environment_settings → Session.send
+   → HTTPAdapter.send → HTTPAdapter.build_response → Response
+```
+
+Thus, a single `requests.get` call creates a session, builds a `Request`, prepares it, merges environment settings, sends it via an adapter, and returns a fully‑populated `Response` object."
+requests,groq:legacy,flow,How does a Session send a prepared request through a transport adapter and build the response?,0.75,,,0.8823529411764706,0.0,0.0,1.0,1.8363,,"**Flow**
+
+1. **Create a `PreparedRequest`**  
+   * `Session.prepare_request(request)` builds a `PreparedRequest` (`p`) and calls `p.prepare(...)` (see `PreparedRequest.prepare`).  
+   * All request‑level data (method, url, headers, cookies, auth, hooks, etc.) are merged with the session’s defaults.
+
+2. **Select a transport adapter**  
+   * `Session.send(prep, …)` (not shown in the excerpt) looks up the adapter that matches the request URL with `self.get_adapter(prep.url)`.  
+   * By default this is an instance of `HTTPAdapter`, which is a subclass of `BaseAdapter`.
+
+3. **Delegate the actual I/O to the adapter**  
+   * The selected adapter’s `send` method is called:  
+
+   ```python
+   response = adapter.send(
+       request=prep,
+       stream=stream,
+       timeout=timeout,
+       verify=verify,
+       cert=cert,
+       proxies=proxies,
+   )
+   ```
+
+   * `BaseAdapter.send` (the abstract signature) receives a `PreparedRequest` and returns a `Response` object.  
+   * Concrete adapters (e.g., `HTTPAdapter`) implement the low‑level socket/urllib3 call, read the raw HTTP bytes, and construct a `requests.Response` instance.
+
+4. **Build the high‑level `Response`**  
+   * The `Response` object is populated with:
+     * `response.request = prep` – the original `PreparedRequest`.  
+     * `response.connection = adapter` – the adapter that performed the request.  
+     * `response.status_code`, `response.headers`, `response.raw`, etc., from the data returned by the adapter.  
+     * Any response hooks from `prep.hooks` are applied (via `dispatch_hook`).  
+   * If redirects are followed, `SessionRedirectMixin.resolve_redirects` merges cookies (`merge_cookies`) and creates additional `Response` objects, linking them via `response.history`.
+
+5. **Return to the caller**  
+   * `Session.send` returns the fully‑populated `Response` to the user (or to higher‑level helpers like `Session.request`).
+
+**Summary** – A `Session` prepares the request, picks the appropriate `BaseAdapter` subclass, calls its `send` method with the `PreparedRequest`, and then wraps the raw HTTP result into a `requests.Response` object, attaching the request, adapter, and any hook processing before returning it."
+requests,groq:legacy,flow,What happens when a server answers a digest-auth request with 401?,1.0,,,0.9333333333333333,0.0,0.0,0.0,2.2765,,"When the server returns **401 Unauthorized** for a request that is using `HTTPDigestAuth`, the following sequence is executed:
+
+1. **The response hook is triggered** – `HTTPDigestAuth.__call__` registers `self.handle_401` (and `self.handle_redirect`) on the prepared request. When the response arrives, `handle_401` is called.
+
+2. **`handle_401` checks the status code** –  
+   ```python
+   if not 400 <= r.status_code < 500:
+       self._thread_local.num_401_calls = 1
+       return r
+   ```  
+   Because the status is 401, the method continues.
+
+3. **Re‑winds the request body (if possible)** –  
+   If the original request body is a file‑like object and a previous position was saved (`self._thread_local.pos`), the body is seek‑ed back to that position so the request can be resent unchanged.
+
+4. **Extract the “WWW‑Authenticate” header** –  
+   ```python
+   s_auth = r.headers.get(""www-authenticate"", """")
+   ```
+
+5. **Detect a Digest challenge and limit retries** –  
+   ```python
+   if ""digest"" in s_auth.lower() and self._thread_local.num_401_calls < 2:
+       self._thread_local.num_401_calls += 1
+   ```  
+   The auth logic will only retry once (the second 401 is passed through).
+
+6. **Parse the challenge** –  
+   The `digest` keyword is stripped and the remainder is parsed into a dict:  
+   ```python
+   pat = re.compile(r""digest "", flags=re.IGNORECASE)
+   self._thread_local.chal = parse_dict_header(pat.sub("""", s_auth, count=1))
+   ```
+
+7. **Consume the original response and close the connection** –  
+   ```python
+   r.content          # forces reading the body
+   r.close()          # releases the connection for reuse
+   ```
+
+8. **Create a fresh `PreparedRequest`** –  
+   ```python
+   prep = r.request.copy()
+   cookie_jar = cast(""CookieJar"", prep._cookies)
+   extract_cookies_to_jar(cookie_jar, r.request, r.raw)
+   prep.prepare_cookies(cookie_jar)
+   ```
+
+9. **Build the Digest Authorization header** –  
+   ```python
+   _digest_auth = self.build_digest_header(
+       cast(str, prep.method), cast(str, prep.url)
+   )
+   if _digest_auth:
+       prep.headers[""Authorization""] = _digest_auth
+   ```
+
+10. **Resend the request** –  
+    The method returns the new `PreparedRequest` (the code snippet ends with `_r` in the excerpt, but in the full implementation the request is sent again via the session’s `send`). The second request now carries the `Authorization: Digest …` header computed from the challenge values (`realm`, `nonce`, `qop`, etc.) stored in `self._thread_local.chal`.
+
+In short, on a 401 response with a Digest challenge, `HTTPDigestAuth.handle_401` parses the challenge, builds a proper Digest `Authorization` header, rewinds the request body if needed, copies cookies, and automatically retries the request once with the new header. If the server replies with another 401 (or a non‑4xx status), the auth logic stops retrying."
+requests,groq:legacy,flow,How do cookies from a response end up stored in the session?,0.5,,,1.0,0.0,0.0,1.0,1.9489,,"**Flow of cookies from a server response into a `Session`**
+
+1. **The response is built** – `HTTPAdapter.build_response` creates a `Response` object.  
+   During this construction the response’s **`Set‑Cookie`** headers are handed to the
+   cookie‑handling utilities (the code that calls `extract_cookies_to_jar`).
+
+2. **`extract_cookies_to_jar`** (not shown in the excerpt but part of the cookie module) does the heavy lifting:
+   * It creates a **`MockRequest`** that wraps the original `PreparedRequest`.  
+   * It calls `jar.add_cookie_header(r)` on the session’s cookie jar (`Session.cookies`).  
+   * The `CookieJar` implementation reads the `Set‑Cookie` headers from the response
+     (exposed via `r.get_new_headers()`) and creates `Cookie` objects with
+     `create_cookie` / `morsel_to_cookie`.
+
+3. **The session’s cookie jar is updated** – the `CookieJar` (normally a
+   `RequestsCookieJar`) stores the new `Cookie` objects. Because `RequestsCookieJar`
+   inherits from `http.cookiejar.CookieJar`, it maintains the full cookie policy
+   (domain, path, expiry, etc.) and is also pickle‑able.
+
+4. **Later requests use the stored cookies** – when a new request is prepared,
+   `PreparedRequest.prepare_cookies` is called. It receives the session’s
+   `RequestsCookieJar` (`self._cookies`) and runs:
+   ```python
+   cookie_header = get_cookie_header(cookies_jar, self)
+   if cookie_header is not None:
+       self.headers[""Cookie""] = cookie_header
+   ```
+   `get_cookie_header` builds a proper **`Cookie`** header from the jar for the
+   outgoing request.
+
+**Summary**
+
+- The server’s `Set‑Cookie` headers are parsed by the cookie‑jar utilities
+  (`extract_cookies_to_jar` → `MockRequest` → `CookieJar.add_cookie_header`).
+- The resulting `Cookie` objects are stored in the `Session.cookies`
+  (`RequestsCookieJar` instance).
+- When the session prepares the next request, `PreparedRequest.prepare_cookies`
+  reads that jar and injects a `Cookie` header, sending the stored cookies back
+  to the server."
+click,groq:cited,callers,Which code calls resolve_command?,0.5,0.3333333333333333,2.0,1.0,1.0,1.0,0.0,0.9612,"Group.command, command","`Group.resolve_command` is invoked from the shell‑completion helper `_resolve_context`. Inside `_resolve_context` the code walks the argument list and, when the current command is a `Group`, calls `command.resolve_command(ctx, args)` to resolve the next sub‑command 【S4】."
+click,groq:cited,callers,Who calls handle_parse_result for each parameter?,1.0,0.3333333333333333,2.0,1.0,1.0,1.0,0.0,0.8937,"iter_params_for_processing, Command.get_params","`Command.parse_args` iterates over the parameters returned by `iter_params_for_processing` and invokes each parameter’s `handle_parse_result` method:
+
+```python
+for param in iter_params_for_processing(param_order, self.get_params(ctx)):
+    _, args = param.handle_parse_result(ctx, opts, args)
+```
+
+Thus, **`Command.parse_args` is the code that calls `Parameter.handle_parse_result` for every parameter**【S1】. The `handle_parse_result` method itself is defined on `Parameter`【S2】."
+click,groq:cited,callers,Who uses _resolve_context?,1.0,1.0,0.0,1.0,1.0,0.0,0.0,0.9937999999999999,,`_resolve_context` is invoked by **`ShellComplete.get_completions`** — the function’s `called_by` entry lists `ShellComplete.get_completions` as the caller【S3】.
+click,groq:cited,callers,Which function calls get_completion_class?,1.0,1.0,0.0,1.0,1.0,1.0,0.0,0.659,,`shell_complete` calls `get_completion_class`【S5】.
+click,groq:cited,flow,What happens when a click command is invoked from the command line?,0.5,,,1.0,1.0,0.0,0.0,1.9115,,"When a Click command is invoked (e.g. via the CLI runner used in tests) the following steps occur:
+
+1. **Isolation is set up** – `CliRunner.invoke` enters the `isolation` context manager, which creates temporary streams for *stdin*, *stdout* and *stderr* and applies any environment overrides. This is done by the `CliRunner.isolation` method [S8].
+
+2. **File‑descriptor capture is started** – Inside the isolation block a `_FDCapture` object is created for each of the output file descriptors and its `start` method is called, which dup’s the original descriptor, creates a temporary file and dup‑2’s the temporary file onto the target descriptor. See `_FDCapture.start` [S10].
+
+3. **The command is executed** – The command’s `main` method is called (the `invoke` implementation forwards the extra arguments to `Command.main`). The command parses the arguments, runs its callback and writes to the captured streams.
+
+4. **Capture is stopped** – After the command finishes (or raises), `CliRunner.invoke` calls `_FDCapture.stop` for each captured descriptor, which restores the original descriptor and returns the captured bytes. See `_FDCapture.stop` [S11].
+
+5. **Result object is built** – A `Result` instance is created with the captured `stdout_bytes`, `stderr_bytes`, the mixed `output_bytes`, the command’s return value, exit code and any exception information. `Result` holds this data [S6].
+
+6. **Program name resolution** – If needed, `CliRunner.get_default_prog_name` is used to obtain the default program name from the command’s `name` attribute (or “root”). [S7].
+
+Thus, invoking a Click command from the command line (or via `CliRunner.invoke`) runs the command inside an isolated environment, captures its output via temporary file descriptors, and returns a `Result` object containing the captured output, exit code and any exception. [S8, S10, S11, S6, S7]"
+click,groq:cited,flow,How does shell completion produce completions for a command?,0.75,,,1.0,1.0,1.0,0.0,1.5756,,"Shell completion works by letting Click’s `ShellComplete` object read the environment that the shell script sets, turn that into the arguments that were typed so far, and then ask each Click parameter for its own completions.  
+
+1. **Read the shell’s environment** – a concrete subclass of `ShellComplete` implements `get_completion_args`, which extracts the current argument list and the incomplete token from the environment variables that the shell script defines. The base class declares this method and marks it as required ([S2]).  
+
+2. **Ask Click for completions** – `ShellComplete.complete` (defined on the `ShellComplete` class) calls `get_completion_args` to obtain `args` and `incomplete`, then iterates over the command’s parameters and calls each parameter’s `shell_complete` method. The `ShellComplete` class and its `complete` method are described in the class definition ([S3]).  
+
+3. **Parameter‑level completion** – each parameter type implements a `shell_complete` method that returns a list of `CompletionItem` objects. For example, the `File` parameter type returns a single `CompletionItem` whose `type` is set to `""file""` ([S1]).  
+
+4. **Representing a completion** – `CompletionItem` is the object that carries the suggestion value and optional metadata such as `type` (e.g., `""file""` or `""dir""`) and `help`. The class is used by many parameter types, including `File.shell_complete` ([S4]).  
+
+5. **Formatting for the shell** – `ShellComplete.get_completions` turns the `CompletionItem` objects into the string format the shell expects and writes them to stdout, which the shell then presents to the user.
+
+Thus, the flow is: the shell script → `ShellComplete.get_completion_args` → `ShellComplete.complete` → each parameter’s `shell_complete` → `CompletionItem` objects → formatted output back to the shell. All of these steps are documented in the sources above."
+click,groq:cited,flow,How does the click.command decorator turn a function into a Command?,1.0,,,1.0,1.0,1.0,0.0,0.9813,,"The `click.command` decorator builds a `Command` object from the decorated function and then replaces the original function with that object. When the decorator is applied it creates a new `Command` instance (or a subclass if `cls` is supplied), attaches any options/arguments that were added via other decorators, and returns the resulting `Command` instance so the function “turns into” a command that can be invoked or added to a group [S1]."
+click,groq:cited,flow,How does CliRunner invoke a command in tests and capture its output?,1.0,,,1.0,1.0,1.0,1.0,1.715,,"`CliRunner.invoke` creates an isolated execution environment, runs the command, captures the file‑descriptor output and returns a `Result` object that holds the captured bytes.
+
+1. **Set up isolation** – `invoke` calls the context manager `CliRunner.isolation`, which (via its implementation) creates temporary `BytesIO` streams for *stdin*, *stdout* and *stderr* and also starts an `_FDCapture` for the chosen capture strategy【S7】.  
+
+2. **Redirect file descriptors** – Inside the isolation context the `_FDCapture.start` method duplicates the original file descriptor, creates a temporary file and redirects the descriptor to that file so that everything written to `stdout`/`stderr` is captured【S9】.
+
+3. **Run the command** – While the isolation context is active, `invoke` calls the command’s `main` method (the call is not shown in the excerpt but is performed inside `invoke`). The command writes to `sys.stdout`/`sys.stderr`, which are now redirected to the temporary file.
+
+4. **Stop capture** – After the command finishes, the isolation context exits and `_FDCapture.stop` restores the original descriptor and reads the captured bytes from the temporary file【S10】.
+
+5. **Build the result** – `invoke` then constructs a `Result` instance, passing the captured `stdout_bytes`, `stderr_bytes`, a combined `output_bytes`, the command’s return value, exit code, and any exception information【S2】【S3】. The `Result.__init__` simply stores these values on the object【S4】.
+
+The returned `Result` object therefore provides the captured output through its `output`, `stdout` and `stderr` properties. This is how `CliRunner` invokes a command in tests and captures its output.【S2】【S7】【S9】【S10】【S3】【S4】"
+click,groq:legacy,callers,Which code calls resolve_command?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,0.8832000000000001,,"`Group.resolve_command` is invoked in two places:
+
+1. **`Group.invoke`** – the group’s main execution path calls `resolve_command` to locate a sub‑command before invoking it.  
+2. **`_resolve_context`** (in *shell_completion.py*) – the completion helper walks the argument list and uses `resolve_command` to build the nested context hierarchy."
+click,groq:legacy,callers,Who calls handle_parse_result for each parameter?,1.0,0.25,3.0,1.0,0.0,0.0,0.0,0.9038999999999999,"iter_params_for_processing, Command.get_params, command","`Parameter.handle_parse_result` is invoked from **`Command.parse_args`**.  
+Inside `Command.parse_args` the code:
+
+```python
+for param in iter_params_for_processing(param_order, self.get_params(ctx)):
+    _, args = param.handle_parse_result(ctx, opts, args)
+```
+
+iterates over every parameter (as ordered by `iter_params_for_processing`) and calls each parameter’s `handle_parse_result`. Thus, the command’s `parse_args` method is the caller that processes every parameter."
+click,groq:legacy,callers,Who uses _resolve_context?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,0.8603999999999999,,`_resolve_context` is invoked by **`ShellComplete.get_completions`**. It is the only place shown in the provided code where this helper function is called.
+click,groq:legacy,callers,Which function calls get_completion_class?,1.0,1.0,0.0,1.0,0.0,0.0,0.0,1.0135,,The **`shell_complete`** function (in `shell_completion.py`) directly calls **`get_completion_class`**. No other function in the provided context invokes it.
+click,groq:legacy,flow,What happens when a click command is invoked from the command line?,0.5,,,1.0,0.0,0.0,0.0,2.0362999999999998,,"When a Click command is run from the command line the **CliRunner.invoke** workflow is executed:
+
+1. **Isolation is set up** – `CliRunner.invoke` enters the `isolation` context manager.  
+   * `stdin` is replaced with the supplied *input* (or an empty stream).  
+   * `os.environ` is temporarily patched with the *env* mapping.  
+   * If the runner’s *capture* mode is **fd**, a `_FDCapture` object is created for each of the file descriptors (`stdout` = 1, `stderr` = 2). Its `start()` method dup’s the original fd, creates a temporary binary file and dup2’s that file onto the target fd, so everything written to the console is captured.
+
+2. **Command execution** – Inside the isolation block the command’s `main` method is called (the `extra` kwargs are passed straight through).  
+   * The command receives the parsed arguments (`args` – either a string that is `shlex.split`‑ed or an iterable).  
+   * The `color` flag is forwarded so the command can decide whether to emit ANSI colour codes.  
+   * `catch_exceptions` determines whether any exception other than `SystemExit` is swallowed and stored in the result.
+
+3. **Capture teardown** – After `main` returns (or raises), the `_FDCapture.stop()` method is called for each captured fd.  
+   * The original fd is restored with `os.dup2`.  
+   * The temporary file is rewound, read, closed and its bytes are returned.
+
+4. **Result construction** – A `Result` object is instantiated with:
+   * `stdout_bytes` and `stderr_bytes` (the data returned from the `_FDCapture` objects, or empty bytes when the `sys` capture mode is used).  
+   * `output_bytes` – a mix of the two streams as the user would see on a terminal.  
+   * `return_value` – whatever the command’s callback returned.  
+   * `exit_code` – the integer exit code (normally `0` for success, non‑zero for errors).  
+   * `exception` / `exc_info` – populated if an exception was caught.
+
+5. **Return** – The `Result` instance is returned to the caller, providing access to `output`, `stdout`, `stderr`, `exit_code`, etc.
+
+So, invoking a Click command from the command line (via `CliRunner.invoke`) runs the command in an isolated environment, redirects the standard streams to temporary files, executes the command’s `main` method with the supplied arguments, restores the original streams, and packages everything that happened into a `Result` object."
+click,groq:legacy,flow,How does shell completion produce completions for a command?,0.75,,,1.0,0.0,0.0,0.0,2.1424000000000003,,"Shell completion works through the **`ShellComplete`** helper class and the **`CompletionItem`** objects that each parameter can return.
+
+1. **Shell entry point** – When a user invokes a completion request (the shell script sets a special environment variable, e.g. `COMP_LINE`), Click creates a `ShellComplete` instance for the current CLI (`ShellComplete.__init__`).  
+
+2. **Collect arguments** – `ShellComplete.complete` (not shown but part of the class) calls  
+   `ShellComplete.get_completion_args()` → returns a tuple **`(args, incomplete)`** where `args` are the command‑line tokens already typed and `incomplete` is the fragment that needs completing. Sub‑classes implement this method for each shell.
+
+3. **Resolve the command** – Using the `args` list, Click resolves which command and which parameter is being completed.
+
+4. **Ask the parameter for completions** – The resolved `Parameter` (or its subclass) calls its `shell_complete` method.  
+   * For a generic parameter the default implementation builds a list of `CompletionItem` objects.  
+   * The `File` type overrides `shell_complete` (shown in the snippet) and returns a single `CompletionItem(incomplete, type=""file"")`.  
+   * Other types (e.g., `Choice`, `Command`, `Group`) also return `CompletionItem`s.
+
+5. **Wrap the results** – `ShellComplete.get_completions` receives the list of `CompletionItem`s and formats each one via `ShellComplete.format_completion`, turning the Python objects into the string format the shell expects (including the optional `type` and `help` metadata).
+
+6. **Emit to the shell** – `ShellComplete.complete` writes the formatted completions to stdout; the shell script reads them and presents the suggestions to the user.
+
+In short, the flow is:
+
+```
+Shell script → ShellComplete.complete
+    → get_completion_args() → (args, incomplete)
+    → resolve command/parameter
+    → parameter.shell_complete(ctx, param, incomplete)
+        → returns [CompletionItem(...)]
+    → get_completions() → format_completion()
+    → output to shell
+```
+
+The `CompletionItem` objects carry the actual suggestion (`value`) and optional metadata (`type=""file""` for file‑path completions, etc.), which the shell uses to provide the final completions."
+click,groq:legacy,flow,How does the click.command decorator turn a function into a Command?,1.0,,,1.0,0.0,0.0,0.0,1.3395,,"`click.command` is a decorator that **replaces the original function with a `Command` object**.
+
+When the decorator is applied it:
+
+1. **Creates a `Command` (or a subclass you pass via `cls`)** – the call to `command()` builds an instance of the command class, passing any keyword arguments you supplied (`**attrs`).  
+2. **Uses the decorated function as the command’s callback** – the function you wrote becomes the `callback` attribute of the new `Command`.  
+3. **Derives the command name** – if you didn’t give an explicit `name`, the decorator converts the function’s name to lower‑case, replaces “_” with “-”, and strips the suffixes `_command`, `_cmd`, `_group` and `_grp`.  
+4. **Attaches any previously‑decorated parameters** – options and arguments that were added to the function with `@click.option` or `@click.argument` are collected and appended to the command’s `params` list.  
+5. **Returns the `Command` instance** – the original function object is replaced in the module’s namespace by this `Command`, so later you can invoke it directly (`my_cmd()`) or add it to a `Group`.
+
+Thus, after `@click.command` decorates a function, the name now refers to a fully‑featured `Command` object that can be executed by the Click runtime or used in tests via `CliRunner`."
+click,groq:legacy,flow,How does CliRunner invoke a command in tests and capture its output?,1.0,,,1.0,0.0,0.0,0.0,1.9578,,"`CliRunner.invoke` is the entry point that a test calls to run a Click command.
+
+1. **Prepare the environment** – `invoke` first creates a *capture* object for stdout/stderr.  
+   * If the runner was created with `capture=""fd""` it builds an `_FDCapture(1)` (for stdout) and another for fd 2 (stderr); otherwise it uses the default “sys” capture that only records writes to `sys.stdout`/`sys.stderr`.
+
+2. **Enter isolation** – `invoke` enters the `CliRunner.isolation` context manager.  
+   * `isolation` builds three in‑memory `BytesIO` streams that will become `sys.stdin`, `sys.stdout` and `sys.stderr`.  
+   * It writes the supplied `input` into the stdin stream, applies any `env` overrides, and (when `capture=""fd""` is used) starts the `_FDCapture` objects so that the underlying file descriptors 1 and 2 are redirected to temporary files.
+
+3. **Run the command** – Inside the isolation block `invoke` calls the command’s `main` method (`cli.main`) with the parsed arguments (`args` – split with `shlex.split` when a string) and any extra keyword arguments (`extra`).  
+   * The call is wrapped in a `try/except` that catches `SystemExit` (to obtain the exit code) and, if `catch_exceptions` is true (or the runner’s default), any other exception, storing the exception object and `exc_info`.
+
+4. **Collect the output** – When the isolation block exits:
+   * If fd‑capture was used, `stop()` is called on each `_FDCapture`; the temporary files are read and the captured bytes are returned.
+   * If the “sys” strategy is used, the `BytesIO` objects that were temporarily bound to `sys.stdout`/`sys.stderr` are read (`stdout_bytes = stdout.getvalue()`, `stderr_bytes = stderr.getvalue()`).
+
+5. **Build a Result** – All collected pieces are passed to the `Result` constructor:
+   ```python
+   result = Result(
+       runner=self,
+       stdout_bytes=stdout_bytes,
+       stderr_bytes=stderr_bytes,
+       output_bytes=stdout_bytes + stderr_bytes,   # what the user would see
+       return_value=return_value,
+       exit_code=exit_code,
+       exception=exception,
+       exc_info=exc_info,
+   )
+   ```
+   The `Result` object exposes convenient properties (`output`, `stdout`, `stderr`) that decode the byte streams to text.
+
+Thus, `CliRunner.invoke` isolates the test process, redirects the standard streams (either via in‑memory buffers or temporary files), runs the Click command, captures stdout/stderr, exit code and any exception, and returns them wrapped in a `Result` instance."

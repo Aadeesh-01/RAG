@@ -14,6 +14,7 @@ import os
 import sys
 
 from .config import DEFAULT_VERSION, VERSIONS, get_config
+from .llm import LLMError
 
 DEFAULT_REPO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                             "sample_repo")
@@ -40,6 +41,36 @@ def _add_retrieval_overrides(p):
                    help="also follow called_by edges")
 
 
+def _add_llm_options(p):
+    p.add_argument("--llm", choices=["local", "groq", "openrouter", "gemini", "none"],
+                   default=os.environ.get("CODERAG_LLM"),
+                   help="answer with the preset's local model (default), a remote API "
+                        "(key from GROQ_API_KEY / OPENROUTER_API_KEY / GEMINI_API_KEY), "
+                        "or none (sources only). Default can be set with CODERAG_LLM.")
+    p.add_argument("--model", help="model id for --llm (default: per provider)")
+    p.add_argument("--prompt", choices=["legacy", "cited"],
+                   help="cited = numbered sources the answer must cite (default for remote "
+                        "models; small local models can't follow it, see eval/README.md)")
+
+
+def _llm_overrides(args):
+    from .llm import DEFAULT_REMOTE_MODELS
+
+    llm = getattr(args, "llm", None)
+    overrides = {"prompt_style": getattr(args, "prompt", None)}
+    if llm == "none":
+        overrides["llm_backend"] = "none"
+    elif llm in DEFAULT_REMOTE_MODELS:
+        model = args.model or DEFAULT_REMOTE_MODELS[llm]
+        overrides.update(llm_backend="remote", llm_provider=llm, llm_model=model,
+                         max_new_tokens=1024,
+                         reasoning_effort="low" if "gpt-oss" in model else None,
+                         prompt_style=overrides["prompt_style"] or "cited")
+    elif getattr(args, "model", None):
+        overrides["llm_model"] = args.model
+    return overrides
+
+
 def _overrides(args):
     return {
         "top_k": args.top_k,
@@ -49,10 +80,17 @@ def _overrides(args):
     }
 
 
+def _print_sources(sources):
+    print("\nSources:")
+    for s in sources:
+        hop = "" if s["hop"] == 0 else f"  (call graph, hop {s['hop']})"
+        print(f"  [S{s['id']}] {s['file']}:L{s['start_line']}-L{s['end_line']}  {s['name']}{hop}")
+
+
 def _make_agent(args, overrides=None, load_llm=True):
     from .agent import RAGCodebaseAgent
 
-    config = get_config(args.version, **(overrides or {}))
+    config = get_config(args.version, **{**_llm_overrides(args), **(overrides or {})})
     if args.index:
         return RAGCodebaseAgent.load_or_build(args.repo, args.index, config,
                                               load_llm=load_llm, verbose=not args.quiet)
@@ -103,10 +141,19 @@ def cmd_ask(args):
     def answer(question):
         if args.retrieve_only:
             print(agent.build_context(question))
-        else:
-            reply = agent.query(question)
-            if args.quiet:
-                print(reply)
+            return
+        sources = []
+        for event in agent.stream(question):
+            if event["type"] == "sources":
+                sources = event["sources"]
+                print("\nAnswer:\n", flush=True)
+            elif event["type"] == "token":
+                print(event["text"], end="", flush=True)
+            elif event["type"] == "error":
+                print(f"[{event['code']}] {event['message']}")
+            elif event["type"] == "done":
+                print(f"\n\n(answered by {event['backend']} in {event['llm_ms'] / 1000:.1f}s)")
+        _print_sources(sources)
 
     if args.question:
         answer(args.question)
@@ -162,6 +209,7 @@ def build_parser():
     p.add_argument("question", nargs="?")
     _add_common(p)
     _add_index_dir(p)
+    _add_llm_options(p)
     _add_retrieval_overrides(p)
     p.add_argument("--retrieve-only", action="store_true",
                    help="print the LLM context instead of generating (skips the LLM)")
@@ -170,6 +218,7 @@ def build_parser():
     p = sub.add_parser("demo", help="run the version's original demo queries")
     _add_common(p)
     _add_index_dir(p)
+    _add_llm_options(p)
     p.set_defaults(func=cmd_demo)
 
     p = sub.add_parser("graph", help="export the interactive chunk graph HTML")
@@ -185,7 +234,7 @@ def main(argv=None):
     args = build_parser().parse_args(argv)
     try:
         args.func(args)
-    except (FileNotFoundError, ValueError) as e:
+    except (FileNotFoundError, ValueError, LLMError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 1
     return 0

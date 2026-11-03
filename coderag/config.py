@@ -58,6 +58,20 @@ SYSTEM_PROMPT_MULTIHOP = (
 )
 
 
+SYSTEM_PROMPT_CITED = (
+    "You answer questions about a Python codebase using ONLY the numbered sources provided. "
+    "Each source is labelled [S<n>] with its file, line range and qualified name; its "
+    "'calls' and 'called_by' lines list call relationships resolved from the code.\n"
+    "Rules:\n"
+    "- Cite the sources that support each claim inline, like [S2] or [S1, S4].\n"
+    "- Name functions, methods and classes exactly as written in the sources "
+    "(e.g. `Session.send`).\n"
+    "- Only state that X calls Y if a source's code or its calls/called_by line shows it.\n"
+    "- If the sources do not contain the answer, say so plainly instead of guessing.\n"
+    "- Be concise."
+)
+
+
 @dataclass(frozen=True)
 class RAGConfig:
     name: str
@@ -100,8 +114,11 @@ class RAGConfig:
     min_chars_per_chunk: int = 80           # floor for the decayed budget
 
     # ── LLM ─────────────────────────────────────────────────────────────────
-    llm_backend: str = "chat"               # "seq2seq" (flan-t5) | "chat"
-    llm_model: str = QWEN_CODER
+    llm_backend: str = "chat"               # "seq2seq" (flan-t5) | "chat" (local) | "remote" | "none"
+    llm_provider: str = ""                  # remote: groq | openrouter | gemini
+    llm_model: str = QWEN_CODER             # HF id (local) or provider model id (remote)
+    reasoning_effort: str | None = None     # remote reasoning models: low | medium | high
+    prompt_style: str = "legacy"            # "legacy" (code context) | "cited" (numbered sources)
     system_prompt: str = SYSTEM_PROMPT_BASIC
     max_input_tokens: int = 2048
     max_new_tokens: int = 256
