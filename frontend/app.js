@@ -14,6 +14,7 @@ const state = {
   busy: false, turn: 0,
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
   userRepos: [],                       // [{id, name}] indexed by this visitor
+  chats: new Map(),                    // repo id -> {turns, retrieved} while another repo is open
 };
 const settings = loadSettings();
 
@@ -165,8 +166,9 @@ function rememberUserRepo(id, name) {
 function removeUserRepo(id) {
   state.userRepos = state.userRepos.filter((r) => r.id !== id);
   saveUserRepos();
-  if (state.demo?.id === id) selectRepo(state.demos[0]?.id);
-  else renderRepoTabs();
+  // switching away stores the open chat, so forget it only afterwards
+  if (state.demo?.id === id) selectRepo(state.demos[0]?.id).then(() => state.chats.delete(id));
+  else { state.chats.delete(id); renderRepoTabs(); }
 }
 
 const GENERIC_QUESTIONS = [
@@ -258,7 +260,10 @@ function renderRepoCard(demo) {
       el("span", {}, el("b", { text: s.files ?? "–" }), " files"),
       el("span", {}, el("b", { text: s.chunks ?? "–" }), " code chunks"),
       el("span", {}, el("b", { text: s.call_edges ?? "–" }), " resolved calls"),
-      demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null),
+      demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null,
+      el("button", { type: "button", class: "link-button clear-chat", text: "Clear chat",
+        title: "Remove this repository's questions and answers (saved answers are kept)",
+        onclick: clearChat })),
     el("div", { class: "chips" }, (demo.questions.length ? demo.questions : GENERIC_QUESTIONS)
       .map((q) => el("button", { type: "button", class: "chip", text: q, onclick: () => ask(q) }))),
   );
@@ -283,12 +288,21 @@ async function repoInfo(id) {
 async function selectRepo(id) {
   const demo = (id && await repoInfo(id)) || state.demos[0];
   if (!demo) return;
+  const conversation = $("#conversation");
+  if (state.demo) {
+    // keep the conversation we're leaving: its DOM (with listeners) and graph highlight
+    state.chats.set(state.demo.id, {
+      turns: [...conversation.querySelectorAll(".turn")], retrieved: state.retrieved,
+    });
+  }
+  const chat = state.chats.get(demo.id);
   state.demo = demo;
-  state.retrieved = new Map();
+  state.retrieved = chat?.retrieved || new Map();
   state.graphMode = "focus";
   renderRepoTabs();
   renderRepoCard(demo);
-  $("#conversation").replaceChildren($("#repo-card"));
+  conversation.replaceChildren($("#repo-card"), ...(chat?.turns || []));
+  conversation.scrollTop = chat ? conversation.scrollHeight : 0;
   updateUrl({ repo: demo.id, q: null });
 
   if (!state.graphs.has(demo.id)) {
@@ -337,6 +351,7 @@ async function ask(question) {
   $("#question").value = "";
   autosize();
   updateUrl({ repo: state.demo.id, q: question });
+  const repo = state.demo;               // the answer belongs here even if the visitor switches
 
   const turnId = ++state.turn;
   const status = el("div", { class: "status" }, el("span", { class: "spinner" }), el("span", { text: "Searching the code…" }));
@@ -352,13 +367,13 @@ async function ask(question) {
   let frame = 0;
   const paint = () => {
     frame = 0;
-    const follow = isNearBottom(conversation);
+    const follow = turn.isConnected && isNearBottom(conversation);
     body.innerHTML = renderAnswer(text, sources.length, renderers);
     if (follow) conversation.scrollTop = conversation.scrollHeight;
   };
 
   try {
-    const response = await fetch(`/api/repos/${state.demo.id}/ask`, {
+    const response = await fetch(`/api/repos/${repo.id}/ask`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody(question)),
@@ -382,9 +397,14 @@ async function ask(question) {
         if (event.type === "sources") {
           sources = data.sources;
           answer.append(renderSources(turnId, sources));
-          state.retrieved = new Map(sources.map((s) => [s.chunk_id, s.hop]));
-          state.graphMode = "focus";
-          drawGraph();
+          const retrieved = new Map(sources.map((s) => [s.chunk_id, s.hop]));
+          if (state.demo?.id === repo.id) {
+            state.retrieved = retrieved;
+            state.graphMode = "focus";
+            drawGraph();
+          } else if (state.chats.has(repo.id)) {
+            state.chats.get(repo.id).retrieved = retrieved;    // visitor switched away
+          }
           status.lastChild.textContent = "Writing the answer…";
         } else if (event.type === "token") {
           text += data.text;
@@ -397,9 +417,13 @@ async function ask(question) {
           const seconds = (data.llm_ms / 1000).toFixed(1);
           const copy = el("button", { type: "button", class: "link-button", text: "Copy answer",
             onclick: () => copyText(normalizeCitations(text), copy) });
+          const save = saveButton({
+            repoId: repo.id, repoName: repo.name, question, answer: normalizeCitations(text),
+            backend: data.backend, sources: sources.map(slimSource),
+          });
           answer.insertBefore(el("div", { class: "meta" },
-            `Answered by ${data.backend}${data.cached ? " · cached" : ` in ${seconds}s`} · `, copy),
-            answer.querySelector(".sources"));
+            `Answered by ${data.backend}${data.cached ? " · cached" : ` in ${seconds}s`} · `,
+            copy, " · ", save), answer.querySelector(".sources"));
         } else if (event.type === "error") {
           status.remove();
           answer.insertBefore(el("div", { class: "notice", text: errorMessage(data.code, data.message) }), answer.querySelector(".sources"));
@@ -416,7 +440,7 @@ async function ask(question) {
   }
 }
 
-function renderSources(turnId, sources) {
+function renderSources(turnId, sources, { graph = true } = {}) {
   const rows = sources.map((s) => {
     const hopColor = s.hop === 0 ? "var(--hop0)" : s.hop === 1 ? "var(--hop1)" : "var(--hop2)";
     const details = el("details", { class: "source", "data-sid": s.id, "data-chunk": s.chunk_id },
@@ -433,7 +457,7 @@ function renderSources(turnId, sources) {
         s.url ? el("a", { class: "open", href: s.url, target: "_blank", rel: "noopener", text: "Open on GitHub ↗" }) : null,
         el("button", { type: "button", class: "link-button", text: "Copy location",
           onclick: (e) => copyText(`${formatLocation(s)}  ${s.name}`, e.currentTarget) })));
-    details.addEventListener("toggle", () => { if (details.open) pulseNode(s.chunk_id); });
+    if (graph) details.addEventListener("toggle", () => { if (details.open) pulseNode(s.chunk_id); });
     return details;
   });
   return el("section", { class: "sources" }, el("h3", { text: `Sources (${sources.length})` }), rows);
@@ -456,6 +480,122 @@ async function copyText(text, button) {
   } catch {
     button.textContent = "Copy failed";
   }
+}
+
+// ── saved answers (kept in this browser across reloads) ─────────────────────
+const SAVED_KEY = "coderag.saved";
+
+function loadSaved() {
+  try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; }
+}
+
+function storeSaved(list) {
+  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); return true; } catch { return false; }
+}
+
+function slimSource(s) {          // what a saved answer keeps of a source (no code)
+  const { id, name, kind, file, start_line, end_line, hop, url } = s;
+  return { id, name, kind, file, start_line, end_line, hop, url };
+}
+
+function saveButton(record) {
+  let savedId = null;
+  const button = el("button", { type: "button", class: "link-button save",
+    title: "Keep this answer in this browser. Unsaved chats are cleared when the page is closed or reloaded." });
+  const sync = () => {
+    button.textContent = savedId ? "★ Saved" : "☆ Save";
+    button.setAttribute("aria-pressed", String(Boolean(savedId)));
+  };
+  button.addEventListener("click", () => {
+    const list = loadSaved();
+    if (savedId) {
+      storeSaved(list.filter((r) => r.id !== savedId));
+      savedId = null;
+    } else {
+      const entry = { ...record, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
+                      savedAt: new Date().toISOString() };
+      if (!storeSaved([entry, ...list])) {
+        button.textContent = "Couldn't save (browser storage is full or blocked)";
+        return;
+      }
+      savedId = entry.id;
+    }
+    sync();
+    updateSavedCount();
+  });
+  sync();
+  return button;
+}
+
+function updateSavedCount() {
+  const n = loadSaved().length;
+  const badge = $("#saved-count");
+  badge.textContent = n ? String(n) : "";
+  badge.hidden = !n;
+}
+
+function setupSaved() {
+  const dialog = $("#saved");
+  $("#saved-button").addEventListener("click", () => { renderSaved(); dialog.showModal(); });
+  $("#saved-close").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("click", (e) => {           // citations jump to the source in the same item
+    const cite = e.target.closest("a.cite");
+    if (!cite) return;
+    e.preventDefault();
+    const row = cite.closest(".saved-item")?.querySelector(`.source[data-sid="${cite.dataset.source}"]`);
+    if (!row) return;
+    row.open = true;
+    row.scrollIntoView({ behavior: "smooth", block: "nearest" });
+    row.classList.add("flash");
+    setTimeout(() => row.classList.remove("flash"), 1200);
+  });
+  updateSavedCount();
+}
+
+function renderSaved() {
+  const list = loadSaved();
+  const box = $("#saved-list");
+  if (!list.length) {
+    box.replaceChildren(el("p", { class: "note",
+      text: "No saved answers yet. Use ☆ Save under an answer to keep it after the page is closed." }));
+    return;
+  }
+  box.replaceChildren(...list.map((r) => {
+    const body = el("div", { class: "body" });
+    body.innerHTML = renderAnswer(r.answer, r.sources.length, renderers);
+    const copy = el("button", { type: "button", class: "link-button", text: "Copy",
+      onclick: () => copyText(r.answer, copy) });
+    return el("details", { class: "saved-item" },
+      el("summary", {},
+        el("span", { class: "q", text: r.question }),
+        el("span", { class: "where", text: `${r.repoName} · saved ${new Date(r.savedAt).toLocaleDateString()}` })),
+      el("div", { class: "answer" },
+        body,
+        el("div", { class: "meta" }, `Answered by ${r.backend} · `,
+          el("button", { type: "button", class: "link-button", text: "Open repo",
+            onclick: () => openSavedRepo(r) }), " · ", copy, " · ",
+          el("button", { type: "button", class: "link-button danger", text: "Delete",
+            onclick: () => { storeSaved(loadSaved().filter((x) => x.id !== r.id)); updateSavedCount(); renderSaved(); } })),
+        renderSources(`saved-${r.id}`, r.sources, { graph: false })));
+  }));
+}
+
+async function openSavedRepo(record) {
+  $("#saved").close();
+  const info = await repoInfo(record.repoId);
+  if (!info) {
+    banner(`${record.repoName} is no longer indexed on the server. Add it again to ask new questions.`);
+    return;
+  }
+  if (info.kind === "user") rememberUserRepo(info.id, info.name);
+  await selectRepo(info.id);
+}
+
+function clearChat() {
+  $("#conversation").querySelectorAll(".turn").forEach((t) => t.remove());
+  state.chats.delete(state.demo?.id);
+  state.retrieved = new Map();
+  drawGraph();
 }
 
 function markCited(turn, cited) {
@@ -636,6 +776,7 @@ function autosize() {
 
 async function start() {
   setupSettings();
+  setupSaved();
   const openAddRepo = setupAddRepo();
   state.userRepos = loadUserRepos();
   showPanel("chat");

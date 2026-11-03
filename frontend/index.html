@@ -23,6 +23,10 @@
     </a>
     <nav id="repo-tabs" class="repo-tabs" aria-label="Repositories"></nav>
     <button id="add-repo-button" class="add-repo" type="button" title="Index a public GitHub repository">+ Add repo</button>
+    <button id="saved-button" class="icon-button saved-button" type="button" aria-label="Saved answers" title="Saved answers">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1Z"/></svg>
+      <span id="saved-count" class="badge" hidden></span>
+    </button>
     <button id="settings-button" class="icon-button" type="button" aria-label="Settings" title="Settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
     </button>
@@ -66,6 +70,17 @@
       </div>
     </section>
   </main>
+
+  <dialog id="saved" class="settings saved-dialog">
+    <div class="dialog-body">
+      <div class="dialog-head">
+        <h2>Saved answers</h2>
+        <button id="saved-close" type="button" class="ghost">Close</button>
+      </div>
+      <p class="note">Kept in this browser only. Other chats are cleared when you close or reload the page.</p>
+      <div id="saved-list" class="saved-list"></div>
+    </div>
+  </dialog>
 
   <dialog id="add-repo" class="settings">
     <form id="add-repo-form" method="dialog">
