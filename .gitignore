@@ -19,3 +19,6 @@ env/
 # Generated output
 chunk_graph.html
 *.db
+
+# Eval checkouts
+eval/.repos/

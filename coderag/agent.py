@@ -4,7 +4,7 @@ import os
 
 from .chunking import load_chunks
 from .config import get_config
-from .context import build_context, keyword_filter
+from .context import asks_for_callers, build_context, display_name, keyword_filter
 from .graph import build_name_index, build_reverse_index, expand_bfs
 
 
@@ -59,7 +59,7 @@ class RAGCodebaseAgent:
     def _embed_texts(self):
         if self.config.structural:
             # name + docstring + code gives a richer semantic signal
-            return [f"{d['name']}: {d['docstring']}\n{d['content']}" for d in self.documents]
+            return [f"{display_name(d)}: {d['docstring']}\n{d['content']}" for d in self.documents]
         return self.chunks
 
     # =========================================================================
@@ -92,11 +92,12 @@ class RAGCodebaseAgent:
 
         # Expansion is seeded from every vector hit, including any the keyword
         # filter dropped, and in set order (both as in v4/v5).
+        include_callers = cfg.include_callers or (cfg.auto_callers and asks_for_callers(question))
         expansions = expand_bfs(
             self.metadata, self._name_index, set(seeds),
             max_hops=cfg.max_hops,
             max_expansion=cfg.max_expansion,
-            include_callers=cfg.include_callers,
+            include_callers=include_callers,
         )
         if expansions:
             self._log(f"\n[EXPAND] Graph BFS added {len(expansions)} chunk(s) "

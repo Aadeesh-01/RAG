@@ -2,6 +2,22 @@
 
 from .config import FLAN_PROMPT
 
+TRUNCATION_MARK = "\n[... context truncated]"
+
+
+def fit_context(tokenizer, build_prompt, context, max_tokens):
+    """
+    Trim `context` so that build_prompt(context) fits in `max_tokens`.
+    Only the context is cut: the question and instructions always survive
+    (plain right-truncation of the whole prompt would cut the question first).
+    """
+    overhead = len(tokenizer(build_prompt("") + TRUNCATION_MARK)["input_ids"])
+    budget = max_tokens - overhead
+    ids = tokenizer(context, add_special_tokens=False)["input_ids"]
+    if len(ids) <= budget:
+        return context
+    return tokenizer.decode(ids[:max(budget, 0)]) + TRUNCATION_MARK
+
 
 class Seq2SeqLLM:
     """flan-t5 style encoder-decoder model fed a plain prompt (v0 baseline)."""
@@ -17,7 +33,10 @@ class Seq2SeqLLM:
     def generate(self, context, question):
         import torch
 
-        prompt = FLAN_PROMPT.format(context=context, question=question)
+        def build(ctx):
+            return FLAN_PROMPT.format(context=ctx, question=question)
+
+        prompt = build(fit_context(self.tokenizer, build, context, self.config.max_input_tokens))
         inputs = self.tokenizer(
             prompt,
             return_tensors="pt",
@@ -51,13 +70,16 @@ class ChatLLM:
     def generate(self, context, question):
         import torch
 
-        messages = [
-            {"role": "system", "content": self.config.system_prompt},
-            {"role": "user", "content": f"Code context:\n{context}\n\nQuestion: {question}"},
-        ]
-        text = self.tokenizer.apply_chat_template(
-            messages, tokenize=False, add_generation_prompt=True,
-        )
+        def build(ctx):
+            messages = [
+                {"role": "system", "content": self.config.system_prompt},
+                {"role": "user", "content": f"Code context:\n{ctx}\n\nQuestion: {question}"},
+            ]
+            return self.tokenizer.apply_chat_template(
+                messages, tokenize=False, add_generation_prompt=True,
+            )
+
+        text = build(fit_context(self.tokenizer, build, context, self.config.max_input_tokens))
         inputs = self.tokenizer(
             text,
             return_tensors="pt",

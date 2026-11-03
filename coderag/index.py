@@ -5,14 +5,16 @@ import numpy as np
 
 class VectorIndex:
 
-    def __init__(self, model_name="all-MiniLM-L6-v2"):
-        # heavy imports are lazy so chunking/graph code works without ML deps
-        from sentence_transformers import SentenceTransformer
-
-        self.model = SentenceTransformer(model_name)
+    def __init__(self, model_name="all-MiniLM-L6-v2", model=None):
+        """`model`: an already-loaded SentenceTransformer to share between indexes."""
+        if model is None:
+            # heavy imports are lazy so chunking/graph code works without ML deps
+            from sentence_transformers import SentenceTransformer
+            model = SentenceTransformer(model_name)
+        self.model = model
         self.index = None
 
-    def build(self, texts, show_progress=True):
+    def build(self, texts, show_progress=False):
         import faiss
 
         embeddings = self.model.encode(texts, show_progress_bar=show_progress)

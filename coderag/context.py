@@ -7,6 +7,24 @@ Retrieved items are (chunk_text, meta, hop) triples:
 """
 
 import os
+import re
+
+# "who calls X", "which functions use X", "callers of X", "where is X called"
+_CALLER_INTENT = re.compile(
+    r"\b(?:who|what|which(?:\s+\w+){0,2})\s+(?:calls?|uses?|invokes?)\b"
+    r"|\bcallers?\s+of\b|\bcalled\s+(?:by|from)\b|\bwhere\s+is\s+\S+\s+(?:used|called)\b",
+    re.IGNORECASE,
+)
+
+
+def asks_for_callers(question):
+    """True when the question is about who calls / uses something."""
+    return bool(_CALLER_INTENT.search(question))
+
+
+def display_name(meta):
+    """'Class.method' for method chunks, the plain name otherwise."""
+    return f"{meta['parent']}.{meta['name']}" if meta.get("parent") else meta["name"]
 
 
 def keyword_filter(query, results):
@@ -54,7 +72,7 @@ def build_rich_header(meta, hop=0, hop_label=False):
         # called_by: run_pipeline
         # doc: Cleans people records ...
     """
-    first = f"# {meta['type']}: {meta['name']}  [file: {os.path.basename(meta['file'])}]"
+    first = f"# {meta['type']}: {display_name(meta)}  [file: {os.path.basename(meta['file'])}]"
     if hop_label:
         first += f"  [retrieval: {'direct' if hop == 0 else f'hop-{hop}'}]"
     lines = [first]
@@ -86,9 +104,9 @@ def format_chunk(chunk, meta, hop, question, config):
     if config.header == "none":
         return body
     if config.header == "name":
-        return f"# {meta['type']}: {meta['name']}\n" + body
+        return f"# {meta['type']}: {display_name(meta)}\n" + body
     if config.header == "file":
-        return f"# {meta['type']}: {meta['name']} ({os.path.basename(meta['file'])})\n" + body
+        return f"# {meta['type']}: {display_name(meta)} ({os.path.basename(meta['file'])})\n" + body
     if config.header == "rich":
         return build_rich_header(meta, hop, config.hop_label) + "\n" + body
     raise ValueError(f"Unknown header style: {config.header!r}")

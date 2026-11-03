@@ -1,0 +1,91 @@
+# Gold = the symbols an answer must be grounded in, as "path::Class.method".
+# type: locate | callers | callees | inheritance | flow
+repo: sample_repo
+
+questions:
+  # ── locate: find where something is implemented ──────────────────────────
+  - q: Where are records written to the database?
+    type: locate
+    gold: [pipeline/storage.py::SQLiteStore.save]
+
+  - q: How are people's names normalised?
+    type: locate
+    gold: [pipeline/processing.py::normalize_name]
+
+  - q: Which code reads a CSV file?
+    type: locate
+    gold: [pipeline/loaders.py::CSVLoader.load]
+
+  - q: How is the moving average of ages computed?
+    type: locate
+    gold: [pipeline/processing.py::rolling_average]
+
+  - q: Where does the program parse command line arguments?
+    type: locate
+    gold: [pipeline/main.py::main]
+
+  - q: What sound does a bat make?
+    type: locate
+    gold: [test_inheritance.py::Bat.speak]
+
+  # ── callers: who uses X ──────────────────────────────────────────────────
+  - q: Which functions call normalize_name?
+    type: callers
+    gold: [pipeline/processing.py::DataProcessor.transform]
+
+  - q: Who uses SQLiteStore?
+    type: callers
+    gold: [pipeline/main.py::run_pipeline, pipeline/main.py::report]
+
+  - q: What calls create_bat?
+    type: callers
+    gold: [test_inheritance.py::run_zoo]
+
+  - q: Which code calls rolling_average?
+    type: callers
+    gold: [pipeline/main.py::report]
+
+  # ── callees: what does X rely on ─────────────────────────────────────────
+  - q: How does run_pipeline clean the records it loads?
+    type: callees
+    gold: [pipeline/processing.py::BaseProcessor.process,
+           pipeline/processing.py::DataProcessor.transform]
+
+  - q: Which loader does get_loader return for a JSON file?
+    type: callees
+    gold: [pipeline/loaders.py::get_loader, pipeline/loaders.py::JSONLoader]
+
+  - q: What does the report function print and how does it get the data?
+    type: callees
+    gold: [pipeline/main.py::report, pipeline/storage.py::SQLiteStore.fetch_all]
+
+  # ── inheritance ──────────────────────────────────────────────────────────
+  - q: Which classes inherit from Animal?
+    type: inheritance
+    gold: [test_inheritance.py::Mammal, test_inheritance.py::Bird]
+
+  - q: What does DataProcessor inherit from and which method does it override?
+    type: inheritance
+    gold: [pipeline/processing.py::DataProcessor, pipeline/processing.py::BaseProcessor]
+
+  - q: Which loaders implement the BaseLoader interface?
+    type: inheritance
+    gold: [pipeline/loaders.py::CSVLoader, pipeline/loaders.py::JSONLoader]
+
+  # ── flow: multi-step behaviour across components ─────────────────────────
+  - q: Trace what happens to a CSV row from loading until it is stored.
+    type: flow
+    gold: [pipeline/main.py::run_pipeline, pipeline/loaders.py::CSVLoader.load,
+           pipeline/processing.py::BaseProcessor.process,
+           pipeline/processing.py::DataProcessor.transform,
+           pipeline/storage.py::SQLiteStore.save]
+
+  - q: What happens when run_zoo is executed?
+    type: flow
+    gold: [test_inheritance.py::run_zoo, test_inheritance.py::create_bat,
+           test_inheritance.py::Zoo.show_animals, test_inheritance.py::Bat.special]
+
+  - q: How does a bat both walk and fly?
+    type: flow
+    gold: [test_inheritance.py::Bat.special, test_inheritance.py::Mammal.walk,
+           test_inheritance.py::Bird.fly]

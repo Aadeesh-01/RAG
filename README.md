@@ -11,9 +11,19 @@ fixed-window baseline to AST chunking with call/inheritance-graph expansion:
 | `v3` | Context cleaning (signatures, returns, keyword lines) |
 | `v4` | Structural metadata (calls, bases, methods, docstrings), dedup, `called_by` index, 1-hop graph expansion |
 | `v5` | Multi-hop BFS expansion (`max_hops`, `max_expansion`, `include_callers`) and a hop-weighted context budget |
+| `v6` | Fixes found by the eval: index large files, method-level chunks, larger raw context, caller-aware expansion. **Default.** |
 
 Each version is a preset of a single `RAGConfig` ([coderag/config.py](coderag/config.py)), so comparing
-versions means changing one flag. The code is not copied per version.
+versions means changing one flag. The code is not copied per version. v0–v5 are kept unchanged as the
+research record.
+
+## Evaluation
+
+[eval/](eval/) scores the context each version would send to the LLM against hand-labelled gold symbols
+on `sample_repo`, [psf/requests](https://github.com/psf/requests) and
+[pallets/click](https://github.com/pallets/click). On the real repos, v6 roughly doubles v5's recall
+(requests 0.38 → 0.79, click 0.33 → 0.86) and beats the naive v0 baseline. See
+[eval/README.md](eval/README.md) for the method, full results and findings.
 
 ## Setup
 
@@ -28,7 +38,7 @@ for v1–v5, or flan-t5-base (~1 GB) for v0. Everything runs on CPU. Set `device
 
 ## Usage
 
-Commands default to the bundled [sample_repo/](sample_repo/) and the `v5` preset. Pass `--repo PATH` and
+Commands default to the bundled [sample_repo/](sample_repo/) and the `v6` preset. Pass `--repo PATH` and
 `--version vN` to change them.
 
 ```bash
@@ -65,6 +75,7 @@ coderag/
   visualize.py  D3 chunk-graph HTML
   cli.py        command-line interface
 sample_repo/    toy target: inheritance zoo + CSV -> clean -> SQLite pipeline
+eval/           retrieval benchmark: question sets, harness, results
 tests/          pytest suite (no ML models needed: uses fake index/LLM)
 ```
 

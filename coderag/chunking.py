@@ -13,6 +13,7 @@ import ast
 import hashlib
 import os
 import re
+import textwrap
 
 from .config import SKIP_DIRS
 
@@ -35,18 +36,39 @@ def iter_source_files(repo_path, extensions, prune_dirs=True):
 # FIXED-SIZE CHUNKING  (v0 baseline)
 # =============================================================================
 def load_concatenated(repo_path, extensions, prune_dirs=False):
-    """Concatenate every matching file into one string with FILE markers."""
-    parts = []
+    """
+    Concatenate every matching file into one string with FILE markers.
+
+    Returns (text, files) where `files` holds (offset, path, content) for each
+    file, so positions in `text` can be mapped back to file lines.
+    """
+    text = ""
+    files = []
     for file_path in iter_source_files(repo_path, extensions, prune_dirs):
         try:
             with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                parts.append(f"\n\n### FILE: {file_path} ###\n" + f.read())
+                content = f.read()
         except OSError:
             continue
-    return "".join(parts)
+        text += f"\n\n### FILE: {file_path} ###\n"
+        files.append((len(text), file_path, content))
+        text += content
+    return text, files
 
 
-def chunk_fixed(text, chunk_size=1000, overlap=200):
+def _window_spans(start, end, files):
+    """[(path, first_line, last_line)] of file content inside text[start:end]."""
+    spans = []
+    for offset, path, content in files:
+        lo, hi = max(start, offset), min(end, offset + len(content))
+        if lo < hi:
+            first = content.count("\n", 0, lo - offset) + 1
+            last = content.count("\n", 0, hi - offset - 1) + 1
+            spans.append((path, first, last))
+    return spans
+
+
+def chunk_fixed(text, chunk_size=1000, overlap=200, files=()):
     """Cut `text` into overlapping character windows."""
     if overlap >= chunk_size:
         raise ValueError("chunk_overlap must be smaller than chunk_size")
@@ -57,6 +79,7 @@ def chunk_fixed(text, chunk_size=1000, overlap=200):
             "type":    "text",
             "file":    "",
             "name":    f"chunk_{i}",
+            "spans":   _window_spans(start, start + chunk_size, files),
         })
     return chunks
 
@@ -143,7 +166,7 @@ def make_qname(file_path, name, repo_path=None):
     return f"{rel}::{name}"
 
 
-def _make_chunk(content, type_, file_path, name, repo_path, node=None):
+def _make_chunk(content, type_, file_path, name, repo_path, node, start_line, end_line):
     is_class = isinstance(node, ast.ClassDef)
     is_def = isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
     return {
@@ -152,6 +175,8 @@ def _make_chunk(content, type_, file_path, name, repo_path, node=None):
         "file":         file_path,
         "name":         name,
         "qname":        make_qname(file_path, name, repo_path),
+        "start_line":   start_line,     # 1-based, inclusive, decorators included
+        "end_line":     end_line,
         "content_hash": content_hash(content),
         # ── structural metadata ──
         "base_classes": _get_base_classes(node) if is_class else [],
@@ -159,21 +184,79 @@ def _make_chunk(content, type_, file_path, name, repo_path, node=None):
         "calls":        _get_calls(node) if node is not None else [],
         "decorators":   _get_decorators(node) if is_def else [],
         "docstring":    _get_docstring(node) if is_def else "",
+        "parent":       "",             # owning class, for method chunks
         # filled later by build_reverse_index / dedup_chunks
         "called_by":    [],
         "also_in":      [],
     }
 
 
+_DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _start_line(node):
+    """First line of a node, decorators included."""
+    return min([node.lineno] + [d.lineno for d in getattr(node, "decorator_list", [])])
+
+
+def _class_outline(node, lines):
+    """
+    Class source with every method body replaced by `...`: signature,
+    docstring, class attributes and method signatures stay.
+    """
+    out = []
+    line = _start_line(node)
+    for item in node.body:
+        if not isinstance(item, _DEF_TYPES):
+            continue
+        out.extend(lines[line - 1:_start_line(item) - 1])
+        sig_end = max(item.body[0].lineno - 1, item.lineno)   # one-liners keep their line
+        out.extend(lines[_start_line(item) - 1:sig_end])
+        if sig_end < item.end_lineno:
+            indent = lines[item.lineno - 1][:len(lines[item.lineno - 1]) -
+                                            len(lines[item.lineno - 1].lstrip())]
+            out.append(indent + "    ...\n")
+        line = item.end_lineno + 1
+    out.extend(lines[line - 1:node.end_lineno])
+    return "".join(out).rstrip("\n")
+
+
+def _class_chunks(node, file_path, repo_path, lines, min_segment_chars):
+    """One outline chunk for the class plus one chunk per method."""
+    outline = _make_chunk(_class_outline(node, lines), "class", file_path, node.name,
+                          repo_path, node, _start_line(node), node.end_lineno)
+    # the outline's calls are those outside method bodies (attributes, nested classes)
+    outline["calls"] = sorted({c for item in node.body if not isinstance(item, _DEF_TYPES)
+                               for c in _get_calls(item)})
+    chunks = [outline]
+
+    for item in node.body:
+        if not isinstance(item, _DEF_TYPES):
+            continue
+        start = _start_line(item)
+        source = textwrap.dedent("".join(lines[start - 1:item.end_lineno])).rstrip("\n")
+        if len(source) < min_segment_chars:
+            continue
+        method = _make_chunk(source, "method", file_path, item.name, repo_path, item,
+                             start, item.end_lineno)
+        method["qname"] = make_qname(file_path, f"{node.name}.{item.name}", repo_path)
+        method["parent"] = node.name
+        chunks.append(method)
+    return chunks
+
+
 # =============================================================================
 # AST CHUNKING  (v1+)
 # =============================================================================
-def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segment_chars=60):
+def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segment_chars=60,
+                      chunk_methods=False):
     """
     Return the chunks for one .py file.
 
     • Top-level classes and functions become one chunk each (methods stay inside
       their class chunk, so nothing is indexed twice).
+    • With `chunk_methods`, a class becomes an outline chunk (methods reduced
+      to signatures) plus one chunk per method.
     • A file with no top-level classes/functions becomes a single 'file' chunk
       so plain scripts are not silently lost.
     """
@@ -194,6 +277,7 @@ def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segm
         print(f"[SKIP] Cannot parse: {file_path}")
         return []
 
+    lines = code.splitlines(keepends=True)
     chunks = []
     for node in tree.body:
         if isinstance(node, ast.ClassDef):
@@ -202,16 +286,25 @@ def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segm
             type_ = "function"
         else:
             continue
-        segment = ast.get_source_segment(code, node)
-        if not segment or len(segment) < min_segment_chars:
+        if type_ == "class" and chunk_methods:
+            chunks.extend(_class_chunks(node, file_path, repo_path, lines, min_segment_chars))
             continue
-        chunks.append(_make_chunk(segment, type_, file_path, node.name, repo_path, node))
+        segment = ast.get_source_segment(code, node)
+        if not segment:
+            continue
+        # get_source_segment starts at `def`/`class`; prepend the decorator lines
+        start_line = _start_line(node)
+        segment = "".join(lines[start_line - 1:node.lineno - 1]) + segment
+        if len(segment) < min_segment_chars:
+            continue
+        chunks.append(_make_chunk(segment, type_, file_path, node.name, repo_path, node,
+                                  start_line, node.end_lineno))
 
     if chunks:
         return chunks
 
     name = os.path.basename(file_path)
-    return [_make_chunk(code, "file", file_path, name, repo_path, tree)]
+    return [_make_chunk(code, "file", file_path, name, repo_path, tree, 1, max(len(lines), 1))]
 
 
 def dedup_chunks(chunks, verbose=True):
@@ -251,6 +344,7 @@ def load_ast_chunks(repo_path, config, verbose=True):
             file_path, repo_path,
             max_file_chars=config.max_file_chars,
             min_segment_chars=config.min_segment_chars,
+            chunk_methods=config.chunk_methods,
         ))
         file_count += 1
 
@@ -270,8 +364,8 @@ def load_chunks(repo_path, config, verbose=True):
         print(f"[RAG] Scanning repo: {repo_path}")
 
     if config.chunker == "fixed":
-        text = load_concatenated(repo_path, config.extensions, config.prune_dirs)
-        chunks = chunk_fixed(text, config.chunk_size, config.chunk_overlap)
+        text, files = load_concatenated(repo_path, config.extensions, config.prune_dirs)
+        chunks = chunk_fixed(text, config.chunk_size, config.chunk_overlap, files)
     elif config.chunker == "ast":
         chunks = load_ast_chunks(repo_path, config, verbose)
     else:

@@ -4,3 +4,4 @@ sentence-transformers>=3.0
 transformers>=4.56
 torch>=2.2
 pytest>=8
+pyyaml>=6

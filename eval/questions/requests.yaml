@@ -1,0 +1,100 @@
+# psf/requests, pinned. Gold = "path::Class.method" relative to `root`.
+# Call relationships verified against the source at this SHA.
+url: https://github.com/psf/requests
+sha: 3c7baaa05ab4aa49cc819ce3a819d260de19c157
+root: src/requests
+
+questions:
+  # ── locate ───────────────────────────────────────────────────────────────
+  - q: How does requests decide whether a proxy should be bypassed for a URL?
+    type: locate
+    gold: [utils.py::should_bypass_proxies]
+
+  - q: Where is the Authorization header value for HTTP basic auth built?
+    type: locate
+    gold: [auth.py::_basic_auth_str]
+
+  - q: How is the response body decoded to text when the server sends no encoding?
+    type: locate
+    gold: [models.py::Response.text]
+
+  - q: Where does requests raise an exception for 4xx and 5xx status codes?
+    type: locate
+    gold: [models.py::Response.raise_for_status]
+
+  - q: How is the digest authentication header computed?
+    type: locate
+    gold: [auth.py::HTTPDigestAuth.build_digest_header]
+
+  - q: Where are credentials read from the user's .netrc file?
+    type: locate
+    gold: [utils.py::get_netrc_auth]
+
+  - q: How is the length of a request body determined?
+    type: locate
+    gold: [utils.py::super_len]
+
+  # ── callers ──────────────────────────────────────────────────────────────
+  - q: Which functions call get_netrc_auth?
+    type: callers
+    gold: [sessions.py::SessionRedirectMixin.rebuild_auth, sessions.py::Session.prepare_request]
+
+  - q: Who calls resolve_redirects?
+    type: callers
+    gold: [sessions.py::Session.send]
+
+  - q: Where are response hooks dispatched?
+    type: callers
+    gold: [sessions.py::Session.send]
+
+  - q: Which code uses super_len to size a request body?
+    type: callers
+    gold: [models.py::PreparedRequest.prepare_body, models.py::PreparedRequest.prepare_content_length]
+
+  - q: Who calls should_bypass_proxies?
+    type: callers
+    gold: [utils.py::get_environ_proxies, utils.py::resolve_proxies]
+
+  # ── callees ──────────────────────────────────────────────────────────────
+  - q: How does Session.prepare_request merge session-level and request-level settings?
+    type: callees
+    gold: [sessions.py::Session.prepare_request, sessions.py::merge_setting]
+
+  - q: How does HTTPAdapter.send get a connection from the pool?
+    type: callees
+    gold: [adapters.py::HTTPAdapter.send, adapters.py::HTTPAdapter.get_connection_with_tls_context]
+
+  - q: How does the adapter turn a urllib3 response into a requests Response?
+    type: callees
+    gold: [adapters.py::HTTPAdapter.build_response]
+
+  # ── inheritance ──────────────────────────────────────────────────────────
+  - q: Which exceptions are subclasses of ConnectionError?
+    type: inheritance
+    gold: [exceptions.py::ProxyError, exceptions.py::SSLError, exceptions.py::ConnectTimeout]
+
+  - q: Which authentication classes derive from AuthBase?
+    type: inheritance
+    gold: [auth.py::HTTPBasicAuth, auth.py::HTTPDigestAuth]
+
+  - q: What interface must a transport adapter implement?
+    type: inheritance
+    gold: [adapters.py::BaseAdapter]
+
+  # ── flow ─────────────────────────────────────────────────────────────────
+  - q: What happens under the hood when you call requests.get?
+    type: flow
+    gold: [api.py::get, api.py::request, sessions.py::Session.request, sessions.py::Session.send]
+
+  - q: How does a Session send a prepared request through a transport adapter and build the response?
+    type: flow
+    gold: [sessions.py::Session.send, sessions.py::Session.get_adapter,
+           adapters.py::HTTPAdapter.send, adapters.py::HTTPAdapter.build_response]
+
+  - q: What happens when a server answers a digest-auth request with 401?
+    type: flow
+    gold: [auth.py::HTTPDigestAuth.handle_401, auth.py::HTTPDigestAuth.build_digest_header]
+
+  - q: How do cookies from a response end up stored in the session?
+    type: flow
+    gold: [sessions.py::Session.send, cookies.py::extract_cookies_to_jar]

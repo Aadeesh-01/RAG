@@ -1,0 +1,99 @@
+# pallets/click, pinned. Gold = "path::Class.method" relative to `root`.
+# Call relationships verified against the source at this SHA.
+url: https://github.com/pallets/click
+sha: 2247b35ea1c47c727d7a06e51fa280e12a863ff6
+root: src/click
+
+questions:
+  # ── locate ───────────────────────────────────────────────────────────────
+  - q: How does click convert a string such as "yes" or "0" to a boolean?
+    type: locate
+    gold: [types.py::BoolParamType.str_to_bool]
+
+  - q: Where is an environment variable read to provide a parameter's value?
+    type: locate
+    gold: [core.py::Parameter.resolve_envvar_value]
+
+  - q: How does click find the configuration directory for an application?
+    type: locate
+    gold: [utils.py::get_app_dir]
+
+  - q: How is help text wrapped to fit the terminal width?
+    type: locate
+    gold: [formatting.py::wrap_text]
+
+  - q: How does a Choice parameter validate the value it receives?
+    type: locate
+    gold: [types.py::Choice.convert]
+
+  - q: How does click work out the program name shown in usage messages?
+    type: locate
+    gold: [utils.py::_detect_program_name]
+
+  - q: How is a command line string split into arguments for shell completion?
+    type: locate
+    gold: [shell_completion.py::split_arg_string]
+
+  # ── callers ──────────────────────────────────────────────────────────────
+  - q: Which code calls resolve_command?
+    type: callers
+    gold: [core.py::Group.invoke, shell_completion.py::_resolve_context]
+
+  - q: Who calls handle_parse_result for each parameter?
+    type: callers
+    gold: [core.py::Command.parse_args]
+
+  - q: Who uses _resolve_context?
+    type: callers
+    gold: [shell_completion.py::ShellComplete.get_completions]
+
+  - q: Which function calls get_completion_class?
+    type: callers
+    gold: [shell_completion.py::shell_complete]
+
+  # ── callees ──────────────────────────────────────────────────────────────
+  - q: How does Command.main run the command after the arguments are parsed?
+    type: callees
+    gold: [core.py::Command.main, core.py::Command.make_context, core.py::Command.invoke]
+
+  - q: How does a Group resolve and invoke a subcommand?
+    type: callees
+    gold: [core.py::Group.invoke, core.py::Group.resolve_command]
+
+  - q: How does a parameter turn a raw command-line value into its final value?
+    type: callees
+    gold: [core.py::Parameter.handle_parse_result, core.py::Parameter.consume_value,
+           core.py::Parameter.process_value]
+
+  # ── inheritance ──────────────────────────────────────────────────────────
+  - q: Which classes subclass ShellComplete?
+    type: inheritance
+    gold: [shell_completion.py::BashComplete, shell_completion.py::ZshComplete,
+           shell_completion.py::FishComplete, shell_completion.py::PowerShellComplete]
+
+  - q: What are the subclasses of Parameter?
+    type: inheritance
+    gold: [core.py::Option, core.py::Argument]
+
+  - q: Which parameter types restrict numbers to a range?
+    type: inheritance
+    gold: [types.py::IntRange, types.py::FloatRange]
+
+  # ── flow ─────────────────────────────────────────────────────────────────
+  - q: What happens when a click command is invoked from the command line?
+    type: flow
+    gold: [core.py::Command.main, core.py::Command.make_context, core.py::Command.parse_args,
+           core.py::Command.invoke]
+
+  - q: How does shell completion produce completions for a command?
+    type: flow
+    gold: [shell_completion.py::shell_complete, shell_completion.py::ShellComplete.complete,
+           shell_completion.py::ShellComplete.get_completions, shell_completion.py::_resolve_context]
+
+  - q: How does the click.command decorator turn a function into a Command?
+    type: flow
+    gold: [decorators.py::command]
+
+  - q: How does CliRunner invoke a command in tests and capture its output?
+    type: flow
+    gold: [testing.py::CliRunner.invoke, testing.py::CliRunner.isolation]

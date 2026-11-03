@@ -72,6 +72,7 @@ class RAGConfig:
     max_file_chars: int = 30_000            # ast: skip larger (generated) files
     min_segment_chars: int = 60             # ast: skip trivial class/function stubs
     min_chunk_chars: int = 80               # drop chunks with len(content) <= this
+    chunk_methods: bool = False             # class outline chunk + one chunk per method
     dedup_content: bool = False             # merge chunks with same name + normalised hash
     structural: bool = False                # reverse index + docstring-aware embeddings
 
@@ -86,6 +87,7 @@ class RAGConfig:
     max_hops: int = 0                       # graph BFS depth (0 = no expansion)
     max_expansion: int = 0                  # cap on graph-expanded chunks
     include_callers: bool = False           # also follow called_by edges
+    auto_callers: bool = False              # ...but only for "who calls X?" questions
 
     # ── Context ─────────────────────────────────────────────────────────────
     header: str = "file"                    # "none" | "name" | "file" | "rich"
@@ -143,6 +145,19 @@ _V5 = replace(
     system_prompt=SYSTEM_PROMPT_MULTIHOP,
 )
 
+_V6 = replace(
+    _V5, name="v6",
+    description="v5 + index large files, method-level chunks, bigger raw context, "
+                "caller-aware expansion (fixes measured in eval/)",
+    max_file_chars=1_000_000,           # v1-v5 silently skipped files > 30k chars
+    chunk_methods=True,
+    keyword_filter=False, max_direct=None,
+    clean_chunks=False,
+    chars_per_chunk=1500,
+    auto_callers=True,
+    max_input_tokens=8192,              # Qwen2.5 handles 32k; context is trimmed to fit
+)
+
 _V0 = RAGConfig(
     name="v0",
     description="Baseline: concatenate all files, fixed 1000-char chunks, flan-t5-base",
@@ -154,8 +169,8 @@ _V0 = RAGConfig(
     max_input_tokens=1024, max_new_tokens=100,
 )
 
-VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5)}
-DEFAULT_VERSION = "v5"
+VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6)}
+DEFAULT_VERSION = "v6"
 
 
 def get_config(version=DEFAULT_VERSION, **overrides):

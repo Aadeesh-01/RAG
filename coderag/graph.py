@@ -99,6 +99,8 @@ def expand_bfs(chunks, name_index, seeds, max_hops=3, max_expansion=8,
 
         meta = chunks[idx]
         neighbor_names = list(meta["base_classes"]) + list(meta["calls"])
+        if meta.get("parent"):
+            neighbor_names.append(meta["parent"])      # method -> its class outline
         if include_callers:
             neighbor_names += list(meta["called_by"])
 

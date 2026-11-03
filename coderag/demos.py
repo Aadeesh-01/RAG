@@ -38,4 +38,10 @@ DEMO_QUERIES = {
         # 1-hop only (v4 equivalent)
         ("Explain the main architecture", {"max_hops": 1, "max_expansion": 2}),
     ],
+    "v6": [
+        ("How is data processed?", {}),
+        ("Which functions call normalize_name?", {}),       # caller-aware expansion
+        ("What does DataProcessor inherit from and which method does it override?", {}),
+        ("Trace what happens to a CSV row from loading until it is stored.", {}),
+    ],
 }
