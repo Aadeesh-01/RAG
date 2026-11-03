@@ -18,6 +18,7 @@ env/
 
 # Generated output
 chunk_graph.html
+.coderag/
 *.db
 
 # Eval checkouts

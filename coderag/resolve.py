@@ -310,6 +310,29 @@ class CodeGraph:
             out += [j for j, _ in self.callers[i]]
         return out
 
+    # =========================================================================
+    # Persistence: only what retrieval needs (neighbors, called_by)
+    # =========================================================================
+    def to_dict(self):
+        return {
+            "max_ambiguous": self.max_ambiguous,
+            "callees": [[[j, how] for j, how in edges] for edges in self.callees],
+            "callers": [[[j, how] for j, how in edges] for edges in self.callers],
+            "bases": self.bases,
+            "parent": self.parent,
+        }
+
+    @classmethod
+    def from_dict(cls, chunks, data):
+        graph = cls.__new__(cls)
+        graph.chunks = chunks
+        graph.max_ambiguous = data["max_ambiguous"]
+        graph.callees = [[(j, how) for j, how in edges] for edges in data["callees"]]
+        graph.callers = [[(j, how) for j, how in edges] for edges in data["callers"]]
+        graph.bases = data["bases"]
+        graph.parent = data["parent"]
+        return graph
+
     def edge_counts(self):
         counts = defaultdict(int)
         for edges in self.callees:

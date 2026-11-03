@@ -32,6 +32,22 @@ def iter_source_files(repo_path, extensions, prune_dirs=True):
                 yield os.path.join(root, file)
 
 
+def source_fingerprint(repo_path, extensions, prune_dirs=True):
+    """sha256 over the relative paths and bytes of every indexed file."""
+    digest = hashlib.sha256()
+    paths = sorted(iter_source_files(repo_path, extensions, prune_dirs))
+    for path in paths:
+        rel = os.path.relpath(path, repo_path).replace("\\", "/")
+        digest.update(rel.encode() + b"\0")
+        try:
+            with open(path, "rb") as f:
+                digest.update(f.read())
+        except OSError:
+            pass
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 # =============================================================================
 # FIXED-SIZE CHUNKING  (v0 baseline)
 # =============================================================================

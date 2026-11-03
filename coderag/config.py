@@ -6,7 +6,7 @@ RAGConfig, so comparing versions is a config change instead of a separate
 copy of the whole pipeline.
 """
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, replace
 
 # Directories never worth indexing (pruned in-place during os.walk)
 SKIP_DIRS = frozenset({
@@ -110,6 +110,26 @@ class RAGConfig:
     def with_overrides(self, **overrides):
         """Return a copy with the non-None overrides applied."""
         return replace(self, **{k: v for k, v in overrides.items() if v is not None})
+
+    @classmethod
+    def from_dict(cls, data):
+        """Inverse of dataclasses.asdict after a JSON round trip (lists back to tuples)."""
+        known = {f.name for f in fields(cls)}
+        return cls(**{k: tuple(v) if isinstance(v, list) else v
+                      for k, v in data.items() if k in known})
+
+    def index_mismatch(self, other):
+        """INDEX_FIELDS on which `other` differs, i.e. would need a different index."""
+        return [f for f in INDEX_FIELDS if getattr(self, f) != getattr(other, f)]
+
+
+# Fields that shape the saved index (chunks, embeddings, call graph). Everything
+# else (retrieval depth, context budget, LLM) can change on an existing index.
+INDEX_FIELDS = (
+    "chunker", "extensions", "prune_dirs", "chunk_size", "chunk_overlap",
+    "max_file_chars", "min_segment_chars", "min_chunk_chars", "chunk_methods",
+    "dedup_content", "structural", "call_resolution", "max_ambiguous", "embed_model",
+)
 
 
 _V1 = RAGConfig(

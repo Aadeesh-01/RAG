@@ -2,9 +2,10 @@
 Command-line interface.
 
     python -m coderag versions
-    python -m coderag chunks   [--repo PATH] [--version v5]
-    python -m coderag ask      [QUESTION] [--repo PATH] [--version v5] [--retrieve-only] ...
-    python -m coderag demo     [--repo PATH] [--version v5]
+    python -m coderag chunks   [--repo PATH] [--version v7]
+    python -m coderag index    --out DIR [--repo PATH] [--version v7] [--force]
+    python -m coderag ask      [QUESTION] [--repo PATH] [--version v7] [--index DIR] [--retrieve-only] ...
+    python -m coderag demo     [--repo PATH] [--version v7] [--index DIR]
     python -m coderag graph    [--repo PATH] [-o chunk_graph.html]
 """
 
@@ -24,6 +25,11 @@ def _add_common(p):
     p.add_argument("--version", default=DEFAULT_VERSION, choices=list(VERSIONS),
                    help=f"pipeline preset (default: {DEFAULT_VERSION})")
     p.add_argument("-q", "--quiet", action="store_true", help="hide pipeline logging")
+
+
+def _add_index_dir(p):
+    p.add_argument("--index", metavar="DIR",
+                   help="reuse the saved index in DIR (built and saved there if missing or stale)")
 
 
 def _add_retrieval_overrides(p):
@@ -47,7 +53,24 @@ def _make_agent(args, overrides=None, load_llm=True):
     from .agent import RAGCodebaseAgent
 
     config = get_config(args.version, **(overrides or {}))
+    if args.index:
+        return RAGCodebaseAgent.load_or_build(args.repo, args.index, config,
+                                              load_llm=load_llm, verbose=not args.quiet)
     return RAGCodebaseAgent(args.repo, config, load_llm=load_llm, verbose=not args.quiet)
+
+
+def cmd_index(args):
+    from .agent import RAGCodebaseAgent
+    from .persist import check_index
+
+    config = get_config(args.version)
+    usable, reason = check_index(args.out, config, args.repo)
+    if usable and not args.force:
+        print(f"Index in {args.out} is up to date (use --force to rebuild).")
+        return
+    agent = RAGCodebaseAgent(args.repo, config, load_llm=False, verbose=not args.quiet)
+    agent.save(args.out)
+    print(f"Indexed {len(agent.documents)} chunks -> {args.out}")
 
 
 def cmd_versions(args):
@@ -129,9 +152,16 @@ def build_parser():
     _add_common(p)
     p.set_defaults(func=cmd_chunks)
 
+    p = sub.add_parser("index", help="build an index and save it for reuse")
+    _add_common(p)
+    p.add_argument("-o", "--out", required=True, metavar="DIR", help="directory to save into")
+    p.add_argument("--force", action="store_true", help="rebuild even if up to date")
+    p.set_defaults(func=cmd_index)
+
     p = sub.add_parser("ask", help="ask a question (interactive if none given)")
     p.add_argument("question", nargs="?")
     _add_common(p)
+    _add_index_dir(p)
     _add_retrieval_overrides(p)
     p.add_argument("--retrieve-only", action="store_true",
                    help="print the LLM context instead of generating (skips the LLM)")
@@ -139,6 +169,7 @@ def build_parser():
 
     p = sub.add_parser("demo", help="run the version's original demo queries")
     _add_common(p)
+    _add_index_dir(p)
     p.set_defaults(func=cmd_demo)
 
     p = sub.add_parser("graph", help="export the interactive chunk graph HTML")

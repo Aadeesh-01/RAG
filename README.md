@@ -48,6 +48,8 @@ python -m coderag chunks --version v4              # chunks + metadata, no model
 python -m coderag ask "How is data processed?"     # one question
 python -m coderag ask                              # interactive session (models load once)
 python -m coderag ask "..." --retrieve-only        # print the LLM context, skip the LLM
+python -m coderag index --repo PATH --out .coderag/myrepo    # build once, save to disk
+python -m coderag ask "..." --repo PATH --index .coderag/myrepo   # reuse; rebuilds if code/config changed
 python -m coderag ask "..." --max-hops 1 --include-callers
 python -m coderag demo --version v3                # the original demo queries for a version
 python -m coderag graph -o chunk_graph.html        # interactive call/inheritance graph
@@ -58,9 +60,16 @@ From Python:
 ```python
 from coderag import RAGCodebaseAgent, get_config
 
-agent = RAGCodebaseAgent("path/to/repo", get_config("v5", top_k=6))
+agent = RAGCodebaseAgent("path/to/repo", get_config("v7", top_k=6))
 agent.query("Which functions call the data processing logic?", include_callers=True)
+
+agent.save(".coderag/myrepo")                       # chunks + call graph + FAISS index
+agent = RAGCodebaseAgent.load(".coderag/myrepo")    # no repo, re-chunking or re-embedding needed
 ```
+
+A saved index stores the config fields that shape it (chunking, embedding model, call resolution)
+and refuses to load with different ones. Query-time settings (`top_k`, hops, context budget, LLM) can
+be changed when loading.
 
 ## Layout
 
@@ -71,6 +80,7 @@ coderag/
   graph.py      name-based call graph (v4-v6), called_by index, BFS expansion, graph export data
   resolve.py    scope-aware call resolution (v7): imports, self/super, re-exports
   index.py      sentence-transformers + FAISS vector index
+  persist.py    save/load an index, freshness check (source fingerprint + config)
   context.py    keyword filter, chunk cleaning, headers, hop-weighted budgets
   llm.py        flan-t5 (seq2seq) and Qwen chat backends
   agent.py      RAGCodebaseAgent: ties the pipeline together

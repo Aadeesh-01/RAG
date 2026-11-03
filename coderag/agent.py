@@ -13,50 +13,85 @@ class RAGCodebaseAgent:
     Parameters
     ----------
     repo_path : folder to index
-    config    : RAGConfig (defaults to the v5 preset)
+    config    : RAGConfig (defaults to the default preset)
     index     : object with build(texts) / search(query, k) -> [int];
                 defaults to a FAISS VectorIndex (injectable for tests)
     llm       : object with generate(context, question) -> str;
                 defaults to the backend named in the config
     load_llm  : False skips loading the LLM (retrieval-only use)
+
+    Use save(directory) / RAGCodebaseAgent.load(directory) to reuse an index
+    without re-chunking and re-embedding the repo.
     """
 
     def __init__(self, repo_path, config=None, index=None, llm=None,
                  load_llm=True, verbose=True):
         self.config = config or get_config()
         self.verbose = verbose
+        self.repo_path = os.path.abspath(repo_path)
         self._log(f"[RAG] Loading repo from: {repo_path}  (config {self.config.name})")
 
-        self.documents = load_chunks(repo_path, self.config, verbose)
-        if not self.documents:
+        documents = load_chunks(repo_path, self.config, verbose)
+        if not documents:
             raise ValueError("No chunks found. Check repo path and file filters.")
 
-        self.code_graph = None
+        code_graph = None
         if self.config.structural and self.config.call_resolution == "scoped":
             from .resolve import CodeGraph
-            self.code_graph = CodeGraph(self.documents, repo_path, self.config.max_ambiguous)
-            self.code_graph.apply_called_by()
-            self._log(f"[RAG] Scoped call graph: {self.code_graph.edge_counts()}")
+            code_graph = CodeGraph(documents, repo_path, self.config.max_ambiguous)
+            code_graph.apply_called_by()
+            self._log(f"[RAG] Scoped call graph: {code_graph.edge_counts()}")
         elif self.config.structural:
-            build_reverse_index(self.documents, verbose)
-        self._name_index = build_name_index(self.documents)
-
-        self.chunks = [d["content"] for d in self.documents]
-        self.metadata = self.documents
-        self._log(f"[RAG] {len(self.chunks)} chunks ready.")
+            build_reverse_index(documents, verbose)
+        self._set_documents(documents, code_graph)
 
         if index is None:
             from .index import VectorIndex
             index = VectorIndex(self.config.embed_model)
         self.index = index
         self.index.build(self._embed_texts())
+        self._set_llm(llm, load_llm)
 
+    def _set_documents(self, documents, code_graph):
+        self.documents = self.metadata = documents
+        self.code_graph = code_graph
+        self._name_index = build_name_index(documents)
+        self.chunks = [d["content"] for d in documents]
+        self._log(f"[RAG] {len(self.chunks)} chunks ready.")
+
+    def _set_llm(self, llm, load_llm):
         if llm is None and load_llm:
             from .llm import load_llm as _load_llm
             self._log(f"[RAG] Loading LLM: {self.config.llm_model} ...")
             llm = _load_llm(self.config)
         self.llm = llm
         self._log("[RAG] Ready.\n")
+
+    # =========================================================================
+    # Persistence (see persist.py)
+    # =========================================================================
+    def save(self, directory):
+        """Save chunks, call graph and vector index to `directory`."""
+        from .persist import save_agent
+        save_agent(self, directory)
+
+    @classmethod
+    def load(cls, directory, config=None, llm=None, load_llm=True, verbose=True, embedder=None):
+        """
+        Load a saved index; the repo itself is not needed. `config` may change
+        query-time settings (top_k, hops, context, LLM) but not how the index
+        was built. `embedder`: an already-loaded embedding model to reuse.
+        """
+        from .persist import load_agent
+        return load_agent(cls, directory, config, llm, load_llm, verbose, embedder)
+
+    @classmethod
+    def load_or_build(cls, repo_path, directory, config=None, llm=None, load_llm=True,
+                      verbose=True):
+        """Load the index in `directory` if it is current for `repo_path`, else build and save."""
+        from .persist import load_or_build
+        return load_or_build(cls, repo_path, directory, config or get_config(), llm,
+                             load_llm, verbose)
 
     def _log(self, *args):
         if self.verbose:
