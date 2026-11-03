@@ -56,7 +56,7 @@ def test_unknown_version():
 
 def test_cli_versions_and_chunks(capsys, sample_repo):
     assert main(["versions"]) == 0
-    assert "* v7" in capsys.readouterr().out
+    assert "* v8" in capsys.readouterr().out
     assert main(["chunks", "--repo", sample_repo, "-q"]) == 0
     assert "DataProcessor" in capsys.readouterr().out
 

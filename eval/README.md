@@ -125,6 +125,33 @@ method.
 Caveat: each type has only 3–7 questions per repo, so one question moves a per-type score by
 0.14–0.33. Trust the overall rows more than the per-type ones.
 
+## v8: overload stubs, expansion order, type guards
+
+Per-question rows: [results/v8-ablation.csv](results/v8-ablation.csv) and [results/v8.csv](results/v8.csv).
+These findings came from a UI review, which reported four `group` nodes in click's graph, and from
+the retrieval debug view (`?debug=1` on the site, `stream(debug=True)` in Python).
+
+- **`@typing.overload` stubs were indexed as separate chunks.** `click.decorators.group` has 3 stubs
+  plus the implementation, all with the same qualified name, so a call resolved correctly by import
+  still linked to all 4. click had 33 such stubs (565 → 532 chunks). v8 drops stubs and keeps the
+  implementation.
+- **Graph expansion order was effectively arbitrary.** v4–v7 seeded the BFS in Python set order,
+  which follows chunk index, not search rank. Dropping stubs alone *lowered* requests recall
+  (0.83 → 0.77) only because the shifted indexes changed which seed expanded first before the cap of
+  8 filled up. v8 expands the best vector hit first, and callers first for "who calls X?" questions.
+- **Type-guard calls inside `assert`s** (`assert _is_prepared(request)`, 10 call sites in requests)
+  turned a typing helper into a hub that connected unrelated code. v8 ignores calls made only inside
+  `assert` statements. That had no measurable effect on recall but removed noise from the context.
+
+| Set | Version | R@ctx | Sig | Body | MRR |
+|---|---|---|---|---|---|
+| click | v7 | 0.88 | 0.74 | 0.52 | 0.63 |
+| click | v7 + skip overload stubs only | 0.94 | 0.77 | 0.54 | 0.64 |
+| click | **v8** | **0.94** | **0.80** | **0.56** | **0.64** |
+| requests | v7 | 0.83 | 0.82 | 0.55 | 0.56 |
+| requests | v7 + skip overload stubs only | 0.77 | 0.73 | 0.52 | 0.55 |
+| requests | **v8** | **0.83** | **0.82** | 0.54 | **0.57** |
+
 ## Answer quality
 
 [run_answers.py](run_answers.py) runs the LLM on v7's retrieved context and scores what the answer

@@ -133,7 +133,18 @@ def _get_calls(node):
     return sorted(calls)
 
 
-def _get_call_sites(nodes):
+def _walk(node, skip_asserts):
+    """ast.walk, optionally without descending into `assert` statements."""
+    stack = [node]
+    while stack:
+        n = stack.pop()
+        if skip_asserts and isinstance(n, ast.Assert):
+            continue
+        yield n
+        stack.extend(ast.iter_child_nodes(n))
+
+
+def _get_call_sites(nodes, skip_asserts=False):
     """
     Sorted unique [kind, base, name] for every call inside `nodes`, keeping
     the form of the call so it can be resolved with scope information:
@@ -145,7 +156,7 @@ def _get_call_sites(nodes):
     """
     sites = set()
     for root in nodes:
-        for n in ast.walk(root):
+        for n in _walk(root, skip_asserts):
             if not isinstance(n, ast.Call):
                 continue
             func = n.func
@@ -163,6 +174,13 @@ def _get_call_sites(nodes):
                 else:
                     sites.add(("attr", "", func.attr))
     return [list(s) for s in sorted(sites)]
+
+
+def _assert_only_sites(nodes):
+    """Call sites that appear only inside `assert` statements (type guards, checks)."""
+    everywhere = {tuple(s) for s in _get_call_sites(nodes)}
+    outside = {tuple(s) for s in _get_call_sites(nodes, skip_asserts=True)}
+    return [list(s) for s in sorted(everywhere - outside)]
 
 
 def get_imports(tree):
@@ -257,6 +275,7 @@ def _make_chunk(content, type_, file_path, name, repo_path, node, start_line, en
         "methods":      _get_methods(node) if is_class else [],
         "calls":        _get_calls(node) if node is not None else [],
         "call_sites":   _get_call_sites([node]) if node is not None else [],
+        "assert_call_sites": _assert_only_sites([node]) if node is not None else [],
         "decorators":   _get_decorators(node) if is_def else [],
         "docstring":    _get_docstring(node) if is_def else "",
         "parent":       "",             # owning class, for method chunks
@@ -267,6 +286,11 @@ def _make_chunk(content, type_, file_path, name, repo_path, node, start_line, en
 
 
 _DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef)
+
+
+def _is_overload_stub(node):
+    """@typing.overload signature stub: the real implementation follows it."""
+    return isinstance(node, _DEF_TYPES) and "overload" in _get_decorators(node)
 
 
 def _start_line(node):
@@ -296,7 +320,7 @@ def _class_outline(node, lines):
     return "".join(out).rstrip("\n")
 
 
-def _class_chunks(node, file_path, repo_path, lines, min_segment_chars):
+def _class_chunks(node, file_path, repo_path, lines, min_segment_chars, skip_overloads=False):
     """One outline chunk for the class plus one chunk per method."""
     outline = _make_chunk(_class_outline(node, lines), "class", file_path, node.name,
                           repo_path, node, _start_line(node), node.end_lineno)
@@ -304,10 +328,11 @@ def _class_chunks(node, file_path, repo_path, lines, min_segment_chars):
     non_methods = [item for item in node.body if not isinstance(item, _DEF_TYPES)]
     outline["calls"] = sorted({c for item in non_methods for c in _get_calls(item)})
     outline["call_sites"] = _get_call_sites(non_methods)
+    outline["assert_call_sites"] = _assert_only_sites(non_methods)
     chunks = [outline]
 
     for item in node.body:
-        if not isinstance(item, _DEF_TYPES):
+        if not isinstance(item, _DEF_TYPES) or (skip_overloads and _is_overload_stub(item)):
             continue
         start = _start_line(item)
         source = textwrap.dedent("".join(lines[start - 1:item.end_lineno])).rstrip("\n")
@@ -325,7 +350,7 @@ def _class_chunks(node, file_path, repo_path, lines, min_segment_chars):
 # AST CHUNKING  (v1+)
 # =============================================================================
 def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segment_chars=60,
-                      chunk_methods=False):
+                      chunk_methods=False, skip_overloads=False):
     """
     Return the chunks for one .py file.
 
@@ -333,6 +358,8 @@ def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segm
       their class chunk, so nothing is indexed twice).
     • With `chunk_methods`, a class becomes an outline chunk (methods reduced
       to signatures) plus one chunk per method.
+    • With `skip_overloads`, @typing.overload stubs are dropped: they share the
+      implementation's name, waste retrieval slots and multiply call edges.
     • A file with no top-level classes/functions becomes a single 'file' chunk
       so plain scripts are not silently lost.
     """
@@ -362,8 +389,11 @@ def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segm
             type_ = "function"
         else:
             continue
+        if skip_overloads and _is_overload_stub(node):
+            continue
         if type_ == "class" and chunk_methods:
-            chunks.extend(_class_chunks(node, file_path, repo_path, lines, min_segment_chars))
+            chunks.extend(_class_chunks(node, file_path, repo_path, lines, min_segment_chars,
+                                        skip_overloads))
             continue
         segment = ast.get_source_segment(code, node)
         if not segment:
@@ -421,6 +451,7 @@ def load_ast_chunks(repo_path, config, verbose=True):
             max_file_chars=config.max_file_chars,
             min_segment_chars=config.min_segment_chars,
             chunk_methods=config.chunk_methods,
+            skip_overloads=config.skip_overloads,
         ))
         file_count += 1
 

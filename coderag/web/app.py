@@ -55,6 +55,7 @@ class RetrieveRequest(BaseModel):
     include_callers: bool | None = None
     include_context: bool = False
     include_code: bool = False          # add each source's code (capped) for display
+    debug: bool = False                 # add how each source was retrieved (rank, graph path)
 
     def overrides(self):
         return {"top_k": self.top_k, "max_hops": self.max_hops,
@@ -71,7 +72,7 @@ class AskRequest(RetrieveRequest):
 # =============================================================================
 def remote_config(provider, model):
     model = model or DEFAULT_REMOTE_MODELS[provider]
-    return get_config("v7", llm_backend="remote", llm_provider=provider, llm_model=model,
+    return get_config(llm_backend="remote", llm_provider=provider, llm_model=model,
                       max_new_tokens=1024,
                       reasoning_effort="low" if "gpt-oss" in model else None)
 
@@ -167,10 +168,13 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
     # ── endpoints ────────────────────────────────────────────────────────────
     @app.get("/api/health")
     def health():
+        defaults = get_config()
         return {"ok": True, "demos": sorted(demos),
                 "llm": {"server": getattr(llm_factory, "server_available", True),
                         "provider": settings.server_llm_provider,
-                        "models": list(settings.server_llm_models)}}
+                        "models": list(settings.server_llm_models)},
+                "defaults": {"version": defaults.name, "top_k": defaults.top_k,
+                             "max_hops": defaults.max_hops}}
 
     @app.get("/api/demos")
     def list_demos():
@@ -193,7 +197,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
     def retrieve(repo_id: str, body: RetrieveRequest, request: Request):
         demo, version, agent = resolve(repo_id, body.version)
         limit(request, "retrieve", settings.retrieve_per_ip_per_hour)
-        first = next(agent.stream(body.question, llm=None, **body.overrides()))
+        first = next(agent.stream(body.question, llm=None, debug=body.debug, **body.overrides()))
         return {"version": version,
                 **with_links(demo, agent, first, body)}
 
@@ -211,7 +215,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
         overrides = {**body.overrides(), "prompt_style": body.prompt_style}
         cache_key = (repo_id, version, " ".join(body.question.lower().split()),
                      tuple(sorted(overrides.items())), body.llm.provider,
-                     body.llm.model or "")          # never the key itself
+                     body.llm.model or "", body.debug)          # never the key itself
         cached = cache.get(cache_key) if body.llm.provider != "none" else None
 
         def replay():
@@ -231,7 +235,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
 
         def events():
             collected, text = [], []
-            for event in agent.stream(body.question, llm=llm, **overrides):
+            for event in agent.stream(body.question, llm=llm, debug=body.debug, **overrides):
                 if event["type"] == "error" and event["code"] == "no_llm" and quota_hit:
                     event = {"type": "error", "code": "server_quota",
                              "message": "Today's free answers are used up. Add your own API "

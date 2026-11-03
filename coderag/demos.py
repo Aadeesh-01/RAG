@@ -45,4 +45,4 @@ DEMO_QUERIES = {
         ("Trace what happens to a CSV row from loading until it is stored.", {}),
     ],
 }
-DEMO_QUERIES["v7"] = DEMO_QUERIES["v6"]
+DEMO_QUERIES["v7"] = DEMO_QUERIES["v8"] = DEMO_QUERIES["v6"]

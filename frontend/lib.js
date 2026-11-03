@@ -30,7 +30,8 @@ export function normalizeCitations(text) {
   return (text || "")
     .replace(/[​‌‍⁠﻿]/g, "")
     .replace(/【/g, "[")
-    .replace(/】/g, "]");
+    .replace(/】/g, "]")
+    .replace(/(S\d+)†[^\]\s,;]*/g, "$1");        // [S3†L9-L20] -> [S3]
 }
 
 const CITATION = /\[\s*(S\d+(?:\s*[,;]\s*S\d+)*)\s*\]/g;

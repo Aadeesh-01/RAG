@@ -19,6 +19,7 @@ test("SSE parser handles events split across chunks", () => {
 test("citation variants are normalized", () => {
   assert.equal(normalizeCitations("a【S2】 b [​S3]"), "a[S2] b [S3]");
   assert.deepEqual(citedSources("x【S7】 [S1, S3] [S9]", 8), [1, 3, 7]);
+  assert.equal(normalizeCitations("object [S3†L9-L20] and 【S7†L1-L9】"), "object [S3] and [S7]");
 });
 
 const identity = { marked: (s) => s, sanitize: (s) => s };

@@ -99,6 +99,8 @@ def test_parse_citations():
     # gpt-oss style: full-width brackets and zero-width spaces
     assert parse_citations("uses it【S7】 and [​S3] and [​S1,​S2]", 8) == (
         [1, 2, 3, 7], [])
+    # line-range suffixes: [S3†L9-L20]
+    assert parse_citations("see [S3†L9-L20] and 【S5†L1-L9】", 6) == ([3, 5], [])
 
 
 # ── agent.stream / ask ──────────────────────────────────────────────────────

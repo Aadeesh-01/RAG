@@ -49,14 +49,17 @@ def _package_of(rel):
 
 class CodeGraph:
 
-    def __init__(self, chunks, repo_path, max_ambiguous=0):
+    def __init__(self, chunks, repo_path, max_ambiguous=0, ignore_assert_calls=False):
         """
         chunks        : AST chunks of `repo_path` (qnames relative to it)
         max_ambiguous : link `obj.foo()` to up to this many candidate classes
                         (0 = only when exactly one class defines `foo`)
+        ignore_assert_calls : no edges for calls made only inside `assert`
+                        statements (type guards such as `assert is_prepared(r)`)
         """
         self.chunks = chunks
         self.max_ambiguous = max_ambiguous
+        self.ignore_assert_calls = ignore_assert_calls
         self.root_package = os.path.basename(os.path.normpath(repo_path))
 
         n = len(chunks)
@@ -285,7 +288,11 @@ class CodeGraph:
     def _resolve_calls(self):
         for i, c in enumerate(self.chunks):
             best = {}
+            skip = ({tuple(s) for s in c.get("assert_call_sites", [])}
+                    if self.ignore_assert_calls else set())
             for kind, base, name in c.get("call_sites", []):
+                if (kind, base, name) in skip:
+                    continue
                 for j, how in self.resolve_call(i, kind, base, name):
                     if j != i and (j not in best or _RANK[how] < _RANK[best[j]]):
                         best[j] = how
@@ -301,14 +308,21 @@ class CodeGraph:
         for j, c in enumerate(self.chunks):
             c["called_by"] = sorted({display_name(self.chunks[i]) for i, _ in self.callers[j]})
 
-    def neighbors(self, i, include_callers=False):
-        """Graph neighbours in BFS priority: bases, callees, owning class, callers."""
-        out = list(self.bases[i]) + [j for j, _ in self.callees[i]]
+    def typed_neighbors(self, i, include_callers=False, callers_first=False):
+        """
+        [(j, edge)] in BFS priority: bases, callees, owning class, then callers
+        (or callers first, for "who calls X?" questions).
+        """
+        callers = ([(j, f"called by:{how}") for j, how in self.callers[i]]
+                   if include_callers else [])
+        out = [(j, "inherits") for j in self.bases[i]]
+        out += [(j, f"calls:{how}") for j, how in self.callees[i]]
         if self.parent[i] is not None:
-            out.append(self.parent[i])
-        if include_callers:
-            out += [j for j, _ in self.callers[i]]
-        return out
+            out.append((self.parent[i], "member of"))
+        return callers + out if callers_first else out + callers
+
+    def neighbors(self, i, include_callers=False):
+        return [j for j, _ in self.typed_neighbors(i, include_callers)]
 
     # =========================================================================
     # Persistence: only what retrieval needs (neighbors, called_by)
@@ -316,6 +330,7 @@ class CodeGraph:
     def to_dict(self):
         return {
             "max_ambiguous": self.max_ambiguous,
+            "ignore_assert_calls": self.ignore_assert_calls,
             "callees": [[[j, how] for j, how in edges] for edges in self.callees],
             "callers": [[[j, how] for j, how in edges] for edges in self.callers],
             "bases": self.bases,
@@ -327,6 +342,7 @@ class CodeGraph:
         graph = cls.__new__(cls)
         graph.chunks = chunks
         graph.max_ambiguous = data["max_ambiguous"]
+        graph.ignore_assert_calls = data.get("ignore_assert_calls", False)
         graph.callees = [[(j, how) for j, how in edges] for edges in data["callees"]]
         graph.callers = [[(j, how) for j, how in edges] for edges in data["callers"]]
         graph.bases = data["bases"]

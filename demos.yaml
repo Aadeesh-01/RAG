@@ -1,7 +1,7 @@
 # Repositories the website serves pre-indexed. Build with:
 #   python scripts/build_demos.py
 # Remote demos are pinned to a commit so links and answers are reproducible.
-versions: [v7]          # an index is built per version; the API can switch between them
+versions: [v8]          # an index is built per version; the API can switch between them
 
 demos:
   - id: sample

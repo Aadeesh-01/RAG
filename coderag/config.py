@@ -87,10 +87,12 @@ class RAGConfig:
     min_segment_chars: int = 60             # ast: skip trivial class/function stubs
     min_chunk_chars: int = 80               # drop chunks with len(content) <= this
     chunk_methods: bool = False             # class outline chunk + one chunk per method
+    skip_overloads: bool = False            # drop @typing.overload stubs (keep the implementation)
     dedup_content: bool = False             # merge chunks with same name + normalised hash
     structural: bool = False                # reverse index + docstring-aware embeddings
     call_resolution: str = "name"           # "name" (bare-name match) | "scoped" (resolve.py)
     max_ambiguous: int = 0                  # scoped: link obj.foo() to <= this many classes
+    ignore_assert_calls: bool = False       # scoped: no edges for calls only inside `assert`
 
     # ── Embedding ───────────────────────────────────────────────────────────
     embed_model: str = "all-MiniLM-L6-v2"
@@ -104,6 +106,8 @@ class RAGConfig:
     max_expansion: int = 0                  # cap on graph-expanded chunks
     include_callers: bool = False           # also follow called_by edges
     auto_callers: bool = False              # ...but only for "who calls X?" questions
+    callers_first: bool = False             # for those questions, expand callers before callees
+    seed_order: str = "set"                 # graph expansion order of vector hits: "set" (v4-v7) | "rank"
 
     # ── Context ─────────────────────────────────────────────────────────────
     header: str = "file"                    # "none" | "name" | "file" | "rich"
@@ -144,8 +148,9 @@ class RAGConfig:
 # else (retrieval depth, context budget, LLM) can change on an existing index.
 INDEX_FIELDS = (
     "chunker", "extensions", "prune_dirs", "chunk_size", "chunk_overlap",
-    "max_file_chars", "min_segment_chars", "min_chunk_chars", "chunk_methods",
-    "dedup_content", "structural", "call_resolution", "max_ambiguous", "embed_model",
+    "max_file_chars", "min_segment_chars", "min_chunk_chars", "chunk_methods", "skip_overloads",
+    "dedup_content", "structural", "call_resolution", "max_ambiguous", "ignore_assert_calls",
+    "embed_model",
 )
 
 
@@ -204,6 +209,17 @@ _V7 = replace(
     call_resolution="scoped",
 )
 
+_V8 = replace(
+    _V7, name="v8",
+    description="v7 + drop @typing.overload stubs, ignore assert-only calls, expand the best "
+                "vector hits first, "
+                "callers first for \"who calls\" questions",
+    skip_overloads=True,
+    seed_order="rank",
+    callers_first=True,
+    ignore_assert_calls=True,           # no metric change; removes type-guard hubs (is_prepared)
+)
+
 _V0 = RAGConfig(
     name="v0",
     description="Baseline: concatenate all files, fixed 1000-char chunks, flan-t5-base",
@@ -215,8 +231,8 @@ _V0 = RAGConfig(
     max_input_tokens=1024, max_new_tokens=100,
 )
 
-VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6, _V7)}
-DEFAULT_VERSION = "v7"
+VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)}
+DEFAULT_VERSION = "v8"
 
 
 def get_config(version=DEFAULT_VERSION, **overrides):

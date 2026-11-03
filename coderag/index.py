@@ -35,6 +35,13 @@ class VectorIndex:
         _, indices = self.index.search(np.asarray(q_emb, dtype="float32"), k)
         return [int(i) for i in indices[0] if i >= 0]
 
+    def search_scored(self, query, k):
+        """[(index, cosine similarity)] for the `k` nearest texts (embeddings are unit length)."""
+        k = min(k, self.index.ntotal)
+        q_emb = self.model.encode([query])
+        distances, indices = self.index.search(np.asarray(q_emb, dtype="float32"), k)
+        return [(int(i), float(1 - d / 2)) for d, i in zip(distances[0], indices[0]) if i >= 0]
+
     @property
     def size(self):
         return self.index.ntotal

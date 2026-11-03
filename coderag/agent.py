@@ -6,8 +6,8 @@ from dataclasses import asdict, dataclass, field
 
 from .chunking import load_chunks
 from .config import get_config
-from .context import (asks_for_callers, build_context, display_name, keyword_filter,
-                      parse_citations, source_location)
+from .context import (asks_for_callers, build_context, display_name, format_chunk,
+                      keyword_filter, parse_citations, source_location)
 from .graph import build_name_index, build_reverse_index, expand_bfs
 from .llm import LLMError, LLMRateLimited, LLMUnavailable
 
@@ -42,7 +42,8 @@ class RAGCodebaseAgent:
         code_graph = None
         if self.config.structural and self.config.call_resolution == "scoped":
             from .resolve import CodeGraph
-            code_graph = CodeGraph(documents, repo_path, self.config.max_ambiguous)
+            code_graph = CodeGraph(documents, repo_path, self.config.max_ambiguous,
+                                   self.config.ignore_assert_calls)
             code_graph.apply_called_by()
             self._log(f"[RAG] Scoped call graph: {code_graph.edge_counts()}")
         elif self.config.structural:
@@ -111,16 +112,24 @@ class RAGCodebaseAgent:
     # =========================================================================
     # Retrieval
     # =========================================================================
-    def retrieve(self, question, config=None):
-        """Return [(chunk, meta, hop)]: vector hits (hop 0) then graph expansions."""
+    def retrieve(self, question, config=None, trace=None):
+        """
+        Return [(chunk, meta, hop)]: vector hits (hop 0) then graph expansions.
+        `trace` (a dict) is filled with chunk index -> {"rank", "similarity"} for
+        vector hits and {"via": (from_index, edge)} for expansions.
+        """
         cfg = config or self.config
 
         results = []
         seeds = []
         seen_keys = set()
 
+        scored = getattr(self.index, "search_scored", None)
+        hits = (scored(question, cfg.top_k) if scored and trace is not None
+                else [(i, None) for i in self.index.search(question, cfg.top_k)])
+
         self._log("\n--- RETRIEVED CHUNKS (vector search) ---")
-        for rank, idx in enumerate(self.index.search(question, cfg.top_k)):
+        for rank, (idx, similarity) in enumerate(hits):
             chunk, meta = self.chunks[idx], self.metadata[idx]
             if cfg.dedup_prefix:
                 key = chunk[:80]                # cheap content fingerprint
@@ -129,6 +138,8 @@ class RAGCodebaseAgent:
                 seen_keys.add(key)
             seeds.append(idx)
             results.append((chunk, meta, 0))
+            if trace is not None:
+                trace[idx] = {"rank": rank + 1, "similarity": similarity}
             self._log_hit(rank, meta, chunk)
 
         if cfg.keyword_filter:
@@ -137,25 +148,49 @@ class RAGCodebaseAgent:
             results = results[:cfg.max_direct]
 
         # Expansion is seeded from every vector hit, including any the keyword
-        # filter dropped, and in set order (both as in v4/v5).
-        include_callers = cfg.include_callers or (cfg.auto_callers and asks_for_callers(question))
+        # filter dropped (as in v4/v5). v4-v7 expand seeds in set order, i.e. by
+        # chunk index; seed_order="rank" expands the best hit first.
+        asked_callers = cfg.auto_callers and asks_for_callers(question)
         expansions = expand_bfs(
-            self.metadata, self._name_index, set(seeds),
+            self.metadata, self._name_index,
+            seeds if cfg.seed_order == "rank" else set(seeds),
             max_hops=cfg.max_hops,
             max_expansion=cfg.max_expansion,
-            include_callers=include_callers,
+            include_callers=cfg.include_callers or asked_callers,
             code_graph=self.code_graph,
+            with_via=True,
+            callers_first=cfg.callers_first and asked_callers,
         )
         if expansions:
             self._log(f"\n[EXPAND] Graph BFS added {len(expansions)} chunk(s) "
                       f"(max_hops={cfg.max_hops}):")
-            for idx, hop in expansions:
+            for idx, hop, via in expansions:
+                if trace is not None:
+                    trace[idx] = {"via": via}
                 meta = self.metadata[idx]
                 self._log(f"  [hop={hop}] {meta['type']} '{meta['name']}'  "
                           f"({os.path.basename(meta['file'])})")
                 results.append((self.chunks[idx], meta, hop))
 
         return results
+
+    def _explain(self, idx, trace, chunk, meta, hop, question, cfg, n):
+        """Debug info for one source: how it was retrieved and what it costs."""
+        info = {"context_chars": len(format_chunk(chunk, meta, hop, question, cfg, n))}
+        path, node = [], idx
+        while "via" in trace.get(node, {}):
+            prev, edge = trace[node]["via"]
+            path.append({"from": display_name(self.metadata[prev]), "edge": edge,
+                         "to": display_name(self.metadata[node])})
+            node = prev
+        if path:
+            info["path"] = path[::-1]           # from the vector hit outwards
+        seed = trace.get(node, {})
+        info["seed"] = display_name(self.metadata[node])
+        info["rank"] = seed.get("rank")
+        info["similarity"] = (round(seed["similarity"], 3)
+                              if seed.get("similarity") is not None else None)
+        return info
 
     def _log_hit(self, rank, meta, chunk):
         if not self.verbose:
@@ -177,7 +212,7 @@ class RAGCodebaseAgent:
         cfg = config or self.config
         return build_context(question, self.retrieve(question, cfg), cfg)
 
-    def stream(self, question, llm=None, **overrides):
+    def stream(self, question, llm=None, debug=False, **overrides):
         """
         Answer `question` as a stream of events (dicts with a "type"):
           sources  {"sources": [Source dicts], "retrieve_ms"}   always first
@@ -187,6 +222,8 @@ class RAGCodebaseAgent:
         With no LLM (llm=None and none loaded) only sources + error/no_llm are
         emitted: the retrieved code is still useful on its own.
         Keyword overrides (top_k, max_hops, prompt_style, ...) apply to this call only.
+        With debug=True each source carries a "debug" dict: vector rank and
+        similarity, or the call-graph path that pulled it in, and its context size.
         """
         cfg = self.config.with_overrides(**overrides)
         llm = llm or self.llm
@@ -195,10 +232,15 @@ class RAGCodebaseAgent:
             self._log(f"OVERRIDES: {overrides}")
 
         t0 = time.perf_counter()
-        retrieved = self.retrieve(question, cfg)
+        trace = {} if debug else None
+        retrieved = self.retrieve(question, cfg, trace)
         context = build_context(question, retrieved, cfg)
         sources = [Source.from_meta(n, meta, hop, self._position[id(meta)])
                    for n, (_, meta, hop) in enumerate(retrieved, 1)]
+        if debug:
+            for n, (source, (chunk, meta, hop)) in enumerate(zip(sources, retrieved), 1):
+                source.debug = self._explain(source.chunk_id, trace, chunk, meta, hop,
+                                             question, cfg, n)
         yield {"type": "sources", "sources": [asdict(s) for s in sources], "context": context,
                "retrieve_ms": round((time.perf_counter() - t0) * 1000, 1)}
         self._log(f"\n--- CONTEXT SENT TO LLM ---\n{context[:1000]}")
@@ -278,6 +320,7 @@ class Source:
     hop: int            # 0 = vector hit, n = reached through the call graph
     qname: str
     chunk_id: int = -1  # position in agent.documents (= graph node id)
+    debug: dict | None = None   # stream(debug=True): rank/similarity or graph path
 
     @classmethod
     def from_meta(cls, n, meta, hop, chunk_id=-1):

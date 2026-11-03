@@ -118,13 +118,17 @@ _CITATION = re.compile(r"\[\s*(S\d+(?:\s*[,;]\s*S\d+)*)\s*\]")
 _INVISIBLE = dict.fromkeys(map(ord, "​‌‍⁠﻿"))
 
 
+_LINE_SUFFIX = re.compile(r"(S\d+)†[^\]\s,;]*")
+
+
 def normalize_citations(answer):
     """
     Rewrite citation variants models produce into plain [S3]: full-width
-    brackets 【S3】 (gpt-oss's native style) and zero-width characters inside
-    brackets ([​S3]).
+    brackets 【S3】 (gpt-oss's native style), zero-width characters inside
+    brackets ([​S3]) and line suffixes ([S3†L9-L20]).
     """
-    return (answer or "").translate(_INVISIBLE).replace("【", "[").replace("】", "]")
+    text = (answer or "").translate(_INVISIBLE).replace("【", "[").replace("】", "]")
+    return _LINE_SUFFIX.sub(r"\1", text)
 
 
 def parse_citations(answer, n_sources):

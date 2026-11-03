@@ -190,3 +190,34 @@ def test_settings_from_env():
                            "CODERAG_DATA_DIR": "/srv"})
     assert s.ask_per_ip_per_hour == 5 and s.server_llm_models == ("a", "b")
     assert s.data_dir == "/srv"
+
+
+def test_retrieve_debug_explains_sources(client):
+    c, _ = client
+    plain = c.post("/api/repos/sample/retrieve", json={"question": "bat walk fly"}).json()
+    assert all(s["debug"] is None for s in plain["sources"])
+    debug = c.post("/api/repos/sample/retrieve",
+                   json={"question": "bat walk fly", "debug": True}).json()
+    for s in debug["sources"]:
+        d = s["debug"]
+        assert d["context_chars"] > 0
+        assert ("path" in d) == (s["hop"] > 0)
+        if s["hop"] == 0:
+            assert d["rank"] >= 1
+
+
+def test_health_reports_retrieval_defaults(client):
+    c, _ = client
+    defaults = c.get("/api/health").json()["defaults"]
+    assert defaults["version"] == "v8" and defaults["top_k"] >= 1
+
+
+def test_graph_labels_are_unique():
+    from coderag.visualize import unique_labels
+    assert unique_labels(["core.py::Group.group", "decorators.py::group",
+                          "core.py::__getattr__", "parser.py::__getattr__",
+                          "pkg/a.py::run", "pkg/b.py::run"]) == [
+        "Group.group", "decorators.group", "core.__getattr__", "parser.__getattr__", "a.run", "b.run"]
+    # methods keep their class even when the bare method name is unique
+    assert unique_labels(["pipeline/processing.py::DataProcessor.transform",
+                          "pipeline/main.py::run"]) == ["DataProcessor.transform", "run"]

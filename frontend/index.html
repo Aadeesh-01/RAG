@@ -40,7 +40,8 @@
         <div id="repo-card" class="repo-card"></div>
       </div>
       <form id="ask-form" class="ask-form">
-        <textarea id="question" rows="1" maxlength="500" placeholder="Ask about the code, e.g. who calls a function or how a feature works…" aria-label="Question" required></textarea>
+        <textarea id="question" rows="1" maxlength="500" placeholder="Ask about the code, e.g. who calls a function or how a feature works…" aria-label="Question" required
+                  data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false" spellcheck="true"></textarea>
         <button id="ask-button" type="submit" class="primary">Ask</button>
       </form>
     </section>
@@ -48,9 +49,9 @@
     <section class="graph-panel" data-panel="graph" aria-label="Call graph">
       <div class="graph-toolbar">
         <div class="legend">
-          <span><i class="dot hop0"></i>direct match</span>
-          <span><i class="dot hop1"></i>via call graph</span>
-          <span><i class="dot other"></i>neighbour</span>
+          <span><i class="dot hop0"></i>direct match <b id="count-direct"></b></span>
+          <span><i class="dot hop1"></i>via call graph <b id="count-graph"></b></span>
+          <span title="Connected to the answer's code, but not sent to the model"><i class="dot other"></i>neighbour (not used)</span>
           <span><i class="line calls"></i>calls</span>
           <span><i class="line inherits"></i>inherits</span>
         </div>
@@ -89,12 +90,15 @@
 
       <fieldset>
         <legend>Retrieval</legend>
-        <label>Code chunks from search <input id="top-k" type="number" min="1" max="20" placeholder="4"></label>
-        <label>Call-graph hops <input id="max-hops" type="number" min="0" max="4" placeholder="3"></label>
+        <label>Code chunks from search <input id="top-k" type="number" min="1" max="10" step="1">
+          <small id="top-k-default"></small></label>
+        <label>Call-graph hops <input id="max-hops" type="number" min="0" max="4" step="1">
+          <small id="max-hops-default"></small></label>
         <label class="check"><input id="include-callers" type="checkbox"> Always follow callers (otherwise only for "who calls…" questions)</label>
       </fieldset>
 
       <div class="dialog-actions">
+        <button id="settings-reset" type="button" class="ghost reset">Reset to defaults</button>
         <button value="cancel" type="submit" class="ghost">Close</button>
         <button id="settings-save" value="save" type="submit" class="primary">Save</button>
       </div>

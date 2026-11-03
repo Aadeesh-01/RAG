@@ -12,7 +12,8 @@ fixed-window baseline to AST chunking with call/inheritance-graph expansion:
 | `v4` | Structural metadata (calls, bases, methods, docstrings), dedup, `called_by` index, 1-hop graph expansion |
 | `v5` | Multi-hop BFS expansion (`max_hops`, `max_expansion`, `include_callers`) and a hop-weighted context budget |
 | `v6` | Fixes found by the eval: index large files, method-level chunks, larger raw context, caller-aware expansion |
-| `v7` | Scope-aware call resolution (imports, `self`/`super`, external modules) instead of bare-name matching. **Default.** |
+| `v7` | Scope-aware call resolution (imports, `self`/`super`, external modules) instead of bare-name matching |
+| `v8` | Drops `@overload` stubs, ignores calls made only inside `assert`, expands best search hits first (callers first for "who calls" questions). **Default.** |
 
 Each version is a preset of a single `RAGConfig` ([coderag/config.py](coderag/config.py)), so comparing
 versions means changing one flag. The code is not copied per version. v0–v5 are kept unchanged as the
@@ -22,8 +23,8 @@ research record.
 
 [eval/](eval/) scores the context each version would send to the LLM against hand-labelled gold symbols
 on `sample_repo`, [psf/requests](https://github.com/psf/requests) and
-[pallets/click](https://github.com/pallets/click). On the real repos, v7 more than doubles v5's recall
-(requests 0.38 → 0.83, click 0.33 → 0.88) and beats the naive v0 baseline. See
+[pallets/click](https://github.com/pallets/click). On the real repos, v8 more than doubles v5's recall
+(requests 0.38 → 0.83, click 0.33 → 0.94) and beats the naive v0 baseline. See
 [eval/README.md](eval/README.md) for the method, full results and findings.
 
 ## Setup
@@ -52,7 +53,7 @@ callers and can't follow the citation format. See [eval/README.md](eval/README.m
 
 ## Usage
 
-Commands default to the bundled [sample_repo/](sample_repo/) and the `v7` preset. Pass `--repo PATH` and
+Commands default to the bundled [sample_repo/](sample_repo/) and the `v8` preset. Pass `--repo PATH` and
 `--version vN` to change them.
 
 ```bash
@@ -167,3 +168,12 @@ The project began as one standalone script per version (`baseline/baseline.py`, 
 `v5_multihop.py`, `visualize_graph.py`). Those scripts are preserved in commit `f873a1c`
 (`git show f873a1c:v5_multihop.py`). The package reproduces their chunks, metadata and LLM
 contexts exactly.
+
+## Debugging retrieval
+
+Add `?debug=1` to the site's URL, or call `agent.stream(question, debug=True)` / `POST
+/api/repos/{id}/retrieve` with `"debug": true`, to see how each source was retrieved: its vector
+search rank and similarity, or the call-graph path that pulled it in
+(`should_bypass_proxies —calls:exact→ is_valid_cidr`), and how many characters it adds to the context.
+Share links like `/?repo=pallets/click&q=How+does+a+Group+invoke+a+subcommand%3F` open a repo and run
+the question.

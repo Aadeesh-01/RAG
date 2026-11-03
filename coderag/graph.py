@@ -86,7 +86,7 @@ def _name_neighbors(chunks, name_index, idx, include_callers):
 
 
 def expand_bfs(chunks, name_index, seeds, max_hops=3, max_expansion=8,
-               include_callers=False, code_graph=None):
+               include_callers=False, code_graph=None, with_via=False, callers_first=False):
     """
     BFS from `seeds` (hop 0) over base_classes + calls edges, and called_by
     edges when `include_callers` is set. Neighbours come from `code_graph`
@@ -95,7 +95,8 @@ def expand_bfs(chunks, name_index, seeds, max_hops=3, max_expansion=8,
 
     max_hops=1, max_expansion=2 reproduces v4's 1-hop expansion.
 
-    Returns [(chunk_index, hop)] for the newly reached chunks, closest first.
+    Returns [(chunk_index, hop)] for the newly reached chunks, closest first,
+    or [(chunk_index, hop, (from_index, edge))] with `with_via`.
     """
     if max_hops <= 0 or max_expansion <= 0:
         return []
@@ -110,15 +111,17 @@ def expand_bfs(chunks, name_index, seeds, max_hops=3, max_expansion=8,
             continue
 
         if code_graph is not None:
-            neighbors = code_graph.neighbors(idx, include_callers)
+            neighbors = code_graph.typed_neighbors(idx, include_callers, callers_first)
         else:
-            neighbors = _name_neighbors(chunks, name_index, idx, include_callers)
+            neighbors = [(j, "name match")
+                         for j in _name_neighbors(chunks, name_index, idx, include_callers)]
 
-        for neighbor_idx in neighbors:
+        for neighbor_idx, edge in neighbors:
             if neighbor_idx in seen:
                 continue
             seen.add(neighbor_idx)
-            expanded.append((neighbor_idx, hop + 1))
+            expanded.append((neighbor_idx, hop + 1, (idx, edge)) if with_via
+                            else (neighbor_idx, hop + 1))
             if len(expanded) >= max_expansion:
                 return expanded
             frontier.append((neighbor_idx, hop + 1))

@@ -235,6 +235,29 @@ window.addEventListener("resize", () => sim.force("center", d3.forceCenter(W()/2
 """
 
 
+def unique_labels(qnames):
+    """
+    Shortest dotted suffix of each qualified name that no other name shares,
+    never shorter than the display name (methods keep their class):
+    'core.py::Group.group' -> 'Group.group', 'decorators.py::group' ->
+    'decorators.group' (since 'group' alone is ambiguous), two '__getattr__'
+    functions -> 'core.__getattr__', 'parser.__getattr__'.
+    Identical qnames keep their full form.
+    """
+    parts = [q.replace(".py::", ".").replace("/", ".").split(".") for q in qnames]
+    labels = []
+    for q, p in zip(qnames, parts):
+        shortest = len(q.split("::")[-1].split("."))     # 'Class.method' -> 2
+        for n in range(shortest, len(p) + 1):
+            suffix = p[-n:]
+            if sum(o[-n:] == suffix for o in parts) == 1:
+                labels.append(".".join(suffix))
+                break
+        else:
+            labels.append(".".join(p))
+    return labels
+
+
 def graph_data(agent):
     """
     JSON graph of an agent's chunks for a web view. Node ids are chunk
@@ -243,11 +266,13 @@ def graph_data(agent):
     member (class -> its method chunks).
     """
     docs = agent.documents
+    labels = unique_labels([d.get("qname", d["name"]) for d in docs])
     nodes = []
     for i, d in enumerate(docs):
         path, lo, hi = source_location(d)
-        nodes.append({"id": i, "name": display_name(d), "kind": d["type"], "file": path,
-                      "start_line": lo, "end_line": hi, "qname": d.get("qname", d["name"])})
+        nodes.append({"id": i, "name": display_name(d), "label": labels[i], "kind": d["type"],
+                      "file": path, "start_line": lo, "end_line": hi,
+                      "qname": d.get("qname", d["name"])})
 
     links = []
     g = agent.code_graph
