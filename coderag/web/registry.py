@@ -30,6 +30,7 @@ class Demo:
     questions: list = field(default_factory=list)
     stats: dict = field(default_factory=dict)
     built: str = ""
+    order: int = 0                  # position in demos.yaml
     agents: dict = field(default_factory=dict, repr=False)     # version -> agent
 
     @property
@@ -45,7 +46,7 @@ class Demo:
 
     def info(self):
         return {"id": self.id, "name": self.name, "description": self.description,
-                "url": self.url, "sha": self.sha, "questions": self.questions,
+                "url": self.url, "sha": self.sha, "root": self.root, "questions": self.questions,
                 "stats": self.stats, "built": self.built, "versions": self.versions}
 
 
@@ -64,7 +65,7 @@ def build_demos(spec_path, data_dir, only=None, keep_clones=False, embedder=None
     versions = spec.get("versions", ["v7"])
     clones = os.path.join(data_dir, ".clones")
 
-    for entry in spec["demos"]:
+    for order, entry in enumerate(spec["demos"]):
         if only and entry["id"] not in only:
             continue
         if entry.get("url"):
@@ -87,7 +88,7 @@ def build_demos(spec_path, data_dir, only=None, keep_clones=False, embedder=None
             log(f"[demos] {entry['id']} {version}: {stats}")
 
         meta = {k: entry.get(k, "") for k in ("id", "name", "description", "url", "sha", "root")}
-        meta.update(questions=entry.get("questions", []), stats=stats, versions=versions,
+        meta.update(questions=entry.get("questions", []), stats=stats, versions=versions, order=order,
                     built=datetime.now(timezone.utc).isoformat(timespec="seconds"))
         with open(os.path.join(out, "demo.json"), "w", encoding="utf-8") as f:
             json.dump(meta, f, indent=2)
@@ -118,4 +119,4 @@ def load_demos(data_dir, embedder=None):
                 os.path.join(root, demo_id, version), load_llm=False, verbose=False,
                 embedder=embedder)
         demos[demo_id] = demo
-    return demos
+    return dict(sorted(demos.items(), key=lambda item: item[1].order))

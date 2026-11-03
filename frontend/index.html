@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>coderag</title>
+  <meta name="description" content="Ask questions about a Python codebase. Answers cite the exact source code, retrieved with a call graph.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%234f46e5'/><circle cx='11' cy='12' r='3.5' fill='white'/><circle cx='22' cy='9' r='2.5' fill='white'/><circle cx='20' cy='22' r='3.5' fill='white'/><path d='M11 12L22 9M11 12L20 22' stroke='white' stroke-width='1.6'/></svg>">
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
+          integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+          integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+          integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="./" aria-label="coderag home">
+      <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><circle cx="11" cy="12" r="3.5"/><circle cx="22" cy="9" r="2.5"/><circle cx="20" cy="22" r="3.5"/><path d="M11 12L22 9M11 12L20 22"/></svg>
+      <span>coderag</span>
+    </a>
+    <nav id="repo-tabs" class="repo-tabs" aria-label="Repositories"></nav>
+    <button id="settings-button" class="icon-button" type="button" aria-label="Settings" title="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+    </button>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <div class="panel-tabs" role="tablist">
+    <button type="button" role="tab" data-panel="chat" aria-selected="true">Chat</button>
+    <button type="button" role="tab" data-panel="graph" aria-selected="false">Call graph</button>
+  </div>
+
+  <main class="layout">
+    <section class="chat-panel" data-panel="chat" aria-label="Chat">
+      <div id="conversation" class="conversation">
+        <div id="repo-card" class="repo-card"></div>
+      </div>
+      <form id="ask-form" class="ask-form">
+        <textarea id="question" rows="1" maxlength="500" placeholder="Ask about the code, e.g. who calls a function or how a feature works…" aria-label="Question" required></textarea>
+        <button id="ask-button" type="submit" class="primary">Ask</button>
+      </form>
+    </section>
+
+    <section class="graph-panel" data-panel="graph" aria-label="Call graph">
+      <div class="graph-toolbar">
+        <div class="legend">
+          <span><i class="dot hop0"></i>direct match</span>
+          <span><i class="dot hop1"></i>via call graph</span>
+          <span><i class="dot other"></i>neighbour</span>
+          <span><i class="line calls"></i>calls</span>
+          <span><i class="line inherits"></i>inherits</span>
+        </div>
+        <button id="graph-toggle" type="button" class="ghost">Show full graph</button>
+      </div>
+      <div class="graph-wrap">
+        <svg id="graph" role="img" aria-label="Call graph of the code used for the answer"></svg>
+        <p id="graph-hint" class="graph-hint"></p>
+        <aside id="node-card" class="node-card" hidden></aside>
+      </div>
+    </section>
+  </main>
+
+  <dialog id="settings" class="settings">
+    <form method="dialog">
+      <h2>Settings</h2>
+
+      <fieldset>
+        <legend>Answers</legend>
+        <label class="radio"><input type="radio" name="llm" value="server" checked> Free model on this server <small id="server-model"></small></label>
+        <label class="radio"><input type="radio" name="llm" value="own"> My own API key</label>
+        <div id="own-key-fields" class="indent">
+          <label>Provider
+            <select id="provider">
+              <option value="groq">Groq</option>
+              <option value="openrouter">OpenRouter</option>
+              <option value="gemini">Gemini</option>
+            </select>
+          </label>
+          <label>API key <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Stored in this browser only"></label>
+          <label>Model <input id="model" type="text" placeholder="Provider default" spellcheck="false"></label>
+          <p class="note">The key is kept in this browser and sent with each question. The server uses it for that request only and never stores or logs it.</p>
+        </div>
+        <label class="radio"><input type="radio" name="llm" value="none"> Sources only (no language model)</label>
+      </fieldset>
+
+      <fieldset>
+        <legend>Retrieval</legend>
+        <label>Code chunks from search <input id="top-k" type="number" min="1" max="20" placeholder="4"></label>
+        <label>Call-graph hops <input id="max-hops" type="number" min="0" max="4" placeholder="3"></label>
+        <label class="check"><input id="include-callers" type="checkbox"> Always follow callers (otherwise only for "who calls…" questions)</label>
+      </fieldset>
+
+      <div class="dialog-actions">
+        <button value="cancel" type="submit" class="ghost">Close</button>
+        <button id="settings-save" value="save" type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

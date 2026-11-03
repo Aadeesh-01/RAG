@@ -32,6 +32,7 @@ from .settings import Settings
 
 log = logging.getLogger("coderag.web")
 HOUR, DAY = 3600, 86400
+CODE_CHARS = 4000            # cap on per-source code sent to the browser
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))), "frontend")
 
@@ -53,6 +54,7 @@ class RetrieveRequest(BaseModel):
     max_expansion: int | None = Field(None, ge=0, le=16)
     include_callers: bool | None = None
     include_context: bool = False
+    include_code: bool = False          # add each source's code (capped) for display
 
     def overrides(self):
         return {"top_k": self.top_k, "max_hops": self.max_hops,
@@ -146,15 +148,19 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
             raise HTTPException(429, f"Too many requests; try again in {retry:.0f}s",
                                 headers={"Retry-After": str(int(retry))})
 
-    def with_links(demo, event, include_context):
-        """Add GitHub links to sources; drop the raw context unless asked for."""
+    def with_links(demo, agent, event, body):
+        """Add GitHub links (and code if asked) to sources; drop the raw context unless asked."""
         if event["type"] != "sources":
             return event
         event = dict(event)
-        event["sources"] = [{**s, "url": demo.source_url(s["file"], s["start_line"],
-                                                         s["end_line"])}
-                            for s in event["sources"]]
-        if not include_context:
+        sources = []
+        for s in event["sources"]:
+            s = {**s, "url": demo.source_url(s["file"], s["start_line"], s["end_line"])}
+            if body.include_code:
+                s["code"] = agent.chunks[s["chunk_id"]][:CODE_CHARS]
+            sources.append(s)
+        event["sources"] = sources
+        if not body.include_context:
             event.pop("context", None)
         return event
 
@@ -189,7 +195,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
         limit(request, "retrieve", settings.retrieve_per_ip_per_hour)
         first = next(agent.stream(body.question, llm=None, **body.overrides()))
         return {"version": version,
-                **with_links(demo, first, body.include_context)}
+                **with_links(demo, agent, first, body)}
 
     @app.post("/api/repos/{repo_id}/ask")
     def ask(repo_id: str, body: AskRequest, request: Request):
@@ -210,7 +216,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
 
         def replay():
             for event in cached:
-                yield _sse(with_links(demo, event, body.include_context))
+                yield _sse(with_links(demo, agent, event, body))
 
         if cached is not None:
             return StreamingResponse(replay(), media_type="text/event-stream",
@@ -236,7 +242,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None):
                 collected.append(event)
                 if event["type"] == "token":
                     text.append(event["text"])
-                yield _sse(with_links(demo, event, body.include_context))
+                yield _sse(with_links(demo, agent, event, body))
             if collected and collected[-1]["type"] == "done":
                 # store one token event with the whole answer; replays are instant
                 cache.put(cache_key, [collected[0], {"type": "token", "text": "".join(text)},

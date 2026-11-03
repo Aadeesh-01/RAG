@@ -98,8 +98,17 @@ A FastAPI server answers questions about pre-indexed demo repositories
 ```bash
 pip install -e ".[web]"
 python scripts/build_demos.py                     # fetch + index the demos into data/ (~30 s)
-uvicorn coderag.web.app:app --port 7860           # API docs at http://127.0.0.1:7860/docs
+uvicorn coderag.web.app:app --port 7860           # site at http://127.0.0.1:7860, API docs at /docs
 ```
+
+The site ([frontend/](frontend/)) is plain HTML, CSS and JavaScript served by the same server, with no
+build step. Pick a repo, ask a question or click an example, and the answer streams in with numbered
+citations. Click one to open that source's code, linked to GitHub at the pinned commit. The graph panel
+shows the part of the call graph the answer used: direct matches, code reached through the graph,
+and their neighbours. Settings let visitors use their own API key (kept in their browser only) or ask
+for sources only. Markdown in answers is sanitised with DOMPurify. The CDN libraries (D3, marked,
+DOMPurify) are pinned to exact versions with integrity hashes. JavaScript tests: `node --test
+frontend/tests/lib.test.mjs` (also run by `pytest`).
 
 | Endpoint | |
 |---|---|
@@ -138,6 +147,7 @@ coderag/
   cli.py        command-line interface
   gitfetch.py   safe shallow fetch of one GitHub commit
   web/          FastAPI server: app, rate limits + answer cache, demo registry, settings
+frontend/       web page: index.html, styles.css, app.js (UI), lib.js (tested helpers)
 scripts/        build_demos.py
 demos.yaml      demo repositories served by the web server
 sample_repo/    toy target: inheritance zoo + CSV -> clean -> SQLite pipeline
