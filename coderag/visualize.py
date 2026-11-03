@@ -1,4 +1,18 @@
-<!DOCTYPE html>
+"""
+Interactive chunk-relationship graph.
+
+Parses a repo with the v4 AST chunker, builds call / inheritance edges and
+writes a self-contained D3 force-directed HTML page.
+"""
+
+import json
+
+from .chunking import load_chunks
+from .config import get_config
+from .graph import build_graph, build_reverse_index
+
+
+HTML_TEMPLATE = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8"/>
@@ -91,180 +105,9 @@
   Nodes: <span id="s-nodes">0</span> &nbsp; Edges: <span id="s-edges">0</span>
 </div>
 
-<script src="https://cdn.jsdelivr.net/npm/d3@7/dist/d3.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
 <script>
-const GRAPH = {
-  "nodes": [
-    {
-      "id": 0,
-      "name": "Animal",
-      "qname": "test_inheritance.py::Animal",
-      "type": "class",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [
-        "__init__",
-        "speak",
-        "info"
-      ],
-      "bases": [],
-      "also_in": []
-    },
-    {
-      "id": 1,
-      "name": "Mammal",
-      "qname": "test_inheritance.py::Mammal",
-      "type": "class",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [
-        "speak",
-        "walk"
-      ],
-      "bases": [
-        "Animal"
-      ],
-      "also_in": []
-    },
-    {
-      "id": 2,
-      "name": "Bird",
-      "qname": "test_inheritance.py::Bird",
-      "type": "class",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [
-        "speak",
-        "fly"
-      ],
-      "bases": [
-        "Animal"
-      ],
-      "also_in": []
-    },
-    {
-      "id": 3,
-      "name": "Bat",
-      "qname": "test_inheritance.py::Bat",
-      "type": "class",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [
-        "speak",
-        "special"
-      ],
-      "bases": [
-        "Mammal",
-        "Bird"
-      ],
-      "also_in": []
-    },
-    {
-      "id": 4,
-      "name": "Zoo",
-      "qname": "test_inheritance.py::Zoo",
-      "type": "class",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [
-        "__init__",
-        "add_animal",
-        "show_animals"
-      ],
-      "bases": [],
-      "also_in": []
-    },
-    {
-      "id": 5,
-      "name": "create_bat",
-      "qname": "test_inheritance.py::create_bat",
-      "type": "function",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [],
-      "bases": [],
-      "also_in": []
-    },
-    {
-      "id": 6,
-      "name": "run_zoo",
-      "qname": "test_inheritance.py::run_zoo",
-      "type": "function",
-      "file": "test_inheritance.py",
-      "doc": "",
-      "methods": [],
-      "bases": [],
-      "also_in": []
-    }
-  ],
-  "edges": [
-    {
-      "source": 1,
-      "target": 0,
-      "kind": "inherits"
-    },
-    {
-      "source": 2,
-      "target": 0,
-      "kind": "inherits"
-    },
-    {
-      "source": 3,
-      "target": 2,
-      "kind": "calls"
-    },
-    {
-      "source": 3,
-      "target": 1,
-      "kind": "calls"
-    },
-    {
-      "source": 3,
-      "target": 1,
-      "kind": "inherits"
-    },
-    {
-      "source": 3,
-      "target": 2,
-      "kind": "inherits"
-    },
-    {
-      "source": 4,
-      "target": 0,
-      "kind": "calls"
-    },
-    {
-      "source": 4,
-      "target": 1,
-      "kind": "calls"
-    },
-    {
-      "source": 4,
-      "target": 2,
-      "kind": "calls"
-    },
-    {
-      "source": 4,
-      "target": 3,
-      "kind": "calls"
-    },
-    {
-      "source": 5,
-      "target": 3,
-      "kind": "calls"
-    },
-    {
-      "source": 6,
-      "target": 4,
-      "kind": "calls"
-    },
-    {
-      "source": 6,
-      "target": 5,
-      "kind": "calls"
-    }
-  ]
-};
+const GRAPH = __GRAPH_JSON__;
 
 const svg    = d3.select("#canvas");
 const W      = () => window.innerWidth;
@@ -388,3 +231,31 @@ window.addEventListener("resize", () => sim.force("center", d3.forceCenter(W()/2
 </script>
 </body>
 </html>
+"""
+
+
+def render_graph_html(nodes, edges):
+    graph_json = json.dumps({"nodes": nodes, "edges": edges}, indent=2)
+    return HTML_TEMPLATE.replace("__GRAPH_JSON__", graph_json)
+
+
+def write_graph(repo_path, output_html, verbose=True):
+    """Parse `repo_path`, build its graph and save it to `output_html`."""
+    # v4 chunking, but keep even tiny chunks so the graph is complete
+    config = get_config("v4", min_chunk_chars=10)
+    chunks = load_chunks(repo_path, config, verbose)
+    if not chunks:
+        raise ValueError(f"No chunks found in {repo_path}")
+
+    build_reverse_index(chunks, verbose)
+    nodes, edges = build_graph(chunks)
+
+    with open(output_html, "w", encoding="utf-8") as f:
+        f.write(render_graph_html(nodes, edges))
+
+    if verbose:
+        print(f"[Graph] Nodes: {len(nodes)}  |  Edges: {len(edges)}")
+        print(f"[Graph]   calls edges    : {sum(1 for e in edges if e['kind'] == 'calls')}")
+        print(f"[Graph]   inherits edges : {sum(1 for e in edges if e['kind'] == 'inherits')}")
+        print(f"[Graph] Saved -> {output_html}")
+    return nodes, edges
