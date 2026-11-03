@@ -1,0 +1,249 @@
+set,version,type,q,R@ctx,Sig,Body,Hit@1,Hit@3,MRR,Chunks,Chars,ms
+click,v6,locate,"How does click convert a string such as ""yes"" or ""0"" to a boolean?",1.0,1.0,1.0,0.0,1.0,0.5,12,9252,43.8719000085257
+click,v6,locate,Where is an environment variable read to provide a parameter's value?,1.0,1.0,1.0,1.0,1.0,1.0,12,10344,28.8336000230629
+click,v6,locate,How does click find the configuration directory for an application?,1.0,1.0,0.875,1.0,1.0,1.0,12,9907,28.779000014765188
+click,v6,locate,How is help text wrapped to fit the terminal width?,1.0,1.0,0.484375,0.0,1.0,0.3333333333333333,6,6338,26.607499981764704
+click,v6,locate,How does a Choice parameter validate the value it receives?,1.0,0.0,0.1,1.0,1.0,1.0,12,9184,24.856000003637746
+click,v6,locate,How does click work out the program name shown in usage messages?,1.0,1.0,0.7045454545454546,0.0,1.0,0.5,12,10503,26.06760000344366
+click,v6,locate,How is a command line string split into arguments for shell completion?,1.0,1.0,1.0,0.0,0.0,0.25,12,8116,26.96950000245124
+click,v6,callers,Which code calls resolve_command?,0.5,0.5,0.3806818181818182,0.0,0.0,0.25,12,10885,25.155100011033937
+click,v6,callers,Who calls handle_parse_result for each parameter?,1.0,1.0,1.0,1.0,1.0,1.0,12,11209,23.546400014311075
+click,v6,callers,Who uses _resolve_context?,0.0,0.0,0.16666666666666666,0.0,0.0,0.0,12,12703,22.170999989612028
+click,v6,callers,Which function calls get_completion_class?,1.0,1.0,0.6551724137931034,0.0,0.0,0.125,12,8690,23.889000003691763
+click,v6,callees,How does Command.main run the command after the arguments are parsed?,1.0,0.3333333333333333,0.15765488991295443,1.0,1.0,1.0,12,12856,23.250199999893084
+click,v6,callees,How does a Group resolve and invoke a subcommand?,1.0,0.5,0.2909090909090909,1.0,1.0,1.0,12,10444,25.696299999253824
+click,v6,callees,How does a parameter turn a raw command-line value into its final value?,1.0,0.3333333333333333,0.32405915349311576,1.0,1.0,1.0,12,11418,23.953600000822917
+click,v6,inheritance,Which classes subclass ShellComplete?,0.0,0.0,0.05821160546770303,0.0,0.0,0.0,4,3467,20.98840000689961
+click,v6,inheritance,What are the subclasses of Parameter?,1.0,1.0,0.1999831038269832,0.0,1.0,0.3333333333333333,12,11998,23.644100001547486
+click,v6,inheritance,Which parameter types restrict numbers to a range?,1.0,1.0,0.7395833333333333,1.0,1.0,1.0,5,3050,24.15620000101626
+click,v6,flow,What happens when a click command is invoked from the command line?,1.0,0.25,0.06824116743471582,0.0,1.0,0.5,12,11560,24.342099990462884
+click,v6,flow,How does shell completion produce completions for a command?,0.5,0.25,0.13714080459770114,0.0,1.0,0.3333333333333333,5,4382,24.56380001967773
+click,v6,flow,How does the click.command decorator turn a function into a Command?,1.0,1.0,0.4393939393939394,1.0,1.0,1.0,12,11071,24.952200008556247
+click,v6,flow,How does CliRunner invoke a command in tests and capture its output?,1.0,1.0,0.223688155922039,1.0,1.0,1.0,12,10779,26.683300005970523
+click,v7,locate,"How does click convert a string such as ""yes"" or ""0"" to a boolean?",1.0,1.0,1.0,0.0,1.0,0.5,6,5596,36.13590000895783
+click,v7,locate,Where is an environment variable read to provide a parameter's value?,1.0,1.0,1.0,1.0,1.0,1.0,12,13536,30.699700000695884
+click,v7,locate,How does click find the configuration directory for an application?,1.0,1.0,0.875,1.0,1.0,1.0,11,10478,28.302599996095523
+click,v7,locate,How is help text wrapped to fit the terminal width?,1.0,1.0,0.484375,0.0,1.0,0.3333333333333333,6,6380,30.312599992612377
+click,v7,locate,How does a Choice parameter validate the value it receives?,1.0,0.0,0.1,1.0,1.0,1.0,5,3795,32.45160001097247
+click,v7,locate,How does click work out the program name shown in usage messages?,1.0,1.0,0.7045454545454546,0.0,1.0,0.5,8,8937,34.18099999544211
+click,v7,locate,How is a command line string split into arguments for shell completion?,1.0,1.0,1.0,0.0,0.0,0.25,12,8226,30.716200009919703
+click,v7,callers,Which code calls resolve_command?,1.0,1.0,0.5261363636363636,0.0,0.0,0.25,12,11009,26.463900023372844
+click,v7,callers,Who calls handle_parse_result for each parameter?,1.0,1.0,1.0,1.0,1.0,1.0,12,12971,31.363099988084286
+click,v7,callers,Who uses _resolve_context?,0.0,0.0,0.16666666666666666,0.0,0.0,0.0,12,14108,25.06720001110807
+click,v7,callers,Which function calls get_completion_class?,1.0,1.0,0.6551724137931034,0.0,0.0,0.2,12,6017,24.020500015467405
+click,v7,callees,How does Command.main run the command after the arguments are parsed?,1.0,1.0,0.6177163338453661,1.0,1.0,1.0,12,13742,27.223299985053018
+click,v7,callees,How does a Group resolve and invoke a subcommand?,1.0,1.0,0.6242424242424243,1.0,1.0,1.0,12,11603,26.27790000406094
+click,v7,callees,How does a parameter turn a raw command-line value into its final value?,1.0,0.3333333333333333,0.31776984531701513,1.0,1.0,1.0,12,13898,26.86890002223663
+click,v7,inheritance,Which classes subclass ShellComplete?,0.0,0.0,0.05821160546770303,0.0,0.0,0.0,4,3467,23.12330002314411
+click,v7,inheritance,What are the subclasses of Parameter?,1.0,1.0,0.1999831038269832,0.0,1.0,0.3333333333333333,12,12148,24.052100023254752
+click,v7,inheritance,Which parameter types restrict numbers to a range?,1.0,1.0,0.7395833333333333,1.0,1.0,1.0,5,3057,23.150399996666238
+click,v7,flow,What happens when a click command is invoked from the command line?,1.0,0.0,0.051574500768049154,0.0,1.0,0.5,12,12245,23.895899998024106
+click,v7,flow,How does shell completion produce completions for a command?,0.5,0.25,0.13714080459770114,0.0,1.0,0.3333333333333333,5,4496,22.885500016855076
+click,v7,flow,How does the click.command decorator turn a function into a Command?,1.0,1.0,0.42424242424242425,1.0,1.0,1.0,12,11903,24.861700017936528
+click,v7,flow,How does CliRunner invoke a command in tests and capture its output?,1.0,1.0,0.21499250374812595,1.0,1.0,1.0,12,10441,23.123799997847527
+click,v7+max_ambiguous=3,locate,"How does click convert a string such as ""yes"" or ""0"" to a boolean?",1.0,1.0,1.0,0.0,1.0,0.5,6,5596,29.955499980133027
+click,v7+max_ambiguous=3,locate,Where is an environment variable read to provide a parameter's value?,1.0,1.0,1.0,1.0,1.0,1.0,12,13444,24.664800002938136
+click,v7+max_ambiguous=3,locate,How does click find the configuration directory for an application?,1.0,1.0,0.875,1.0,1.0,1.0,12,11480,19.427399995038286
+click,v7+max_ambiguous=3,locate,How is help text wrapped to fit the terminal width?,1.0,1.0,0.484375,0.0,1.0,0.3333333333333333,6,6380,18.188200017903
+click,v7+max_ambiguous=3,locate,How does a Choice parameter validate the value it receives?,1.0,0.0,0.1,1.0,1.0,1.0,5,3795,23.286799987545237
+click,v7+max_ambiguous=3,locate,How does click work out the program name shown in usage messages?,1.0,1.0,0.7045454545454546,0.0,1.0,0.5,8,9001,25.07000000332482
+click,v7+max_ambiguous=3,locate,How is a command line string split into arguments for shell completion?,1.0,1.0,1.0,0.0,0.0,0.25,12,8254,25.650600000517443
+click,v7+max_ambiguous=3,callers,Which code calls resolve_command?,1.0,1.0,0.5261363636363636,0.0,0.0,0.25,12,11085,23.905200010631233
+click,v7+max_ambiguous=3,callers,Who calls handle_parse_result for each parameter?,1.0,1.0,1.0,1.0,1.0,1.0,12,12461,24.94709999882616
+click,v7+max_ambiguous=3,callers,Who uses _resolve_context?,0.0,0.0,0.16666666666666666,0.0,0.0,0.0,12,14108,23.61260002362542
+click,v7+max_ambiguous=3,callers,Which function calls get_completion_class?,1.0,1.0,0.6551724137931034,0.0,0.0,0.2,12,6453,24.115700012771413
+click,v7+max_ambiguous=3,callees,How does Command.main run the command after the arguments are parsed?,1.0,1.0,0.6177163338453661,1.0,1.0,1.0,12,13792,24.413300008745864
+click,v7+max_ambiguous=3,callees,How does a Group resolve and invoke a subcommand?,1.0,1.0,0.6242424242424243,1.0,1.0,1.0,12,11603,23.840200010454282
+click,v7+max_ambiguous=3,callees,How does a parameter turn a raw command-line value into its final value?,1.0,0.3333333333333333,0.32405915349311576,1.0,1.0,1.0,12,14199,23.30249999067746
+click,v7+max_ambiguous=3,inheritance,Which classes subclass ShellComplete?,0.0,0.0,0.05821160546770303,0.0,0.0,0.0,4,3467,21.64779999293387
+click,v7+max_ambiguous=3,inheritance,What are the subclasses of Parameter?,1.0,1.0,0.1999831038269832,0.0,1.0,0.3333333333333333,12,12212,22.216100012883544
+click,v7+max_ambiguous=3,inheritance,Which parameter types restrict numbers to a range?,1.0,1.0,0.7395833333333333,1.0,1.0,1.0,5,3057,22.45369998854585
+click,v7+max_ambiguous=3,flow,What happens when a click command is invoked from the command line?,1.0,0.25,0.08490783410138249,0.0,1.0,0.5,12,12437,23.67170000798069
+click,v7+max_ambiguous=3,flow,How does shell completion produce completions for a command?,0.5,0.25,0.13714080459770114,0.0,1.0,0.3333333333333333,5,4496,23.189200001070276
+click,v7+max_ambiguous=3,flow,How does the click.command decorator turn a function into a Command?,1.0,1.0,0.42424242424242425,1.0,1.0,1.0,12,11963,24.097300018183887
+click,v7+max_ambiguous=3,flow,How does CliRunner invoke a command in tests and capture its output?,1.0,1.0,0.21154422788605698,1.0,1.0,1.0,12,11244,22.205799992661923
+click,v7+max_hops=0+top_k=10,locate,"How does click convert a string such as ""yes"" or ""0"" to a boolean?",1.0,1.0,1.0,0.0,1.0,0.5,9,9928,35.97769999760203
+click,v7+max_hops=0+top_k=10,locate,Where is an environment variable read to provide a parameter's value?,1.0,1.0,1.0,1.0,1.0,1.0,10,14353,27.796999987913296
+click,v7+max_hops=0+top_k=10,locate,How does click find the configuration directory for an application?,1.0,1.0,0.825,1.0,1.0,1.0,10,11650,26.92210001987405
+click,v7+max_hops=0+top_k=10,locate,How is help text wrapped to fit the terminal width?,1.0,1.0,0.5,0.0,1.0,0.3333333333333333,10,9333,23.294499987969175
+click,v7+max_hops=0+top_k=10,locate,How does a Choice parameter validate the value it receives?,1.0,1.0,1.0,1.0,1.0,1.0,10,8422,25.95330000622198
+click,v7+max_hops=0+top_k=10,locate,How does click work out the program name shown in usage messages?,1.0,1.0,0.7045454545454546,0.0,1.0,0.5,10,11155,25.239999988116324
+click,v7+max_hops=0+top_k=10,locate,How is a command line string split into arguments for shell completion?,1.0,1.0,1.0,0.0,0.0,0.25,9,9124,21.16609999211505
+click,v7+max_hops=0+top_k=10,callers,Which code calls resolve_command?,1.0,0.5,0.3715909090909091,0.0,0.0,0.25,10,14425,21.783100004540756
+click,v7+max_hops=0+top_k=10,callers,Who calls handle_parse_result for each parameter?,1.0,1.0,1.0,1.0,1.0,1.0,10,11850,24.419399996986613
+click,v7+max_hops=0+top_k=10,callers,Who uses _resolve_context?,0.0,0.0,0.16666666666666666,0.0,0.0,0.0,10,12872,22.65649999026209
+click,v7+max_hops=0+top_k=10,callers,Which function calls get_completion_class?,0.0,1.0,0.3448275862068966,0.0,0.0,0.0,10,5809,22.216199984541163
+click,v7+max_hops=0+top_k=10,callees,How does Command.main run the command after the arguments are parsed?,1.0,0.3333333333333333,0.19308755760368665,1.0,1.0,1.0,10,14461,26.19030000641942
+click,v7+max_hops=0+top_k=10,callees,How does a Group resolve and invoke a subcommand?,1.0,1.0,0.7909090909090909,1.0,1.0,1.0,10,12434,23.247400007676333
+click,v7+max_hops=0+top_k=10,callees,How does a parameter turn a raw command-line value into its final value?,1.0,0.3333333333333333,0.32405915349311576,1.0,1.0,1.0,10,14001,24.51160000055097
+click,v7+max_hops=0+top_k=10,inheritance,Which classes subclass ShellComplete?,0.5,0.5,0.1640813454837845,0.0,0.0,0.16666666666666666,10,5827,21.041100000729784
+click,v7+max_hops=0+top_k=10,inheritance,What are the subclasses of Parameter?,1.0,0.5,0.18954971698910197,0.0,1.0,0.3333333333333333,10,11969,25.11600000434555
+click,v7+max_hops=0+top_k=10,inheritance,Which parameter types restrict numbers to a range?,1.0,1.0,0.7547348484848485,1.0,1.0,1.0,9,7909,22.506800014525652
+click,v7+max_hops=0+top_k=10,flow,What happens when a click command is invoked from the command line?,1.0,0.0,0.09059139784946237,0.0,1.0,0.5,10,13444,21.225800010142848
+click,v7+max_hops=0+top_k=10,flow,How does shell completion produce completions for a command?,0.5,0.5,0.4049568965517241,0.0,0.0,0.2,8,6115,25.321199995232746
+click,v7+max_hops=0+top_k=10,flow,How does the click.command decorator turn a function into a Command?,1.0,1.0,0.5,1.0,1.0,1.0,10,16419,24.783800006844103
+click,v7+max_hops=0+top_k=10,flow,How does CliRunner invoke a command in tests and capture its output?,1.0,1.0,0.2772113943028486,1.0,1.0,1.0,10,12841,24.82449999661185
+requests,v6,locate,How does requests decide whether a proxy should be bypassed for a URL?,1.0,1.0,0.6888888888888889,1.0,1.0,1.0,12,11561,26.96969997487031
+requests,v6,locate,Where is the Authorization header value for HTTP basic auth built?,1.0,1.0,0.43333333333333335,0.0,0.0,0.2,8,3956,24.666800018167123
+requests,v6,locate,How is the response body decoded to text when the server sends no encoding?,1.0,1.0,1.0,0.0,1.0,0.5,12,8527,27.617599989753217
+requests,v6,locate,Where does requests raise an exception for 4xx and 5xx status codes?,1.0,1.0,0.8181818181818182,0.0,0.0,0.2,7,4671,25.780299998586997
+requests,v6,locate,How is the digest authentication header computed?,1.0,1.0,0.379746835443038,1.0,1.0,1.0,12,9797,23.234899999806657
+requests,v6,locate,Where are credentials read from the user's .netrc file?,1.0,1.0,1.0,1.0,1.0,1.0,12,10197,24.80769998510368
+requests,v6,locate,How is the length of a request body determined?,1.0,1.0,0.32727272727272727,0.0,0.0,0.09090909090909091,12,11976,21.55000000493601
+requests,v6,callers,Which functions call get_netrc_auth?,1.0,1.0,0.5914786967418546,0.0,0.0,0.1111111111111111,12,9927,24.481100001139566
+requests,v6,callers,Who calls resolve_redirects?,0.0,0.0,0.06451612903225806,0.0,0.0,0.0,12,8523,22.23280002363026
+requests,v6,callers,Where are response hooks dispatched?,0.0,0.0,0.04838709677419355,0.0,0.0,0.0,12,9648,22.097699984442443
+requests,v6,callers,Which code uses super_len to size a request body?,1.0,1.0,0.6875,1.0,1.0,1.0,12,10244,33.01330000977032
+requests,v6,callers,Who calls should_bypass_proxies?,1.0,1.0,1.0,0.0,1.0,0.5,12,13166,23.827899975003675
+requests,v6,callees,How does Session.prepare_request merge session-level and request-level settings?,1.0,1.0,1.0,1.0,1.0,1.0,12,12913,24.22989998012781
+requests,v6,callees,How does HTTPAdapter.send get a connection from the pool?,1.0,0.5,0.26609977324263034,1.0,1.0,1.0,12,11820,24.857700016582385
+requests,v6,callees,How does the adapter turn a urllib3 response into a requests Response?,1.0,1.0,1.0,0.0,1.0,0.5,12,13298,22.016999981133267
+requests,v6,inheritance,Which exceptions are subclasses of ConnectionError?,0.3333333333333333,0.3333333333333333,0.3333333333333333,0.0,1.0,0.5,12,9892,22.834899980807677
+requests,v6,inheritance,Which authentication classes derive from AuthBase?,1.0,1.0,0.3192771084337349,0.0,1.0,0.5,4,2971,21.874800004297867
+requests,v6,inheritance,What interface must a transport adapter implement?,1.0,1.0,0.5517241379310345,1.0,1.0,1.0,11,6517,21.552499994868413
+requests,v6,flow,What happens under the hood when you call requests.get?,1.0,1.0,0.5203024404220178,1.0,1.0,1.0,12,14221,22.698899992974475
+requests,v6,flow,How does a Session send a prepared request through a transport adapter and build the response?,0.0,0.25,0.10003707823507602,0.0,0.0,0.0,12,11360,22.401199996238574
+requests,v6,flow,What happens when a server answers a digest-auth request with 401?,1.0,1.0,0.5646976090014064,1.0,1.0,1.0,12,9768,23.380900005577132
+requests,v6,flow,How do cookies from a response end up stored in the session?,0.0,0.0,0.08279569892473118,0.0,0.0,0.0,12,9764,22.555400006240234
+requests,v7,locate,How does requests decide whether a proxy should be bypassed for a URL?,1.0,1.0,0.7111111111111111,1.0,1.0,1.0,12,11585,37.91099999216385
+requests,v7,locate,Where is the Authorization header value for HTTP basic auth built?,1.0,1.0,0.43333333333333335,0.0,0.0,0.2,8,4098,30.801800021436065
+requests,v7,locate,How is the response body decoded to text when the server sends no encoding?,1.0,1.0,1.0,0.0,1.0,0.5,12,8641,25.52789999754168
+requests,v7,locate,Where does requests raise an exception for 4xx and 5xx status codes?,1.0,1.0,0.8181818181818182,0.0,0.0,0.2,7,4692,25.018699991051108
+requests,v7,locate,How is the digest authentication header computed?,1.0,1.0,0.379746835443038,1.0,1.0,1.0,7,6442,25.773500005016103
+requests,v7,locate,Where are credentials read from the user's .netrc file?,1.0,1.0,1.0,1.0,1.0,1.0,12,9725,23.937999998452142
+requests,v7,locate,How is the length of a request body determined?,1.0,1.0,0.32727272727272727,0.0,0.0,0.14285714285714285,12,10766,23.290100012673065
+requests,v7,callers,Which functions call get_netrc_auth?,1.0,1.0,0.5914786967418546,0.0,0.0,0.2,12,11594,23.553699982585385
+requests,v7,callers,Who calls resolve_redirects?,1.0,1.0,0.2903225806451613,0.0,0.0,0.08333333333333333,12,12301,22.947999997995794
+requests,v7,callers,Where are response hooks dispatched?,0.0,0.0,0.04838709677419355,0.0,0.0,0.0,11,8188,23.1338000157848
+requests,v7,callers,Which code uses super_len to size a request body?,1.0,1.0,0.6875,1.0,1.0,1.0,12,10041,23.15019999514334
+requests,v7,callers,Who calls should_bypass_proxies?,1.0,1.0,1.0,0.0,1.0,0.5,12,12736,21.254699997371063
+requests,v7,callees,How does Session.prepare_request merge session-level and request-level settings?,1.0,1.0,0.986842105263158,1.0,1.0,1.0,12,13586,26.406599994516
+requests,v7,callees,How does HTTPAdapter.send get a connection from the pool?,1.0,0.5,0.26609977324263034,1.0,1.0,1.0,12,11898,24.391899991314858
+requests,v7,callees,How does the adapter turn a urllib3 response into a requests Response?,1.0,1.0,1.0,0.0,1.0,0.5,12,13417,22.42130000377074
+requests,v7,inheritance,Which exceptions are subclasses of ConnectionError?,0.3333333333333333,0.3333333333333333,0.3333333333333333,0.0,1.0,0.5,12,9953,21.89949998864904
+requests,v7,inheritance,Which authentication classes derive from AuthBase?,1.0,1.0,0.3192771084337349,0.0,1.0,0.5,4,2987,21.904699999140576
+requests,v7,inheritance,What interface must a transport adapter implement?,1.0,1.0,0.5517241379310345,1.0,1.0,1.0,8,4632,20.818499993765727
+requests,v7,flow,What happens under the hood when you call requests.get?,1.0,1.0,0.5059999325850272,1.0,1.0,1.0,12,13779,22.739400010323152
+requests,v7,flow,How does a Session send a prepared request through a transport adapter and build the response?,0.0,0.25,0.0932270423927821,0.0,0.0,0.0,12,11650,24.500700004864484
+requests,v7,flow,What happens when a server answers a digest-auth request with 401?,1.0,1.0,0.5646976090014064,1.0,1.0,1.0,12,13237,23.447099985787645
+requests,v7,flow,How do cookies from a response end up stored in the session?,0.0,0.0,0.08279569892473118,0.0,0.0,0.0,12,10283,22.159299987833947
+requests,v7+max_ambiguous=3,locate,How does requests decide whether a proxy should be bypassed for a URL?,1.0,1.0,0.7111111111111111,1.0,1.0,1.0,12,11585,25.67469998029992
+requests,v7+max_ambiguous=3,locate,Where is the Authorization header value for HTTP basic auth built?,1.0,1.0,0.43333333333333335,0.0,0.0,0.2,8,4098,23.99169999989681
+requests,v7+max_ambiguous=3,locate,How is the response body decoded to text when the server sends no encoding?,1.0,1.0,1.0,0.0,1.0,0.5,12,8641,24.28820001659915
+requests,v7+max_ambiguous=3,locate,Where does requests raise an exception for 4xx and 5xx status codes?,1.0,1.0,0.8181818181818182,0.0,0.0,0.2,7,4692,25.865199975669384
+requests,v7+max_ambiguous=3,locate,How is the digest authentication header computed?,1.0,1.0,0.379746835443038,1.0,1.0,1.0,7,6442,23.24929999304004
+requests,v7+max_ambiguous=3,locate,Where are credentials read from the user's .netrc file?,1.0,1.0,1.0,1.0,1.0,1.0,12,9725,24.476799997501075
+requests,v7+max_ambiguous=3,locate,How is the length of a request body determined?,1.0,1.0,0.32727272727272727,0.0,0.0,0.14285714285714285,12,10766,22.627600003033876
+requests,v7+max_ambiguous=3,callers,Which functions call get_netrc_auth?,1.0,1.0,0.5914786967418546,0.0,0.0,0.2,12,11594,22.842399979708716
+requests,v7+max_ambiguous=3,callers,Who calls resolve_redirects?,1.0,1.0,0.2903225806451613,0.0,0.0,0.08333333333333333,12,12301,22.686900018015876
+requests,v7+max_ambiguous=3,callers,Where are response hooks dispatched?,0.0,0.0,0.04838709677419355,0.0,0.0,0.0,12,8739,21.94830001099035
+requests,v7+max_ambiguous=3,callers,Which code uses super_len to size a request body?,1.0,1.0,0.6875,1.0,1.0,1.0,12,10095,23.614600009750575
+requests,v7+max_ambiguous=3,callers,Who calls should_bypass_proxies?,1.0,1.0,1.0,0.0,1.0,0.5,12,12736,24.238400015747175
+requests,v7+max_ambiguous=3,callees,How does Session.prepare_request merge session-level and request-level settings?,1.0,1.0,1.0,1.0,1.0,1.0,12,13191,24.940200004493818
+requests,v7+max_ambiguous=3,callees,How does HTTPAdapter.send get a connection from the pool?,1.0,0.5,0.26609977324263034,1.0,1.0,1.0,12,11898,23.27320000040345
+requests,v7+max_ambiguous=3,callees,How does the adapter turn a urllib3 response into a requests Response?,1.0,1.0,1.0,0.0,1.0,0.5,12,13052,25.20950001780875
+requests,v7+max_ambiguous=3,inheritance,Which exceptions are subclasses of ConnectionError?,0.3333333333333333,0.3333333333333333,0.3333333333333333,0.0,1.0,0.5,12,9953,22.784800006775185
+requests,v7+max_ambiguous=3,inheritance,Which authentication classes derive from AuthBase?,1.0,1.0,0.3192771084337349,0.0,1.0,0.5,4,2987,22.261399979470298
+requests,v7+max_ambiguous=3,inheritance,What interface must a transport adapter implement?,1.0,1.0,0.5517241379310345,1.0,1.0,1.0,12,7053,22.69680000608787
+requests,v7+max_ambiguous=3,flow,What happens under the hood when you call requests.get?,1.0,1.0,0.5059999325850272,1.0,1.0,1.0,12,13779,23.47770001506433
+requests,v7+max_ambiguous=3,flow,How does a Session send a prepared request through a transport adapter and build the response?,0.0,0.25,0.0932270423927821,0.0,0.0,0.0,12,11687,24.6626999869477
+requests,v7+max_ambiguous=3,flow,What happens when a server answers a digest-auth request with 401?,1.0,1.0,0.5646976090014064,1.0,1.0,1.0,12,11996,23.34139999584295
+requests,v7+max_ambiguous=3,flow,How do cookies from a response end up stored in the session?,0.0,0.0,0.08279569892473118,0.0,0.0,0.0,12,10283,24.489900009939447
+requests,v7+max_hops=0+top_k=10,locate,How does requests decide whether a proxy should be bypassed for a URL?,1.0,1.0,0.6888888888888889,1.0,1.0,1.0,10,11984,26.926999998977408
+requests,v7+max_hops=0+top_k=10,locate,Where is the Authorization header value for HTTP basic auth built?,0.0,0.0,0.03333333333333333,0.0,0.0,0.0,10,7994,24.846000014804304
+requests,v7+max_hops=0+top_k=10,locate,How is the response body decoded to text when the server sends no encoding?,1.0,1.0,1.0,0.0,1.0,0.5,10,11521,26.600099983625114
+requests,v7+max_hops=0+top_k=10,locate,Where does requests raise an exception for 4xx and 5xx status codes?,1.0,1.0,1.0,0.0,0.0,0.2,10,8829,25.399799982551485
+requests,v7+max_hops=0+top_k=10,locate,How is the digest authentication header computed?,1.0,1.0,0.3924050632911392,1.0,1.0,1.0,10,10923,23.041199980070814
+requests,v7+max_hops=0+top_k=10,locate,Where are credentials read from the user's .netrc file?,1.0,1.0,1.0,1.0,1.0,1.0,9,6203,24.335100024472922
+requests,v7+max_hops=0+top_k=10,locate,How is the length of a request body determined?,0.0,0.0,0.03636363636363636,0.0,0.0,0.0,10,13857,23.143300000810996
+requests,v7+max_hops=0+top_k=10,callers,Which functions call get_netrc_auth?,0.5,0.5,0.5131578947368421,0.0,0.0,0.16666666666666666,10,7626,23.0714000063017
+requests,v7+max_hops=0+top_k=10,callers,Who calls resolve_redirects?,0.0,0.0,0.06451612903225806,0.0,0.0,0.0,10,10556,23.905300011392683
+requests,v7+max_hops=0+top_k=10,callers,Where are response hooks dispatched?,1.0,0.0,0.04838709677419355,0.0,0.0,0.1111111111111111,10,9329,21.343200001865625
+requests,v7+max_hops=0+top_k=10,callers,Which code uses super_len to size a request body?,1.0,0.5,0.5446428571428571,1.0,1.0,1.0,10,9306,21.54280000831932
+requests,v7+max_hops=0+top_k=10,callers,Who calls should_bypass_proxies?,1.0,1.0,1.0,0.0,1.0,0.5,10,11611,29.819899995345622
+requests,v7+max_hops=0+top_k=10,callees,How does Session.prepare_request merge session-level and request-level settings?,1.0,1.0,0.986842105263158,1.0,1.0,1.0,10,13602,23.151100001996383
+requests,v7+max_hops=0+top_k=10,callees,How does HTTPAdapter.send get a connection from the pool?,1.0,1.0,0.6591836734693878,1.0,1.0,1.0,10,13182,24.564200022723526
+requests,v7+max_hops=0+top_k=10,callees,How does the adapter turn a urllib3 response into a requests Response?,1.0,1.0,1.0,0.0,1.0,0.5,10,14023,24.871200002962723
+requests,v7+max_hops=0+top_k=10,inheritance,Which exceptions are subclasses of ConnectionError?,0.3333333333333333,0.3333333333333333,0.3333333333333333,0.0,1.0,0.5,10,7745,22.586100007174537
+requests,v7+max_hops=0+top_k=10,inheritance,Which authentication classes derive from AuthBase?,1.0,1.0,0.5766703176341731,0.0,1.0,0.5,10,6632,21.386300009908155
+requests,v7+max_hops=0+top_k=10,inheritance,What interface must a transport adapter implement?,1.0,1.0,0.5517241379310345,1.0,1.0,1.0,10,8372,21.208000020124018
+requests,v7+max_hops=0+top_k=10,flow,What happens under the hood when you call requests.get?,1.0,0.75,0.5099732025482859,1.0,1.0,1.0,10,13966,25.086000008741394
+requests,v7+max_hops=0+top_k=10,flow,How does a Session send a prepared request through a transport adapter and build the response?,0.5,0.25,0.10003707823507602,0.0,0.0,0.2,10,15039,23.15140000428073
+requests,v7+max_hops=0+top_k=10,flow,What happens when a server answers a digest-auth request with 401?,1.0,1.0,0.469760900140647,1.0,1.0,1.0,10,9587,22.192100004758686
+requests,v7+max_hops=0+top_k=10,flow,How do cookies from a response end up stored in the session?,0.5,0.0,0.09086021505376343,0.0,0.0,0.16666666666666666,10,10767,22.2836000029929
+sample_repo,v6,locate,Where are records written to the database?,1.0,1.0,1.0,1.0,1.0,1.0,12,4292,26.893000002019107
+sample_repo,v6,locate,How are people's names normalised?,1.0,1.0,1.0,1.0,1.0,1.0,5,1910,25.21970000816509
+sample_repo,v6,locate,Which code reads a CSV file?,1.0,1.0,1.0,1.0,1.0,1.0,5,1625,24.27760002319701
+sample_repo,v6,locate,How is the moving average of ages computed?,1.0,1.0,1.0,1.0,1.0,1.0,8,3320,25.2463000069838
+sample_repo,v6,locate,Where does the program parse command line arguments?,1.0,1.0,1.0,1.0,1.0,1.0,12,4671,26.676700013922527
+sample_repo,v6,locate,What sound does a bat make?,1.0,1.0,0.5,1.0,1.0,1.0,8,1912,22.89649998419918
+sample_repo,v6,callers,Which functions call normalize_name?,1.0,1.0,1.0,0.0,1.0,0.5,12,4533,28.258200007257983
+sample_repo,v6,callers,Who uses SQLiteStore?,1.0,1.0,1.0,0.0,0.0,0.2,12,4137,24.556399992434308
+sample_repo,v6,callers,What calls create_bat?,1.0,1.0,1.0,0.0,1.0,0.5,12,3798,21.561199973803014
+sample_repo,v6,callers,Which code calls rolling_average?,1.0,1.0,1.0,0.0,1.0,0.5,12,4773,22.541599988471717
+sample_repo,v6,callees,How does run_pipeline clean the records it loads?,1.0,1.0,1.0,0.0,1.0,0.3333333333333333,12,4711,22.104600007878616
+sample_repo,v6,callees,Which loader does get_loader return for a JSON file?,1.0,1.0,1.0,1.0,1.0,1.0,6,1841,24.344999983441085
+sample_repo,v6,callees,What does the report function print and how does it get the data?,1.0,1.0,1.0,1.0,1.0,1.0,7,2512,21.4834000216797
+sample_repo,v6,inheritance,Which classes inherit from Animal?,1.0,1.0,0.6,0.0,1.0,0.5,4,978,20.416099985595793
+sample_repo,v6,inheritance,What does DataProcessor inherit from and which method does it override?,1.0,1.0,0.95,1.0,1.0,1.0,7,2498,24.177400016924366
+sample_repo,v6,inheritance,Which loaders implement the BaseLoader interface?,1.0,1.0,0.5857142857142856,0.0,1.0,0.5,4,1343,21.658499987097457
+sample_repo,v6,flow,Trace what happens to a CSV row from loading until it is stored.,1.0,1.0,0.8400000000000001,1.0,1.0,1.0,12,4435,22.759999992558733
+sample_repo,v6,flow,What happens when run_zoo is executed?,1.0,1.0,0.875,1.0,1.0,1.0,8,2109,20.937499997671694
+sample_repo,v6,flow,How does a bat both walk and fly?,1.0,1.0,0.5,1.0,1.0,1.0,5,1182,21.050100011052564
+sample_repo,v7,locate,Where are records written to the database?,1.0,1.0,1.0,1.0,1.0,1.0,11,4083,30.114299996057525
+sample_repo,v7,locate,How are people's names normalised?,1.0,1.0,1.0,1.0,1.0,1.0,5,1951,27.352300006896257
+sample_repo,v7,locate,Which code reads a CSV file?,1.0,1.0,1.0,1.0,1.0,1.0,5,1567,22.972599981585518
+sample_repo,v7,locate,How is the moving average of ages computed?,1.0,1.0,1.0,1.0,1.0,1.0,8,3311,23.599800013471395
+sample_repo,v7,locate,Where does the program parse command line arguments?,1.0,1.0,1.0,1.0,1.0,1.0,12,3920,25.593900005333126
+sample_repo,v7,locate,What sound does a bat make?,1.0,1.0,0.5,1.0,1.0,1.0,8,1850,24.30119999917224
+sample_repo,v7,callers,Which functions call normalize_name?,1.0,1.0,1.0,0.0,1.0,0.5,10,3816,22.86259998800233
+sample_repo,v7,callers,Who uses SQLiteStore?,1.0,1.0,0.6666666666666666,0.0,0.0,0.2,7,2430,23.942200001329184
+sample_repo,v7,callers,What calls create_bat?,1.0,1.0,1.0,0.0,1.0,0.5,9,2276,23.43589998781681
+sample_repo,v7,callers,Which code calls rolling_average?,1.0,1.0,1.0,0.0,1.0,0.5,12,4730,23.48649999476038
+sample_repo,v7,callees,How does run_pipeline clean the records it loads?,1.0,1.0,1.0,0.0,1.0,0.3333333333333333,12,4711,23.426100000506267
+sample_repo,v7,callees,Which loader does get_loader return for a JSON file?,1.0,1.0,1.0,1.0,1.0,1.0,5,1507,23.48060000804253
+sample_repo,v7,callees,What does the report function print and how does it get the data?,1.0,1.0,1.0,1.0,1.0,1.0,8,2725,25.04929999122396
+sample_repo,v7,inheritance,Which classes inherit from Animal?,1.0,1.0,0.6,0.0,1.0,0.5,4,930,21.578699990641326
+sample_repo,v7,inheritance,What does DataProcessor inherit from and which method does it override?,1.0,1.0,0.95,1.0,1.0,1.0,7,2549,25.20929998718202
+sample_repo,v7,inheritance,Which loaders implement the BaseLoader interface?,1.0,1.0,0.5857142857142856,0.0,1.0,0.5,4,1317,22.9352000169456
+sample_repo,v7,flow,Trace what happens to a CSV row from loading until it is stored.,1.0,1.0,1.0,1.0,1.0,1.0,12,4396,22.597100003622472
+sample_repo,v7,flow,What happens when run_zoo is executed?,1.0,1.0,0.875,1.0,1.0,1.0,9,2276,22.43150002323091
+sample_repo,v7,flow,How does a bat both walk and fly?,1.0,1.0,0.5,1.0,1.0,1.0,5,1120,22.278499993262812
+sample_repo,v7+max_ambiguous=3,locate,Where are records written to the database?,1.0,1.0,1.0,1.0,1.0,1.0,12,4167,24.290100001962855
+sample_repo,v7+max_ambiguous=3,locate,How are people's names normalised?,1.0,1.0,1.0,1.0,1.0,1.0,5,1951,32.547200011322275
+sample_repo,v7+max_ambiguous=3,locate,Which code reads a CSV file?,1.0,1.0,1.0,1.0,1.0,1.0,5,1619,25.605899980291724
+sample_repo,v7+max_ambiguous=3,locate,How is the moving average of ages computed?,1.0,1.0,1.0,1.0,1.0,1.0,8,3311,23.209900013171136
+sample_repo,v7+max_ambiguous=3,locate,Where does the program parse command line arguments?,1.0,1.0,1.0,1.0,1.0,1.0,12,4036,24.847599997883663
+sample_repo,v7+max_ambiguous=3,locate,What sound does a bat make?,1.0,1.0,0.5,1.0,1.0,1.0,8,1850,22.437799983890727
+sample_repo,v7+max_ambiguous=3,callers,Which functions call normalize_name?,1.0,1.0,1.0,0.0,1.0,0.5,12,4451,22.37540000351146
+sample_repo,v7+max_ambiguous=3,callers,Who uses SQLiteStore?,1.0,1.0,0.6666666666666666,0.0,0.0,0.2,7,2430,22.761000000173226
+sample_repo,v7+max_ambiguous=3,callers,What calls create_bat?,1.0,1.0,1.0,0.0,1.0,0.5,9,2276,20.711699995445088
+sample_repo,v7+max_ambiguous=3,callers,Which code calls rolling_average?,1.0,1.0,1.0,0.0,1.0,0.5,12,4603,20.74840001296252
+sample_repo,v7+max_ambiguous=3,callees,How does run_pipeline clean the records it loads?,1.0,1.0,1.0,0.0,1.0,0.3333333333333333,12,4659,23.39310001116246
+sample_repo,v7+max_ambiguous=3,callees,Which loader does get_loader return for a JSON file?,1.0,1.0,1.0,1.0,1.0,1.0,5,1559,24.439500004518777
+sample_repo,v7+max_ambiguous=3,callees,What does the report function print and how does it get the data?,1.0,1.0,1.0,1.0,1.0,1.0,8,2751,22.71579997614026
+sample_repo,v7+max_ambiguous=3,inheritance,Which classes inherit from Animal?,1.0,1.0,0.6,0.0,1.0,0.5,4,930,20.13069999520667
+sample_repo,v7+max_ambiguous=3,inheritance,What does DataProcessor inherit from and which method does it override?,1.0,1.0,0.95,1.0,1.0,1.0,7,2575,21.727000013925135
+sample_repo,v7+max_ambiguous=3,inheritance,Which loaders implement the BaseLoader interface?,1.0,1.0,0.5857142857142856,0.0,1.0,0.5,4,1343,20.392000005813316
+sample_repo,v7+max_ambiguous=3,flow,Trace what happens to a CSV row from loading until it is stored.,1.0,1.0,1.0,1.0,1.0,1.0,12,4238,24.25819999189116
+sample_repo,v7+max_ambiguous=3,flow,What happens when run_zoo is executed?,1.0,1.0,0.875,1.0,1.0,1.0,9,2276,22.21049999934621
+sample_repo,v7+max_ambiguous=3,flow,How does a bat both walk and fly?,1.0,1.0,0.5,1.0,1.0,1.0,5,1120,21.779100003186613
+sample_repo,v7+max_hops=0+top_k=10,locate,Where are records written to the database?,1.0,1.0,1.0,1.0,1.0,1.0,10,3822,25.098000012803823
+sample_repo,v7+max_hops=0+top_k=10,locate,How are people's names normalised?,1.0,1.0,1.0,1.0,1.0,1.0,10,3246,30.058500007726252
+sample_repo,v7+max_hops=0+top_k=10,locate,Which code reads a CSV file?,1.0,1.0,1.0,1.0,1.0,1.0,10,3630,23.667700006626546
+sample_repo,v7+max_hops=0+top_k=10,locate,How is the moving average of ages computed?,1.0,1.0,1.0,1.0,1.0,1.0,10,3907,23.847300006309524
+sample_repo,v7+max_hops=0+top_k=10,locate,Where does the program parse command line arguments?,1.0,1.0,1.0,1.0,1.0,1.0,10,3118,24.180099979275838
+sample_repo,v7+max_hops=0+top_k=10,locate,What sound does a bat make?,1.0,1.0,0.5,1.0,1.0,1.0,10,2530,22.49810000648722
+sample_repo,v7+max_hops=0+top_k=10,callers,Which functions call normalize_name?,1.0,1.0,1.0,0.0,1.0,0.5,10,3296,22.81649998622015
+sample_repo,v7+max_hops=0+top_k=10,callers,Who uses SQLiteStore?,1.0,1.0,1.0,0.0,0.0,0.16666666666666666,10,3735,23.474900022847578
+sample_repo,v7+max_hops=0+top_k=10,callers,What calls create_bat?,1.0,1.0,1.0,0.0,1.0,0.5,10,2773,21.874099998967722
+sample_repo,v7+max_hops=0+top_k=10,callers,Which code calls rolling_average?,1.0,1.0,1.0,0.0,1.0,0.5,10,3824,20.962299982784316
+sample_repo,v7+max_hops=0+top_k=10,callees,How does run_pipeline clean the records it loads?,1.0,1.0,1.0,0.0,1.0,0.3333333333333333,10,4015,23.283699993044138
+sample_repo,v7+max_hops=0+top_k=10,callees,Which loader does get_loader return for a JSON file?,1.0,1.0,1.0,1.0,1.0,1.0,10,2898,23.586399998748675
+sample_repo,v7+max_hops=0+top_k=10,callees,What does the report function print and how does it get the data?,0.5,0.5,0.5,1.0,1.0,1.0,10,3910,20.85950001492165
+sample_repo,v7+max_hops=0+top_k=10,inheritance,Which classes inherit from Animal?,1.0,1.0,0.6,0.0,1.0,0.5,10,2661,20.975600025849417
+sample_repo,v7+max_hops=0+top_k=10,inheritance,What does DataProcessor inherit from and which method does it override?,1.0,1.0,0.95,1.0,1.0,1.0,10,3515,23.277899977983907
+sample_repo,v7+max_hops=0+top_k=10,inheritance,Which loaders implement the BaseLoader interface?,1.0,1.0,0.9285714285714286,0.0,1.0,0.5,10,3368,22.731200006091967
+sample_repo,v7+max_hops=0+top_k=10,flow,Trace what happens to a CSV row from loading until it is stored.,0.8,0.8,0.64,1.0,1.0,1.0,10,3974,22.533299983479083
+sample_repo,v7+max_hops=0+top_k=10,flow,What happens when run_zoo is executed?,1.0,1.0,0.875,1.0,1.0,1.0,10,2848,21.72930000233464
+sample_repo,v7+max_hops=0+top_k=10,flow,How does a bat both walk and fly?,1.0,1.0,0.5,1.0,1.0,1.0,10,2510,22.565099992789328

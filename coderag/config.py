@@ -75,6 +75,8 @@ class RAGConfig:
     chunk_methods: bool = False             # class outline chunk + one chunk per method
     dedup_content: bool = False             # merge chunks with same name + normalised hash
     structural: bool = False                # reverse index + docstring-aware embeddings
+    call_resolution: str = "name"           # "name" (bare-name match) | "scoped" (resolve.py)
+    max_ambiguous: int = 0                  # scoped: link obj.foo() to <= this many classes
 
     # ── Embedding ───────────────────────────────────────────────────────────
     embed_model: str = "all-MiniLM-L6-v2"
@@ -158,6 +160,13 @@ _V6 = replace(
     max_input_tokens=8192,              # Qwen2.5 handles 32k; context is trimmed to fit
 )
 
+_V7 = replace(
+    _V6, name="v7",
+    description="v6 + scope-aware call resolution (imports, self/super, external "
+                "modules) instead of bare-name matching",
+    call_resolution="scoped",
+)
+
 _V0 = RAGConfig(
     name="v0",
     description="Baseline: concatenate all files, fixed 1000-char chunks, flan-t5-base",
@@ -169,8 +178,8 @@ _V0 = RAGConfig(
     max_input_tokens=1024, max_new_tokens=100,
 )
 
-VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6)}
-DEFAULT_VERSION = "v6"
+VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6, _V7)}
+DEFAULT_VERSION = "v7"
 
 
 def get_config(version=DEFAULT_VERSION, **overrides):

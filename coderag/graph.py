@@ -74,11 +74,23 @@ def build_name_index(chunks):
     return index
 
 
+def _name_neighbors(chunks, name_index, idx, include_callers):
+    """Neighbours by bare name: every chunk named like a base, callee, parent or caller."""
+    meta = chunks[idx]
+    neighbor_names = list(meta["base_classes"]) + list(meta["calls"])
+    if meta.get("parent"):
+        neighbor_names.append(meta["parent"])      # method -> its class outline
+    if include_callers:
+        neighbor_names += list(meta["called_by"])
+    return [j for name in neighbor_names for j in name_index.get(name, [])]
+
+
 def expand_bfs(chunks, name_index, seeds, max_hops=3, max_expansion=8,
-               include_callers=False):
+               include_callers=False, code_graph=None):
     """
     BFS from `seeds` (hop 0) over base_classes + calls edges, and called_by
-    edges when `include_callers` is set. Neighbour names are resolved through
+    edges when `include_callers` is set. Neighbours come from `code_graph`
+    (scope-aware resolution, resolve.CodeGraph) when given, otherwise from
     `name_index` (bare chunk names).
 
     max_hops=1, max_expansion=2 reproduces v4's 1-hop expansion.
@@ -97,22 +109,19 @@ def expand_bfs(chunks, name_index, seeds, max_hops=3, max_expansion=8,
         if hop >= max_hops:
             continue
 
-        meta = chunks[idx]
-        neighbor_names = list(meta["base_classes"]) + list(meta["calls"])
-        if meta.get("parent"):
-            neighbor_names.append(meta["parent"])      # method -> its class outline
-        if include_callers:
-            neighbor_names += list(meta["called_by"])
+        if code_graph is not None:
+            neighbors = code_graph.neighbors(idx, include_callers)
+        else:
+            neighbors = _name_neighbors(chunks, name_index, idx, include_callers)
 
-        for name in neighbor_names:
-            for neighbor_idx in name_index.get(name, []):
-                if neighbor_idx in seen:
-                    continue
-                seen.add(neighbor_idx)
-                expanded.append((neighbor_idx, hop + 1))
-                if len(expanded) >= max_expansion:
-                    return expanded
-                frontier.append((neighbor_idx, hop + 1))
+        for neighbor_idx in neighbors:
+            if neighbor_idx in seen:
+                continue
+            seen.add(neighbor_idx)
+            expanded.append((neighbor_idx, hop + 1))
+            if len(expanded) >= max_expansion:
+                return expanded
+            frontier.append((neighbor_idx, hop + 1))
 
     return expanded
 

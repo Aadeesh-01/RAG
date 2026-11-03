@@ -117,6 +117,64 @@ def _get_calls(node):
     return sorted(calls)
 
 
+def _get_call_sites(nodes):
+    """
+    Sorted unique [kind, base, name] for every call inside `nodes`, keeping
+    the form of the call so it can be resolved with scope information:
+      foo()            -> ["name",  "",    "foo"]
+      self.foo()       -> ["self",  "",    "foo"]   (also cls.foo())
+      super().foo()    -> ["super", "",    "foo"]
+      mod.foo()        -> ["attr",  "mod", "foo"]   (base is a plain name)
+      a.b.foo()        -> ["attr",  "",    "foo"]   (base unknown)
+    """
+    sites = set()
+    for root in nodes:
+        for n in ast.walk(root):
+            if not isinstance(n, ast.Call):
+                continue
+            func = n.func
+            if isinstance(func, ast.Name):
+                sites.add(("name", "", func.id))
+            elif isinstance(func, ast.Attribute):
+                value = func.value
+                if isinstance(value, ast.Name) and value.id in ("self", "cls"):
+                    sites.add(("self", "", func.attr))
+                elif isinstance(value, ast.Name):
+                    sites.add(("attr", value.id, func.attr))
+                elif (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                      and value.func.id == "super"):
+                    sites.add(("super", "", func.attr))
+                else:
+                    sites.add(("attr", "", func.attr))
+    return [list(s) for s in sorted(sites)]
+
+
+def get_imports(tree):
+    """
+    Map each name bound by an import anywhere in the file to
+    [module, symbol, level]:
+      import os.path          -> {"os": ["os", "", 0]}
+      import numpy as np      -> {"np": ["numpy", "", 0]}
+      from .core import Cmd   -> {"Cmd": ["core", "Cmd", 1]}
+      from . import types     -> {"types": ["", "types", 1]}
+    """
+    imports = {}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.asname:
+                    imports[alias.asname] = [alias.name, "", 0]
+                else:
+                    top = alias.name.split(".")[0]
+                    imports[top] = [top, "", 0]
+        elif isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name != "*":
+                    imports[alias.asname or alias.name] = [node.module or "", alias.name,
+                                                           node.level]
+    return imports
+
+
 def _get_decorators(node):
     """Return a list of decorator name strings on a function/class node."""
     names = []
@@ -182,6 +240,7 @@ def _make_chunk(content, type_, file_path, name, repo_path, node, start_line, en
         "base_classes": _get_base_classes(node) if is_class else [],
         "methods":      _get_methods(node) if is_class else [],
         "calls":        _get_calls(node) if node is not None else [],
+        "call_sites":   _get_call_sites([node]) if node is not None else [],
         "decorators":   _get_decorators(node) if is_def else [],
         "docstring":    _get_docstring(node) if is_def else "",
         "parent":       "",             # owning class, for method chunks
@@ -226,8 +285,9 @@ def _class_chunks(node, file_path, repo_path, lines, min_segment_chars):
     outline = _make_chunk(_class_outline(node, lines), "class", file_path, node.name,
                           repo_path, node, _start_line(node), node.end_lineno)
     # the outline's calls are those outside method bodies (attributes, nested classes)
-    outline["calls"] = sorted({c for item in node.body if not isinstance(item, _DEF_TYPES)
-                               for c in _get_calls(item)})
+    non_methods = [item for item in node.body if not isinstance(item, _DEF_TYPES)]
+    outline["calls"] = sorted({c for item in non_methods for c in _get_calls(item)})
+    outline["call_sites"] = _get_call_sites(non_methods)
     chunks = [outline]
 
     for item in node.body:

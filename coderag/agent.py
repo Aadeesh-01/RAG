@@ -31,7 +31,13 @@ class RAGCodebaseAgent:
         if not self.documents:
             raise ValueError("No chunks found. Check repo path and file filters.")
 
-        if self.config.structural:
+        self.code_graph = None
+        if self.config.structural and self.config.call_resolution == "scoped":
+            from .resolve import CodeGraph
+            self.code_graph = CodeGraph(self.documents, repo_path, self.config.max_ambiguous)
+            self.code_graph.apply_called_by()
+            self._log(f"[RAG] Scoped call graph: {self.code_graph.edge_counts()}")
+        elif self.config.structural:
             build_reverse_index(self.documents, verbose)
         self._name_index = build_name_index(self.documents)
 
@@ -98,6 +104,7 @@ class RAGCodebaseAgent:
             max_hops=cfg.max_hops,
             max_expansion=cfg.max_expansion,
             include_callers=include_callers,
+            code_graph=self.code_graph,
         )
         if expansions:
             self._log(f"\n[EXPAND] Graph BFS added {len(expansions)} chunk(s) "

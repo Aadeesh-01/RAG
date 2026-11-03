@@ -11,7 +11,8 @@ fixed-window baseline to AST chunking with call/inheritance-graph expansion:
 | `v3` | Context cleaning (signatures, returns, keyword lines) |
 | `v4` | Structural metadata (calls, bases, methods, docstrings), dedup, `called_by` index, 1-hop graph expansion |
 | `v5` | Multi-hop BFS expansion (`max_hops`, `max_expansion`, `include_callers`) and a hop-weighted context budget |
-| `v6` | Fixes found by the eval: index large files, method-level chunks, larger raw context, caller-aware expansion. **Default.** |
+| `v6` | Fixes found by the eval: index large files, method-level chunks, larger raw context, caller-aware expansion |
+| `v7` | Scope-aware call resolution (imports, `self`/`super`, external modules) instead of bare-name matching. **Default.** |
 
 Each version is a preset of a single `RAGConfig` ([coderag/config.py](coderag/config.py)), so comparing
 versions means changing one flag. The code is not copied per version. v0–v5 are kept unchanged as the
@@ -21,8 +22,8 @@ research record.
 
 [eval/](eval/) scores the context each version would send to the LLM against hand-labelled gold symbols
 on `sample_repo`, [psf/requests](https://github.com/psf/requests) and
-[pallets/click](https://github.com/pallets/click). On the real repos, v6 roughly doubles v5's recall
-(requests 0.38 → 0.79, click 0.33 → 0.86) and beats the naive v0 baseline. See
+[pallets/click](https://github.com/pallets/click). On the real repos, v7 more than doubles v5's recall
+(requests 0.38 → 0.83, click 0.33 → 0.88) and beats the naive v0 baseline. See
 [eval/README.md](eval/README.md) for the method, full results and findings.
 
 ## Setup
@@ -38,7 +39,7 @@ for v1–v5, or flan-t5-base (~1 GB) for v0. Everything runs on CPU. Set `device
 
 ## Usage
 
-Commands default to the bundled [sample_repo/](sample_repo/) and the `v6` preset. Pass `--repo PATH` and
+Commands default to the bundled [sample_repo/](sample_repo/) and the `v7` preset. Pass `--repo PATH` and
 `--version vN` to change them.
 
 ```bash
@@ -67,7 +68,8 @@ agent.query("Which functions call the data processing logic?", include_callers=T
 coderag/
   config.py     RAGConfig + v0–v5 presets
   chunking.py   file discovery, fixed-window and AST chunkers, metadata, dedup
-  graph.py      call resolution, called_by reverse index, BFS expansion, graph export data
+  graph.py      name-based call graph (v4-v6), called_by index, BFS expansion, graph export data
+  resolve.py    scope-aware call resolution (v7): imports, self/super, re-exports
   index.py      sentence-transformers + FAISS vector index
   context.py    keyword filter, chunk cleaning, headers, hop-weighted budgets
   llm.py        flan-t5 (seq2seq) and Qwen chat backends
