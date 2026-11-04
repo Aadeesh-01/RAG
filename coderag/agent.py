@@ -189,16 +189,16 @@ class RAGCodebaseAgent:
             self._repo_map = repo_map(self.documents)
         return self._repo_map
 
-    def _via_names(self, idx, vias):
-        """Names on the call-graph path to chunk `idx`, from the vector hit: ['A', 'B']."""
-        names, node, seen = [], idx, {idx}
+    def _via_path(self, idx, vias):
+        """Chunk indexes on the call-graph path to chunk `idx`, from the vector hit: [a, b]."""
+        path, node, seen = [], idx, {idx}
         while node in vias:
             node = vias[node][0]
             if node in seen:                    # defensive: a path never revisits a chunk
                 break
             seen.add(node)
-            names.append(public_name(self.metadata[node]))
-        return names[::-1]
+            path.append(node)
+        return path[::-1]
 
     def _explain(self, idx, trace, chunk, meta, hop, question, cfg, n):
         """Debug info for one source: how it was retrieved and what it costs."""
@@ -270,7 +270,8 @@ class RAGCodebaseAgent:
                    for n, (_, meta, hop) in enumerate(retrieved, 1)]
         for source in sources:
             if source.hop:
-                source.via = self._via_names(source.chunk_id, vias)
+                source.via_ids = self._via_path(source.chunk_id, vias)
+                source.via = [public_name(self.metadata[i]) for i in source.via_ids]
         if debug:
             for n, (source, (chunk, meta, hop)) in enumerate(zip(sources, retrieved), 1):
                 source.debug = self._explain(source.chunk_id, trace, chunk, meta, hop,
@@ -356,6 +357,7 @@ class Source:
     qname: str
     chunk_id: int = -1  # position in agent.documents (= graph node id)
     via: list | None = None     # hop > 0: names on the call-graph path from the vector hit
+    via_ids: list | None = None  # the same path as chunk ids (graph node ids), for drawing it
     debug: dict | None = None   # stream(debug=True): rank/similarity or graph path
 
     @classmethod

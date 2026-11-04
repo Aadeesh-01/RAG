@@ -178,7 +178,9 @@ The dark colourway (graphite) re-derives every token with the same hues: ground 
 
 ## Layout
 
-A full-height application shell: a 56px top bar (wordmark, repository tabs that scroll sideways, Add repo, Saved, Settings), an optional banner row, then two panes. The chat pane (about 53%) holds the repository header, the suggested questions as a ruled list, the conversation, and the question field pinned to its foot; its content column is capped at 46rem for reading. Once the first question is asked the header compacts to one ruled line (name, counts, commit, Clear chat) and the suggestions leave, so the answer owns the top of the pane; they return when the chat is cleared. The right pane (about 47%) is two readouts behind a Code | Call graph tab pair: the code viewer, which an answer opens at its first cited source, and the graph. Before any question the chat pane shows the repository's shape (packages, most called, entry points, deepest hierarchy) and the graph shows the whole call graph when the repository is small enough to read at once (otherwise it waits for a question, with the full graph one click away).
+Three pages. The home page (`/`) makes the case with the product's own signature, a real cited answer, then how an answer is made and the repositories ready to ask; it is a scrolling page on the same tokens and components as the app, with one amber action. Sign-in (`/login`) is one centred panel: GitHub first (the coming way in), then the demo account. The app (`/app`) is behind sign-in.
+
+The app is a full-height application shell: a 56px top bar (wordmark, repository tabs that scroll sideways, Add repo, Saved, Settings), an optional banner row, then two panes. The chat pane (about 53%) holds the repository header, the suggested questions as a ruled list, the conversation, and the question field pinned to its foot; its content column is capped at 46rem for reading. Once the first question is asked the header compacts to one ruled line (name, counts, commit, Clear chat) and the suggestions leave, so the answer owns the top of the pane; they return when the chat is cleared. The right pane (about 47%) is two readouts behind a Code | Call graph tab pair: the code viewer, which an answer opens at its first cited source, and the graph. Before any question the chat pane shows the repository's shape (packages, most called, entry points, deepest hierarchy) and the graph shows the whole call graph when the repository is small enough to read at once (otherwise it waits for a question, with the full graph one click away).
 
 Under 60rem the panes become one, switched by a Chat / Code / Graph tab strip, and nothing switches the pane without being asked; the wordmark collapses to its mark, and the repository tab row fades at whichever edge has more tabs scrolled out of view. Under 40rem the question entry widens to 92% and source rows restack so the location stays visible.
 
@@ -193,7 +195,7 @@ Flat by construction. There are no shadows anywhere, in either colourway. Depth 
 
 ## Shapes
 
-Three radii, one per nesting level: 10px on panels and dialogs, 6px on controls (buttons, inputs, fieldsets, code blocks), 4px on chips and citation keys. Rules are always 1px. Graph glyphs are the system's one recurring geometry, and they say what the answer did with the code: a filled, ringed circle for code the answer cites, a hollow ring for code that was retrieved but not cited, a small grey dot for a neighbour that never reached the model. The legend keys are the same glyphs, and the sources table repeats the meaning with its filled or soft S-badge.
+Three radii, one per nesting level: 10px on panels and dialogs, 6px on controls (buttons, inputs, fieldsets, code blocks), 4px on chips and citation keys. Rules are always 1px. Graph glyphs are the system's one recurring geometry, and they say what the answer did with the code: a filled, ringed circle for code the answer cites, a hollow ring for code that was retrieved but not cited, a small grey dot for a neighbour that never reached the model. The legend keys are the same glyphs, and the sources table repeats the meaning with its filled or soft S-badge. Hubs read larger (a node's size follows how many calls touch it); calls are gently curved lines, a call each way bowing apart; files are soft regions named at their top edge; the call-graph paths that reached the answer's sources are Readout Blue lines.
 
 ## Components
 
@@ -231,7 +233,15 @@ Quiet and exact: one filled action, the rest step back.
 The right pane's first readout: the whole file at the indexed commit, syntax-coloured in the system's two voices (names in Readout Blue, strings a quiet green, comments muted, amber nowhere), with real line numbers drawn in a gutter that copying leaves out. The answer's sources are tinted: cited lines Readout Blue soft, retrieved lines half that, each range tagged with its S-number at its first line, and the range in focus marked by a 2px blue rule in the gutter. A strip above lists the files the answer used. A newly opened file jumps to its range; moving within a file scrolls smoothly.
 
 ### The Call Graph
-A live force layout on the deepest surface: nodes can be dragged (the layout reacts and settles), the view zoomed with the wheel or a pinch and panned. After an answer it shows the answer's code and its direct neighbours, each piece of the answer's code labelled with its S-number; "Show full graph" is one click away. A node opens a small card (its S-number, where it lives, Show in code, Ask about this). Keyboard: one tab stop, the arrow keys move between nodes in S-number order, Enter opens the card, Esc closes it.
+A live force layout on the deepest surface, and the system's one place for motion.
+- **Continuity:** the graph remembers where every node was. A new view (an answer arriving, the full graph, another layout) is laid out from those positions and glides there (560ms, exponential ease-out) while the old view steps back; new nodes grow out of a neighbour that was already on screen.
+- **Structure:** files are soft regions (a pull keeps each file's code together); once there is an answer they become hairline outlines so the evidence leads. Hubs read larger; calls curve.
+- **Evidence:** the paths that pulled sources into the answer are drawn in Readout Blue, and the first time a written answer's graph is on screen, dots travel each path the way retrieval walked it, once (about 2.4s), then rest.
+- **Pointing:** pointing at a node (or focusing it, or pointing at its row in the sources table) keeps it, its calls and its path; everything else steps back to 18%, and the names of what stays are shown at a readable size.
+- **Layouts:** Free (the force finds the shape) or By distance: rings whose distance from the centre is the call distance from the question (direct match, 1 call away, 2+ calls away, neighbours), each ring named.
+- **Camera:** drag nodes, wheel or pinch to zoom, drag the background to pan; − + and Fit buttons; double-click a node to zoom to its neighbourhood, the background to fit.
+- **Keyboard:** one tab stop; the arrow keys move between nodes in S-number order; Enter opens a node's card, Esc closes it; + and − zoom, 0 fits.
+- **Reduced motion:** views change in place and nothing flows; pointing, dimming and every state still show.
 
 ### The Evidence Entry (signature)
 A conversation turn is one notebook entry: the person's question as an amber-tinted note aligned right, then one raised panel holding the answer prose with inline blue citation chips, a meta line (who answered, in mono, and how long it took) with Copy and Save, and the sources table cut from the same surface. Each source row shows its id chip, the symbol and its `file:start-end` in mono (shortened in the middle so the file name survives), and, only when it isn't a direct match, the call-graph path that reached it ("via Session.send"). Once the answer is written the table splits: the cited rows under "Cited (n)", the rest folded closed under "Also retrieved (n)". Every retrieved graph node is labelled with the same S-number, so chip, row and node are one key. Following a citation opens that row and, on a wide screen, the file at the cited lines; choosing a graph node opens its row in turn. Source code always shows its real line numbers.
@@ -242,10 +252,13 @@ The rules above are about looks; these are about what is shown, which matters mo
 
 ### Graph
 - The answer graph shows the retrieved code and its direct neighbours as a live force layout: interactive first, not a static diagram.
+- Motion explains: a view becomes the next one by moving what's already there, and the answer's paths flow once to show how the evidence was reached. Nothing loops while you read.
+- Pointing at a node lights its calls and inheritance, not every member of its class.
+- File regions, ring guides and their names are obstacles: node labels are placed around them.
 - Labels keep at least 12px on screen at any zoom: the answer's labels (or, before a question, every label) hold their size while the graph shrinks, and the fit never zooms out past the point where that stops working. Past it, the view centres on what the answer cites, whole.
 - A label that would cover another moves to the free side of its node (below, above, right, left), cited code first.
 - The fit keeps the button row and the caption clear of the graph.
-- Small repositories show their whole graph before any question; large ones show it on request.
+- Small repositories show their whole graph before any question; large ones show it on request. Above 600 nodes views change without movement, and above 150 files aren't outlined: the graph stays responsive.
 - Calls on an object of unknown type are only drawn when they can't be a builtin (`path.append` is a list, not the repo's one class with `append`).
 
 ### Sources
@@ -278,4 +291,4 @@ The rules above are about looks; these are about what is shown, which matters mo
 - **Don't** put a second filled button beside the primary.
 - **Don't** join meta with middle dots or decorate labels with coloured dots; use columns, rules or separate elements.
 - **Don't** set labels in tracked capitals; labels are sentence case at 0.875rem, untracked.
-- **Don't** animate width, height or position; only transform and opacity, with a reduced-motion fallback.
+- **Don't** animate width, height or position; only transform and opacity, with a reduced-motion fallback. The one exception is the evidence flow on the answer's paths (a dash offset, on a handful of lines, briefly).

@@ -3,12 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>coderag</title>
-  <meta name="description" content="Ask questions about a Python codebase. Answers cite the exact source code, retrieved with a call graph.">
+  <title>coderag: answers about Python code, with citations</title>
+  <meta name="description" content="Ask questions about a Python codebase. Every answer cites the exact functions and lines it came from, found by search and the call graph.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c2026'/><circle cx='11' cy='12' r='3.5' fill='%23eef1f5'/><circle cx='22' cy='9' r='2.5' fill='%23eef1f5'/><circle cx='20' cy='22' r='3.5' fill='%23eef1f5'/><path d='M11 12L22 9M11 12L20 22' stroke='%23eef1f5' stroke-width='1.6'/></svg>">
   <script>
-    // the colourway before the first paint: paper unless the visitor chose dark,
-    // or chose to match a dark system
+    // links shared before the home page existed (/?repo=...&q=...) still open the app
+    if (/[?&](repo|q)=/.test(location.search)) location.replace("/app" + location.search);
     (function () {
       var choice = "light";
       try { choice = JSON.parse(localStorage.getItem("coderag.settings") || "{}").theme || "light"; } catch (e) {}
@@ -20,167 +20,86 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500&family=Atkinson+Hyperlegible+Mono:wght@400;500&display=swap">
   <link rel="stylesheet" href="styles.css">
-  <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"
-          integrity="sha384-CjloA8y00+1SDAUkjs099PVfnY2KmDC2BZnws9kh8D/lX1s46w6EPhpXdqMfjK6i" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
-          integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
-          integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"
-          integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
-  <script type="module" src="app.js"></script>
+  <link rel="stylesheet" href="site.css">
+  <script type="module" src="home.js"></script>
 </head>
-<body>
-  <a class="skip-link" href="#question">Skip to the question</a>
-  <header class="topbar">
-    <a class="brand" href="./" aria-label="coderag home">
+<body class="site">
+  <a class="skip-link" href="#main">Skip to the content</a>
+  <header class="site-top">
+    <a class="brand" href="/" aria-label="coderag home">
       <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><circle cx="11" cy="12" r="3.5"/><circle cx="22" cy="9" r="2.5"/><circle cx="20" cy="22" r="3.5"/><path d="M11 12L22 9M11 12L20 22"/></svg>
       <span>coderag</span>
     </a>
-    <nav id="repo-tabs" class="repo-tabs" aria-label="Repositories"></nav>
-    <button id="add-repo-button" class="add-repo" type="button" title="Index a public GitHub repository">Add repo</button>
-    <button id="saved-button" class="icon-button saved-button" type="button" aria-label="Saved answers" title="Saved answers">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1Z"/></svg>
-      <span id="saved-count" class="badge" hidden></span>
-    </button>
-    <button id="settings-button" class="icon-button" type="button" aria-label="Settings" title="Settings">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
-    </button>
+    <nav class="site-nav" aria-label="Site">
+      <a href="#how">How it works</a>
+      <a href="#repos">Repositories</a>
+      <span id="account" class="account"><a class="ghost" href="/login">Sign in</a></span>
+    </nav>
   </header>
 
-  <div id="banner" class="banner" hidden></div>
-
-  <div class="panel-tabs" role="tablist">
-    <button type="button" role="tab" data-panel="chat" aria-selected="true">Chat</button>
-    <button type="button" role="tab" data-panel="code" aria-selected="false">Code</button>
-    <button type="button" role="tab" data-panel="graph" aria-selected="false">Graph</button>
-  </div>
-
-  <main class="layout">
-    <section class="chat-panel" data-panel="chat" aria-label="Chat">
-      <div id="jobs" class="jobs" aria-live="polite"></div>
-      <p id="announce" class="visually-hidden" role="status" aria-live="polite"></p>
-      <div id="conversation" class="conversation">
-        <div id="repo-card" class="repo-card"></div>
-      </div>
-      <form id="ask-form" class="ask-form">
-        <div class="ask-field">
-          <textarea id="question" rows="1" maxlength="500" placeholder="Ask about the code" aria-label="Question" required
-                    aria-keyshortcuts="/" data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false" spellcheck="true"></textarea>
-          <kbd class="shortcut" aria-hidden="true" title="Press / to type a question">/</kbd>
+  <main id="main">
+    <section class="hero" aria-labelledby="hero-title">
+      <div class="hero-text">
+        <h1 id="hero-title">Ask a Python codebase. Get answers that cite the code.</h1>
+        <p class="lead">coderag reads a repository the way you would: it finds the functions that match your question, follows the calls between them, and answers with a citation for every claim. Click one and you are at the exact lines.</p>
+        <div class="hero-actions">
+          <a id="primary-cta" class="primary" href="/login?next=%2Fapp">Sign in to start</a>
+          <a class="ghost" href="/app?repo=sample">Try the sample repository</a>
         </div>
-        <button id="ask-button" type="submit" class="primary">Ask</button>
-      </form>
+        <p class="fine">Python only. Public GitHub repositories. Code is read, never run.</p>
+      </div>
+
+      <figure class="hero-example">
+        <!-- a real answer from the sample repository, in the app's own components -->
+        <div class="turn">
+          <div class="question">Which functions call normalize_name?</div>
+          <div class="answer">
+            <div class="body"><p><code>normalize_name</code> is called by <span class="cite-run"><code>DataProcessor.transform</code> <span class="cite">S3</span>.</span></p></div>
+            <div class="meta"><span class="by">Answered by <span class="measured">groq/openai/gpt-oss-120b</span> <span class="measured">1.0 s</span></span></div>
+            <section class="sources" aria-label="Sources of this example">
+              <h2>Cited (1)</h2>
+              <div class="source"><div class="row"><span class="sid cited">S3</span><span class="what"><span class="name">DataProcessor.transform</span> <span class="where">pipeline/processing.py:22-26</span></span></div></div>
+              <div class="source"><div class="row"><span class="sid">S1</span><span class="what"><span class="name">normalize_name</span> <span class="where">pipeline/processing.py:29-31</span></span></div></div>
+              <p class="also-line">Also retrieved (8), sent to the model as context, not cited</p>
+            </section>
+          </div>
+        </div>
+        <figcaption>From the sample repository: the answer names its evidence, and S3 opens <code>pipeline/processing.py</code> at lines 22 to 26.</figcaption>
+      </figure>
     </section>
 
-    <div class="pane-tabs" role="tablist" aria-label="Evidence">
-      <button type="button" role="tab" id="tab-code" data-panel="code" aria-controls="code-panel" aria-selected="false" tabindex="-1">Code</button>
-      <button type="button" role="tab" id="tab-graph" data-panel="graph" aria-controls="graph-panel" aria-selected="true">Call graph</button>
-    </div>
-
-    <section id="code-panel" class="code-panel" data-panel="code" role="tabpanel" aria-labelledby="tab-code">
-      <div class="code-toolbar">
-        <nav id="code-files" class="code-files" aria-label="Files this answer used" hidden></nav>
-        <a id="code-github" class="open" target="_blank" rel="noopener" hidden>Open on GitHub</a>
-      </div>
-      <h2 id="code-title" class="code-title"></h2>
-      <div id="code-view" class="code-view" tabindex="0" role="region" aria-labelledby="code-title"></div>
+    <section id="how" class="how" aria-labelledby="how-title">
+      <h2 id="how-title">How an answer is made</h2>
+      <ol class="steps">
+        <li>
+          <h3>It finds the code</h3>
+          <p>Every function, method and class is indexed on its own. Your question is matched against them, not against whole files.</p>
+        </li>
+        <li>
+          <h3>It follows the calls</h3>
+          <p>Calls are resolved from imports and classes, so the answer also sees what the matching code calls, and what calls it.</p>
+        </li>
+        <li>
+          <h3>It cites every claim</h3>
+          <p>The model answers from those sources only and cites them as S1, S2. Each citation opens the file at the lines it came from; the call graph shows the path that found it.</p>
+        </li>
+      </ol>
     </section>
 
-    <section id="graph-panel" class="graph-panel" data-panel="graph" role="tabpanel" aria-labelledby="tab-graph">
-      <div class="graph-toolbar">
-        <ul class="legend" aria-label="Graph key">
-          <li id="legend-cited" title="Code the answer cites"><i class="key key--cited" aria-hidden="true"></i>Cited <b id="count-cited"></b></li>
-          <li id="legend-retrieved" title="Sent to the model as context, but not cited in the answer"><i class="key" aria-hidden="true"></i>Also retrieved <b id="count-retrieved"></b></li>
-          <li id="legend-neighbour" title="Connected to the answer’s code, but not sent to the model"><i class="key key--neighbour" aria-hidden="true"></i>Neighbour</li>
-          <li><i class="key-line" aria-hidden="true"></i>Calls</li>
-          <li id="legend-inherits"><i class="key-line key-line--inherits" aria-hidden="true"></i>Inherits</li>
-        </ul>
+    <section id="repos" class="repos" aria-labelledby="repos-title">
+      <div class="repos-head">
+        <h2 id="repos-title">Ready to ask</h2>
+        <p>Indexed and waiting, or add any public GitHub repository from the app<span id="limits"></span>.</p>
       </div>
-      <div class="graph-wrap">
-        <svg id="graph" role="group" aria-label="Call graph. Use the arrow keys to move between functions and Enter to open one." aria-describedby="graph-hint"></svg>
-        <div class="graph-actions">
-          <button id="graph-toggle" type="button" class="ghost" hidden>Show full graph</button>
-        </div>
-        <p id="graph-hint" class="graph-hint"></p>
-        <aside id="node-card" class="node-card" hidden></aside>
-      </div>
+      <ul id="repo-list" class="repo-list" aria-live="polite">
+        <li class="loading">Loading the repositories…</li>
+      </ul>
     </section>
   </main>
 
-  <dialog id="saved" class="settings saved-dialog">
-    <div class="dialog-body">
-      <div class="dialog-head">
-        <h2>Saved answers</h2>
-        <button id="saved-close" type="button" class="ghost">Close</button>
-      </div>
-      <p class="note">Kept in this browser only. Other chats are cleared when you close or reload the page.</p>
-      <div id="saved-list" class="saved-list"></div>
-    </div>
-  </dialog>
-
-  <dialog id="add-repo" class="settings">
-    <form id="add-repo-form" method="dialog">
-      <h2>Add a GitHub repository</h2>
-      <label>Repository
-        <input id="repo-url" type="text" placeholder="https://github.com/owner/repo" autocomplete="off"
-               spellcheck="false" required aria-describedby="add-repo-error" data-gramm="false" data-enable-grammarly="false">
-      </label>
-      <p class="note">Public repositories only. A branch or tag works too: <code>…/tree/v2.0</code>.
-        Only Python files are downloaded and parsed. Code is never run. <span id="index-limits"></span></p>
-      <p id="add-repo-error" class="form-error" hidden></p>
-      <div class="dialog-actions">
-        <button value="cancel" type="button" class="ghost" id="add-repo-cancel">Cancel</button>
-        <button id="add-repo-submit" type="submit" class="primary">Add and index</button>
-      </div>
-    </form>
-  </dialog>
-
-  <dialog id="settings" class="settings">
-    <form method="dialog">
-      <h2>Settings</h2>
-
-      <fieldset>
-        <legend>Appearance</legend>
-        <label class="radio"><input type="radio" name="theme" value="light"> <span>Paper (light)</span></label>
-        <label class="radio"><input type="radio" name="theme" value="dark"> <span>Graphite (dark)</span></label>
-        <label class="radio"><input type="radio" name="theme" value="system"> <span>Match the system</span></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Answers</legend>
-        <label class="radio"><input type="radio" name="llm" value="server" checked> <span>Free model on this server <small id="server-model"></small></span></label>
-        <label class="radio"><input type="radio" name="llm" value="own"> <span>My own API key</span></label>
-        <div id="own-key-fields" class="indent">
-          <label>Provider
-            <select id="provider">
-              <option value="groq">Groq</option>
-              <option value="openrouter">OpenRouter</option>
-              <option value="gemini">Gemini</option>
-            </select>
-          </label>
-          <label>API key <input id="api-key" type="password" autocomplete="off" spellcheck="false" placeholder="Stored in this browser only"></label>
-          <label>Model <input id="model" type="text" placeholder="Provider default" spellcheck="false"></label>
-          <p class="note">The key is kept in this browser and sent with each question. The server uses it for that request only and never stores or logs it.</p>
-        </div>
-        <label class="radio"><input type="radio" name="llm" value="none"> <span>Sources only (no language model)</span></label>
-      </fieldset>
-
-      <fieldset>
-        <legend>Retrieval</legend>
-        <label>Code chunks from search <input id="top-k" type="number" min="1" max="10" step="1">
-          <small id="top-k-default"></small></label>
-        <label>Call-graph hops <input id="max-hops" type="number" min="0" max="4" step="1">
-          <small id="max-hops-default"></small></label>
-        <label class="check"><input id="include-callers" type="checkbox"> <span>Always follow callers (otherwise only for “who calls…” questions)</span></label>
-      </fieldset>
-
-      <div class="dialog-actions">
-        <button id="settings-reset" type="button" class="ghost reset">Reset to defaults</button>
-        <button value="cancel" type="submit" class="ghost">Cancel</button>
-        <button id="settings-save" value="save" type="submit" class="primary">Save</button>
-      </div>
-    </form>
-  </dialog>
+  <footer class="site-foot">
+    <p>Sign-in is a demo for now: any name and password work, and only the name is kept in this browser. GitHub sign-in is coming.</p>
+    <a href="https://github.com/Aadeesh-01/RAG" target="_blank" rel="noopener">Source on GitHub</a>
+  </footer>
 </body>
 </html>

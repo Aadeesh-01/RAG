@@ -1,6 +1,6 @@
 {
   "schemaVersion": 2,
-  "generatedAt": "2026-11-04T14:36:11+00:00",
+  "generatedAt": "2026-11-04T14:58:09+00:00",
   "title": "Design System: coderag",
   "extensions": {
     "colorMeta": {
@@ -321,8 +321,18 @@
         "purpose": "Progress bars and small state transitions."
       },
       {
+        "name": "graph-morph",
+        "value": "560ms exponential ease-out",
+        "purpose": "One graph view becoming the next (positions are remembered)."
+      },
+      {
+        "name": "evidence-flow",
+        "value": "0.8s linear dash travel, about 2.4s once",
+        "purpose": "The answer's call-graph paths, the first time they are on screen."
+      },
+      {
         "name": "reduced-motion",
-        "value": "transitions off, spinner frozen",
+        "value": "transitions off, spinner frozen, graph views change in place, no flow",
         "purpose": "prefers-reduced-motion: reduce."
       }
     ],
@@ -451,7 +461,7 @@
       "**Don't** put a second filled button beside the primary.",
       "**Don't** join meta with middle dots or decorate labels with coloured dots; use columns, rules or separate elements.",
       "**Don't** set labels in tracked capitals; labels are sentence case at 0.875rem, untracked.",
-      "**Don't** animate width, height or position; only transform and opacity, with a reduced-motion fallback."
+      "**Don't** animate width, height or position; only transform and opacity, with a reduced-motion fallback. The one exception is the evidence flow on the answer's paths (a dash offset, on a handful of lines, briefly)."
     ]
   }
 }

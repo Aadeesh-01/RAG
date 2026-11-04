@@ -49,8 +49,16 @@ class Demo:
         path = f"{self.root}/{file}" if self.root else file
         return f"{self.url}/blob/{self.sha}/{path}#L{start_line}-L{end_line}"
 
+    def counts(self):
+        """Files, functions (with methods) and classes in the newest index: people's words, not chunks."""
+        agent = self.agents.get(self.versions[-1]) if self.agents else None
+        docs = [d for d in getattr(agent, "documents", []) if "qname" in d]
+        return {"files": len({d["qname"].split("::")[0] for d in docs}),
+                "functions": sum(d["type"] in ("function", "method") for d in docs),
+                "classes": sum(d["type"] == "class" for d in docs)}
+
     def info(self):
-        return {"id": self.id, "name": self.name, "description": self.description,
+        return {"id": self.id, "name": self.name, "description": self.description, "counts": self.counts(),
                 "url": self.url, "sha": self.sha, "root": self.root, "questions": self.questions,
                 "stats": self.stats, "built": self.built, "versions": self.versions,
                 "kind": self.kind, "ref": self.ref}

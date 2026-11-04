@@ -121,3 +121,18 @@ test("a chip stays on the line of the word before it", () => {
   assert.match(html, /<span class="cite-run">normalize_name <a href="#" class="cite" data-source="2">S2<\/a>\.<\/span>/);
   assert.match(html, /<span class="cite-run">Then <a[^>]*>S1<\/a> <a[^>]*>S3<\/a><\/span>/);
 });
+
+import { initials, safeNext } from "../auth.js";
+
+test("after sign-in, only paths on this site are followed", () => {
+  assert.equal(safeNext("/app?repo=sample&q=x"), "/app?repo=sample&q=x");
+  for (const bad of ["https://evil.example", "//evil.example/app", "/\\evil.example", "javascript:alert(1)", "", null]) {
+    assert.equal(safeNext(bad), "/app", String(bad));
+  }
+});
+
+test("avatar initials", () => {
+  assert.equal(initials("Ada Lovelace"), "AL");
+  assert.equal(initials("ada@example.com"), "AD");
+  assert.equal(initials("x"), "X");
+});

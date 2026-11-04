@@ -1,0 +1,98 @@
+/* Home and sign-in pages. Built on styles.css (tokens, buttons, fields, the answer components),
+   so the site and the app are one product. */
+
+body.site { display: block; height: auto; min-height: 100dvh; }
+.site main { display: block; }
+
+/* top bar: the wordmark, then a few quiet links */
+.site-top { display: flex; align-items: center; justify-content: space-between; gap: var(--space-md);
+            max-width: 72rem; height: var(--bar-height); margin: 0 auto; padding: 0 var(--space-lg); }
+.site-nav { display: flex; align-items: center; gap: var(--space-lg); }
+.site-nav > a { color: var(--color-ink-2); font-size: var(--text-sm); font-weight: 500; text-decoration: none; }
+.site-nav > a:hover { color: var(--color-accent); }
+.account { display: inline-flex; }
+
+/* hero: the claim, and the evidence for it */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr); align-items: center; gap: var(--space-2xl);
+        max-width: 72rem; margin: 0 auto; padding: var(--space-2xl) var(--space-lg) var(--space-2xl); }
+.hero h1 { max-width: 16ch; font-size: clamp(2.25rem, 1.4rem + 2.6vw, 3.4rem); font-weight: 500; line-height: 1.04; letter-spacing: -0.03em; }
+.hero .lead { max-width: 46ch; margin-top: var(--space-md); color: var(--color-ink-2); font-size: 1.125rem; line-height: 1.55; }
+.hero-actions { display: flex; flex-wrap: wrap; gap: var(--space-sm); margin-top: var(--space-lg); }
+.hero-actions .ghost { min-height: var(--control); padding: 0 var(--space-md); font-size: var(--text-md); }
+.hero-actions .primary { text-decoration: none; }
+.fine { margin-top: var(--space-md); color: var(--color-muted); font-size: var(--text-sm); }
+
+.hero-example { margin: 0; }
+.hero-example .turn { display: grid; gap: var(--space-sm); }
+.hero-example .answer > .body { margin-top: var(--space-md); }
+.hero-example .sources h2 { padding-top: var(--space-sm); }
+.hero-example .source .row { display: grid; grid-template-columns: 2.5rem minmax(0, 1fr); align-items: center; gap: var(--space-sm);
+                             min-height: 48px; padding: var(--space-xs) var(--space-lg); }
+.hero-example .source .what { display: grid; min-width: 0; }
+.hero-example .cite { cursor: default; }
+.also-line { padding: var(--space-sm) var(--space-lg); border-top: 1px solid var(--color-rule); color: var(--color-muted); font-size: 0.8125rem; }
+.hero-example figcaption { margin-top: var(--space-sm); color: var(--color-muted); font-size: var(--text-sm); max-width: 60ch; }
+
+/* how it works: a real sequence, so the steps are numbered */
+.how { max-width: 72rem; margin: 0 auto; padding: var(--space-xl) var(--space-lg); border-top: 1px solid var(--color-rule); }
+.how h2, .repos h2 { font-size: var(--text-xl); font-weight: 500; }
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-xl); margin: var(--space-lg) 0 0; padding: 0;
+         list-style: none; counter-reset: step; }
+.steps li { counter-increment: step; padding-top: var(--space-sm); border-top: 2px solid var(--color-ink); }
+.steps li::before { content: counter(step); display: block; margin-bottom: var(--space-xs); color: var(--color-cool);
+                    font: 500 var(--text-measured)/1 var(--font-measured); }
+.steps h3 { font-size: var(--text-md); font-weight: 500; }
+.steps p { margin-top: var(--space-xs); color: var(--color-ink-2); max-width: 38ch; }
+
+/* repositories: live from the server */
+.repos { max-width: 72rem; margin: 0 auto; padding: var(--space-xl) var(--space-lg) var(--space-2xl); border-top: 1px solid var(--color-rule); }
+.repos-head p { margin-top: var(--space-2xs); color: var(--color-muted); }
+.repo-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(17rem, 1fr)); gap: 0 var(--space-xl); margin: var(--space-md) 0 0; padding: 0; list-style: none; }
+.repo-list li { display: grid; align-content: start; gap: var(--space-2xs); padding: var(--space-md) 0; border-top: 1px solid var(--color-rule); }
+.repo-list li.loading { color: var(--color-muted); }
+.repo-name { display: flex; align-items: baseline; gap: var(--space-sm); }
+.repo-name a { color: var(--color-ink); font: 500 var(--text-md)/1.3 var(--font-measured); text-decoration: none; }
+.repo-name a:hover { color: var(--color-accent); text-decoration: underline; }
+.repo-name code { color: var(--color-cool); font-size: 0.8125rem; }
+.repo-desc { color: var(--color-ink-2); }
+.repo-stats { color: var(--color-muted); font-size: var(--text-sm); }
+.repo-ask { margin-top: var(--space-2xs); color: var(--color-ink-2); font-size: var(--text-sm); text-decoration-color: var(--color-rule-2); }
+.repo-ask:hover { color: var(--color-accent); }
+
+.site-foot { display: flex; flex-wrap: wrap; justify-content: space-between; gap: var(--space-sm) var(--space-lg);
+             max-width: 72rem; margin: 0 auto; padding: var(--space-lg); border-top: 1px solid var(--color-rule);
+             color: var(--color-muted); font-size: var(--text-sm); }
+.site-foot p { max-width: 70ch; }
+.site-foot a { color: var(--color-ink-2); }
+
+/* sign in: one panel, centred */
+.login { display: grid; place-items: start center; padding: var(--space-xl) var(--space-md) var(--space-2xl); }
+.login-panel { width: min(26rem, 100%); padding: var(--space-xl) var(--space-lg); border: 1px solid var(--color-rule);
+               border-radius: var(--radius-card); background: var(--color-paper-2); }
+.login-panel h1 { font-size: var(--text-xl); font-weight: 500; }
+.login-why { margin-top: var(--space-3xs); color: var(--color-muted); }
+.login-form, .signed-in { display: grid; gap: var(--space-sm); margin-top: var(--space-lg); }
+.login-form[hidden], .signed-in[hidden] { display: none; }
+.login-form label { display: grid; gap: var(--space-2xs); color: var(--color-ink-2); font-size: var(--text-sm); font-weight: 500; }
+.login-form input { width: 100%; }
+.login-form .primary { width: 100%; margin-top: var(--space-2xs); }
+.login-form .note { color: var(--color-muted); font-size: 0.8125rem; }
+.github { width: 100%; min-height: var(--control); gap: var(--space-xs); font-size: var(--text-md); }
+.github svg { width: 18px; height: 18px; fill: currentColor; }
+.github:disabled { opacity: 0.6; }
+#github-note { margin-top: calc(-1 * var(--space-2xs)); }
+.or { display: flex; align-items: center; gap: var(--space-sm); color: var(--color-muted); font-size: 0.8125rem; }
+.or::before, .or::after { content: ""; flex: 1; border-top: 1px solid var(--color-rule); }
+.login-actions { display: flex; gap: var(--space-sm); }
+.login-actions .primary { text-decoration: none; }
+
+@media (max-width: 60rem) {
+  .hero { grid-template-columns: minmax(0, 1fr); gap: var(--space-xl); padding-top: var(--space-xl); }
+  .steps { grid-template-columns: minmax(0, 1fr); gap: var(--space-lg); }
+}
+@media (max-width: 40rem) {
+  .site-top, .hero, .how, .repos, .site-foot { padding-inline: var(--space-md); }
+  .site-nav > a { display: none; }
+  .hero-example .source .row { padding-inline: var(--space-md); }
+  .login-panel { padding: var(--space-lg) var(--space-md); }
+}

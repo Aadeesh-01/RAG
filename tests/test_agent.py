@@ -83,3 +83,7 @@ def test_graph_sources_name_the_path_that_reached_them(zoo_repo):
     assert hop1 and all(s["via"] == ["run_zoo"] for s in hop1)
     for s in (s for s in sources if s["hop"] >= 2):
         assert len(s["via"]) == s["hop"] and s["via"][0] == "run_zoo"
+    # the same path as graph node ids, starting at the vector hit
+    for s in (s for s in sources if s["hop"]):
+        assert s["via_ids"][0] == run_zoo and len(s["via_ids"]) == len(s["via"])
+        assert [agent.documents[i]["name"] for i in s["via_ids"]][0] == "run_zoo"

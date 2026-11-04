@@ -1,6 +1,7 @@
 """
 FastAPI server for the pre-indexed demo repositories.
 
+    GET  /  /app  /login                     home page, the app, sign-in (frontend/)
     GET  /api/health
     GET  /api/demos
     GET  /api/repos/{repo_id}
@@ -327,7 +328,18 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                             headers=getattr(exc, "headers", None))
 
     if os.path.isdir(FRONTEND_DIR):
+        from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles
+
+        # pages: / is the home page (index.html, served by the mount), the tool lives at /app
+        @app.get("/app", include_in_schema=False)
+        def app_page():
+            return FileResponse(os.path.join(FRONTEND_DIR, "app.html"))
+
+        @app.get("/login", include_in_schema=False)
+        def login_page():
+            return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
+
         app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
     else:
         @app.get("/", include_in_schema=False)

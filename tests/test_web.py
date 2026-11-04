@@ -61,6 +61,8 @@ def test_health_and_demos(client):
     [demo] = c.get("/api/demos").json()
     assert demo["id"] == "sample" and demo["versions"] == ["v7"]
     assert c.get("/api/repos/sample").json()["questions"] == ["q?"]
+    counts = demo["counts"]                   # people's words: files, functions, classes
+    assert counts["files"] >= 1 and counts["functions"] >= 1 and set(counts) == {"files", "functions", "classes"}
 
 
 def test_unknown_repo_and_version(client):
@@ -278,3 +280,11 @@ def test_file_fetch_failure_is_a_clear_502(sample_repo, tmp_path):
     rel = sorted(indexed_files(agent))[0]
     r = c.get("/api/repos/sample/file", params={"path": rel})
     assert r.status_code == 502 and "GitHub" in r.json()["error"]
+
+
+def test_pages_home_app_and_sign_in(client):
+    c, _ = client
+    assert "home.js" in c.get("/").text
+    app = c.get("/app")
+    assert app.status_code == 200 and "app.js" in app.text and "coderag.user" in app.text   # signed-out visitors go to /login
+    assert "login.js" in c.get("/login").text

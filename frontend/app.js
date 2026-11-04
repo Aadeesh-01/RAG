@@ -2,6 +2,7 @@ import {
   citedSources, createSSEParser, errorMessage, focusSubgraph, formatLocation, hopLabel, middleTruncate,
   normalizeCitations, renderAnswer, repoOverview, suggestedQuestions, viaLabel,
 } from "./lib.js";
+import { currentUser, initials, signOut } from "./auth.js";
 
 const $ = (selector) => document.querySelector(selector);
 const SETTINGS_KEY = "coderag.settings";
@@ -17,6 +18,9 @@ const state = {
   sources: [],                         // that answer's sources (file, lines, chunk_id, id)
   pane: "graph", panel: "chat",        // right pane on wide screens; the one pane on narrow
   paneChosen: false,                   // the visitor picked Code or Call graph themselves
+  positions: new Map(),                // repo id -> node id -> {x, y}: where the graph left things
+  graphLayout: "free",                 // answer graph: "free" | "rings" (by call distance)
+  trailsShown: null,                   // the answer turn whose paths have already flowed
   overviews: new Map(),                // repo id -> repoOverview(graph)
   busy: false, turn: 0, controller: null,
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
@@ -630,6 +634,11 @@ function renderSources(sources, { graph = true } = {}) {
         el("button", { type: "button", class: "link-button", text: "Copy location",
           onclick: (e) => copyText(`${formatLocation(s)}  ${s.name}`, e.currentTarget) })));
     if (graph) {
+      const summary = details.querySelector("summary");
+      for (const [on, off] of [["mouseenter", "mouseleave"], ["focus", "blur"]]) {
+        summary.addEventListener(on, () => graphView?.highlight(s.chunk_id));
+        summary.addEventListener(off, () => graphView?.highlight(null));
+      }
       details.addEventListener("toggle", () => {
         if (!details.open) return;
         pulseNode(s.chunk_id);
@@ -869,9 +878,6 @@ function openSource(turn, n, { panel = true, code: revealCode = false } = {}) {
 // ── graph ───────────────────────────────────────────────────────────────────
 let graphView = null;
 
-function cssVar(name) {
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
-}
 
 /** Legend counts for the answer the graph shows (empty when there is none). */
 function syncLegend() {
@@ -884,6 +890,7 @@ function syncLegend() {
   $("#legend-retrieved").hidden = !n || n - cited === 0;
   $("#legend-neighbour").hidden = !n;
   $("#legend-inherits").hidden = !(state.graph?.links || []).some((l) => l.type === "inherits");
+  $("#legend-trail").hidden = !n || !state.sources.some((s) => s.via_ids?.length);
 }
 
 function nodeClass(n) {
@@ -909,6 +916,16 @@ function markGraph() {
   syncLegend();
   if (!graphView) return;
   graphView.node.attr("class", graphView.cls || nodeClass).attr("aria-label", nodeName);
+  // the answer is written: if its graph is on screen, its paths flow once. Checked after this
+  // frame, because a wide screen may be switching to the code pane; then they flow when the
+  // graph is next shown (drawGraph plays them)
+  if (state.cited && state.trailsShown !== state.answerTurn) {
+    requestAnimationFrame(() => {
+      if (!graphView || state.trailsShown === state.answerTurn || !$("#graph").getBoundingClientRect().width) return;
+      state.trailsShown = state.answerTurn;
+      graphView.playTrails();
+    });
+  }
 }
 
 // ── the repo header's overview: packages, most called, entry points ───────
@@ -941,16 +958,82 @@ function renderOverview(o) {
   return groups.length ? el("div", { class: "overview" }, groups) : null;
 }
 
+// ── the graph engine: one live force layout that remembers where things were ─
+//   continuity: a new view starts from the old positions and glides there;
+//   structure: files as soft outlines, hubs larger, curved calls;
+//   evidence: the paths that reached the answer's sources, flowing once.
+const MOTION_LIMIT = 600;                 // nodes: above this, views change without movement
+const HULL_LIMIT = 150;                   // nodes: above this, no file outlines
+const RING_RADII = [80, 185, 290, 395];   // By distance: direct match, 1 call, 2+ calls, neighbours
+const RING_NAMES = ["direct match", "1 call away", "2+ calls away", "neighbours"];
+const MORPH_MS = 560;                     // the authored moment: one view becoming the next
+const calm = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+const jitter = (id, salt) => ((((id + 1) * (salt ? 7919 : 104729)) % 97) / 97) - 0.5;
+const nodeId = (end) => (typeof end === "object" ? end.id : end);
+const pairKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+
+function positionsFor(repoId) {
+  if (!state.positions.has(repoId)) state.positions.set(repoId, new Map());
+  return state.positions.get(repoId);
+}
+
+/** Edges on the call-graph paths that reached the answer's sources: key -> {from, to}. */
+function trailEdges() {
+  const edges = new Map();
+  for (const s of state.sources) {
+    if (!s.via_ids?.length) continue;
+    const path = [...s.via_ids, s.chunk_id];
+    for (let i = 0; i + 1 < path.length; i++) edges.set(pairKey(path[i], path[i + 1]), { from: path[i], to: path[i + 1] });
+  }
+  return edges;
+}
+
+/** The path that reached one node: its node ids and edge keys (empty for a direct match). */
+function trailOf(id) {
+  const s = state.sources.find((x) => x.chunk_id === id);
+  const path = s?.via_ids?.length ? [...s.via_ids, id] : [];
+  const keys = new Set();
+  for (let i = 0; i + 1 < path.length; i++) keys.add(pairKey(path[i], path[i + 1]));
+  return { ids: new Set(path), keys };
+}
+
+/** Pull nodes of the same file towards each other, so files read as regions. */
+function forceCluster(strength) {
+  let nodes = [];
+  const force = (alpha) => {
+    const centres = new Map();
+    for (const n of nodes) {
+      const c = centres.get(n.file) || centres.set(n.file, { x: 0, y: 0, k: 0 }).get(n.file);
+      c.x += n.x; c.y += n.y; c.k += 1;
+    }
+    for (const n of nodes) {
+      const c = centres.get(n.file);
+      if (c.k < 2) continue;
+      n.vx += (c.x / c.k - n.x) * strength * alpha;
+      n.vy += (c.y / c.k - n.y) * strength * alpha;
+    }
+  };
+  force.initialize = (ns) => { nodes = ns; };
+  return force;
+}
+
+function syncLayoutButtons() {
+  document.querySelectorAll("#graph-layout button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === state.graphLayout)));
+}
+
 function drawGraph() {
   syncLegend();
   const svg = window.d3 && d3.select("#graph");
   const hint = $("#graph-hint");
   const toggle = $("#graph-toggle");
   if (!svg) { hint.textContent = "The graph library could not be loaded."; return; }
-  svg.selectAll("*").remove();
+  graphView?.stop();
   graphView = null;
   const graph = state.graph;
-  if (!graph) { hint.textContent = "No graph for this repository."; toggle.hidden = true; return; }
+  const answer = state.retrieved.size > 0 && state.graphMode !== "full";
+  $("#graph-layout").hidden = !answer;
+  syncLayoutButtons();
+  if (!graph) { svg.selectAll("g.scene").remove(); hint.textContent = "No graph for this repository."; toggle.hidden = true; return; }
 
   const small = graph.nodes.length <= FULL_GRAPH_LIMIT;
   let data;
@@ -965,60 +1048,131 @@ function drawGraph() {
   const caption = data && !state.retrieved.size && state.graphMode !== "full";
   hint.classList.toggle("caption", Boolean(caption));
   hint.textContent = !data || caption
-    ? "Ask a question to light up the code it uses. Drag nodes; scroll to zoom." : "";
-  if (!data) return;
+    ? "Ask a question to light up the code it uses. Point at a node to see its calls." : "";
+  if (!data) { svg.selectAll("g.scene").remove(); return; }
 
   const { width, height } = svg.node().getBoundingClientRect();
-  if (!width || !height) return;                       // hidden panel: drawn when shown
+  if (!width || !height) return;                       // hidden pane: drawn when shown, from where it was
+
+  const rings = answer && state.graphLayout === "rings";
+  const positions = positionsFor(state.demo?.id || "_");
   const nodes = data.nodes.map((n) => ({ ...n }));
+  const byId = new Map(nodes.map((n) => [n.id, n]));
   const links = data.links.map((l) => ({ ...l }));
   const big = nodes.length > 250;
-  const radius = (n) => (state.retrieved.has(n.id) ? 7 : 3.5) + (n.kind === "class" ? 2 : 0);
+  const moving = !calm() && nodes.length <= MOTION_LIMIT;
+  const outlined = !rings && nodes.length <= HULL_LIMIT;
+  const trails = state.retrieved.size ? trailEdges() : new Map();
+
+  // hubs read larger; the answer's code is always the largest
+  const degree = new Map();
+  const adjacency = new Map(nodes.map((n) => [n.id, new Set()]));   // any link: where new nodes start
+  const related = new Map(nodes.map((n) => [n.id, new Set()]));     // calls and inheritance: what pointing lights
+  for (const l of links) {
+    adjacency.get(l.source)?.add(l.target);
+    adjacency.get(l.target)?.add(l.source);
+    if (l.type === "member") continue;
+    related.get(l.source)?.add(l.target);
+    related.get(l.target)?.add(l.source);
+    degree.set(l.source, (degree.get(l.source) || 0) + 1);
+    degree.set(l.target, (degree.get(l.target) || 0) + 1);
+  }
+  const radius = (n) => (state.retrieved.has(n.id)
+    ? 7 + (n.kind === "class" ? 2 : 0)
+    : 3 + Math.min(Math.sqrt(degree.get(n.id) || 0) * 0.9, 4) + (n.kind === "class" ? 1.5 : 0));
   // label everything only in small views; otherwise just the retrieved code
   const labelled = (n) => state.retrieved.has(n.id) || nodes.length <= (state.retrieved.size ? 25 : 60);
   const labelText = (n) => n.label || n.name;          // shortest unique qualified name
   const sidText = (n) => (state.sids.has(n.id) ? `S${state.sids.get(n.id)} ` : "");
   const labelWidth = (n) => (labelled(n) ? (sidText(n) + labelText(n)).length * 7.4 + 12 : 0);
+  const ringRadius = (n) => {
+    const hop = state.retrieved.get(n.id);
+    return RING_RADII[hop === undefined ? 3 : Math.min(hop, 2)];
+  };
+
+  // start where things were; new nodes start beside a neighbour that was already there
+  for (const n of nodes) {
+    const p = positions.get(n.id);
+    if (p) { n.x = p.x; n.y = p.y; }
+  }
+  for (const n of nodes) {
+    if (n.x !== undefined) continue;
+    const near = [...adjacency.get(n.id)].map((id) => byId.get(id)).find((m) => m && positions.has(m.id));
+    if (near) { n.x = near.x + jitter(n.id, 0) * 40; n.y = near.y + jitter(n.id, 1) * 40; n.born = true; }
+  }
+  const start = new Map(nodes.filter((n) => n.x !== undefined && !Number.isNaN(n.x)).map((n) => [n.id, { x: n.x, y: n.y }]));
 
   // with no answer yet, every node is the subject: all labels keep 12px, none hide
   const overview = !state.retrieved.size;
-  svg.node().classList.toggle("overview", overview);
+  const el = svg.node();
+  el.classList.toggle("overview", overview);
+  el.classList.remove("hovering");
   const subject = (n) => overview || state.retrieved.has(n.id);
-  const root = svg.append("g");
+
+  // arrowheads coloured by CSS, so a theme change needs no redraw
+  if (svg.select("defs").empty()) {
+    const defs = svg.append("defs");
+    for (const id of ["arrow", "arrow-lit", "arrow-trail"]) {
+      defs.append("marker").attr("id", id).attr("viewBox", "0 -4 8 8").attr("refX", 8)
+        .attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
+        .append("path").attr("d", "M0,-4L8,0L0,4");
+    }
+  }
+  // the old scene steps back while the new one takes its place
+  const old = svg.selectAll("g.scene").attr("aria-hidden", "true").style("pointer-events", "none");
+  if (moving && !old.empty()) old.transition().duration(200).style("opacity", 0).remove();
+  else old.remove();
+  // never start from a camera a hidden pane left broken
+  if (!Number.isFinite(d3.zoomTransform(el).k)) el.__zoom = d3.zoomIdentity;
+  const root = svg.append("g").attr("class", "scene").attr("transform", d3.zoomTransform(el));
+  const ringLayer = root.append("g").attr("class", "rings").attr("aria-hidden", "true");
+  const hullLayer = root.append("g").attr("class", "hulls").attr("aria-hidden", "true");
+  const linkLayer = root.append("g").attr("class", "links").attr("aria-hidden", "true");
+  const trailLayer = root.append("g").attr("class", "trails").attr("aria-hidden", "true");
+  const nodeLayer = root.append("g").attr("class", "nodes");
+
   // the fit never zooms out past MIN_FIT, where the answer's labels still render at 12px;
   // further out, only by hand, they shrink (and other labels hide below ~11.5px)
   const MIN_FIT = 0.6;
   const labelScale = (k) => Math.min(1 / MIN_FIT, Math.max(1, 1 / k));
-  const zoom = d3.zoom().scaleExtent([0.1, 4]).on("zoom", (e) => {
+  // the extent is fixed at draw time: a camera move that starts after the pane is hidden
+  // (a wide screen switching to code) must not read a zero-size box and divide by it
+  const zoom = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on("zoom", (e) => {
     root.attr("transform", e.transform);
-    svg.node().style.setProperty("--label-scale", String(labelScale(e.transform.k)));
+    el.style.setProperty("--label-scale", String(labelScale(e.transform.k)));
+    el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / e.transform.k)));
     // zoomed out, only the answer's own labels stay; the rest would be unreadably small
-    svg.node().classList.toggle("zoomed-out", e.transform.k < 0.96);
+    el.classList.toggle("zoomed-out", e.transform.k < 0.96);
   });
-  svg.call(zoom);
+  svg.call(zoom).on("dblclick.zoom", null);
+  svg.on("dblclick.fit", (e) => { if (e.target === el) fit(true); });   // double-click the background: fit
 
-  svg.append("defs").append("marker")                  // tip sits exactly at the line's end
-    .attr("id", "arrow").attr("viewBox", "0 -4 8 8").attr("refX", 8).attr("markerWidth", 6)
-    .attr("markerHeight", 6).attr("orient", "auto")
-    .append("path").attr("d", "M0,-4L8,0L0,4").attr("fill", cssVar("--calls"));
-
-  const link = root.append("g").attr("aria-hidden", "true").selectAll("line").data(links).join("line")
-    .attr("class", (l) => `link ${l.type}`)
-    .attr("marker-end", (l) => (l.type === "calls" ? "url(#arrow)" : null));
+  const keyOf = (l) => pairKey(nodeId(l.source), nodeId(l.target));
+  const onTrail = (l) => trails.has(keyOf(l));
+  const link = linkLayer.selectAll("path").data(links).join("path")
+    .attr("class", (l) => `link ${l.type}${onTrail(l) ? " trail" : ""}`);
+  const trailLinks = links.filter(onTrail);
+  const flow = trailLayer.selectAll("path").data(trailLinks).join("path").attr("class", "trail-flow")
+    // the dots travel the way retrieval walked, whichever way the call points
+    .attr("data-dir", (l) => (nodeId(l.source) === trails.get(keyOf(l)).from ? "fwd" : "rev"));
 
   // keyboard order: the answer's sources by number, then everything else by name
   const order = [...nodes].sort((a, b) => (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity)
     || labelText(a).localeCompare(labelText(b)));
-  const node = root.append("g").selectAll("g").data(nodes).join("g")
+  let timer = null;
+  const node = nodeLayer.selectAll("g").data(nodes).join("g")
     .attr("class", nodeClass)
     .attr("role", "button")
     .attr("aria-label", nodeName)
     .attr("tabindex", (n) => (n === order[0] ? 0 : -1))
     .call(d3.drag()
-      .on("start", (e, d) => { if (!e.active) sim.alphaTarget(0.2).restart(); d.fx = d.x; d.fy = d.y; })
+      .on("start", (e, d) => { if (timer) finish(); if (!e.active) sim.alphaTarget(0.2).restart(); d.fx = d.x; d.fy = d.y; })
       .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
       .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }))
     .on("click", (e, d) => { focusNode(d, false); activateNode(d); })
+    .on("dblclick", (e, d) => { e.stopPropagation(); zoomTo([d.id, ...related.get(d.id)]); })
+    .on("mouseenter.lit focus.lit", (e, d) => highlight(d.id))
+    .on("mouseleave.lit blur.lit", () => highlight(null))
     .on("keydown", (e, d) => {
       const i = order.indexOf(d);
       const target = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: order.length - 1 }[e.key];
@@ -1028,49 +1182,120 @@ function drawGraph() {
       } else if (e.key === "Enter" || e.key === " ") {
         e.preventDefault();
         activateNode(d);
-      }
+      } else if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.5); }
+      else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.5); }
+      else if (e.key === "0") { e.preventDefault(); fit(true); }
     });
   node.append("circle").attr("class", "ring").attr("r", (n) => radius(n) + 4);
   node.append("circle").attr("class", "dot").attr("r", radius);
   node.append("title").text((n) => `${n.name}\n${formatLocation(n)}`);
-  // labels hang under the node, so the collision circle below covers them
-  const label = node.filter(labelled).append("text").attr("text-anchor", "middle")
+  const label = node.filter(labelled).append("text").attr("class", "label").attr("text-anchor", "middle")
     .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4);
   label.filter((n) => state.sids.has(n.id)).append("tspan").attr("class", "label-sid").text(sidText);
   label.append("tspan").text(labelText);
+  // every other node keeps a quiet label, shown while it or a neighbour is pointed at
+  node.filter((n) => !labelled(n)).append("text").attr("class", "label quiet").attr("text-anchor", "middle")
+    .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4).text(labelText);
 
   const sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id((n) => n.id).distance((l) => (l.type === "member" ? 28 : 70)).strength(0.5))
-    .force("charge", d3.forceManyBody().strength(big ? -35 : state.retrieved.size ? -260 : -170))
-    .force("center", d3.forceCenter(width / 2, height / 2))
+    .force("link", d3.forceLink(links).id((n) => n.id).distance((l) => (l.type === "member" ? 28 : 70)).strength(rings ? 0.06 : 0.5))
+    .force("charge", d3.forceManyBody().strength(big ? -35 : rings ? -150 : state.retrieved.size ? -260 : -170))
+    .force("center", rings ? null : d3.forceCenter(width / 2, height / 2))
     // gentle gravity keeps disconnected parts of the graph from drifting apart
-    .force("x", d3.forceX(width / 2).strength(big ? 0.12 : 0.07))
-    .force("y", d3.forceY(height / 2).strength(big ? 0.12 : 0.07))
+    .force("x", rings ? null : d3.forceX(width / 2).strength(big ? 0.12 : 0.07))
+    .force("y", rings ? null : d3.forceY(height / 2).strength(big ? 0.12 : 0.07))
+    // the closer to the centre, the more directly the code was found
+    .force("ring", rings ? d3.forceRadial(ringRadius, width / 2, height / 2).strength(0.85) : null)
+    .force("cluster", outlined ? forceCluster(0.3) : null)
     // labels take room too: keep labelled nodes further apart
     .force("collide", d3.forceCollide().radius((n) => Math.min(Math.max(radius(n), labelWidth(n) / 2), 120) + 6))
     .stop();
+  for (let i = 0; i < 300; i++) sim.tick();           // lay out before the first paint
 
-  const render = () => {
-    link.each(function draw(l) {
-      // end lines at the target's edge so arrowheads don't sit on the node or its label
-      const dx = l.target.x - l.source.x, dy = l.target.y - l.source.y;
-      const len = Math.hypot(dx, dy) || 1;
-      const back = l.type === "calls" ? radius(l.target) + 2 : 0;
-      d3.select(this).attr("x1", l.source.x).attr("y1", l.source.y)
-        .attr("x2", l.target.x - (dx / len) * back).attr("y2", l.target.y - (dy / len) * back);
-    });
-    node.attr("transform", (n) => `translate(${n.x},${n.y})`);
+  // rings: faint guides, named where they cross the top
+  if (rings) {
+    const used = [...new Set(nodes.map((n) => RING_RADII.indexOf(ringRadius(n))))].sort();
+    const guide = ringLayer.selectAll("g").data(used).join("g");
+    guide.append("circle").attr("cx", width / 2).attr("cy", height / 2).attr("r", (i) => RING_RADII[i]);
+    guide.append("text").attr("x", width / 2).attr("y", (i) => height / 2 - RING_RADII[i] - 6).text((i) => RING_NAMES[i]);
+  }
+  // files as soft outlines, named at their top edge
+  const groups = outlined ? d3.groups(nodes, (n) => n.file).filter(([, ns]) => ns.length > 1) : [];
+  const hull = hullLayer.selectAll("g").data(groups).join("g").attr("class", "hull");
+  hull.append("path");
+  hull.append("text").text(([file]) => file.split("/").pop());
+  hull.append("title").text(([file]) => file);
+  const hullLine = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5));
+  const hullShape = (ns) => {
+    const pts = [];
+    for (const n of ns) {
+      const r = radius(n) + 12;
+      for (let a = 0; a < 8; a++) pts.push([n.x + r * Math.cos((a * Math.PI) / 4), n.y + r * Math.sin((a * Math.PI) / 4)]);
+    }
+    const shape = d3.polygonHull(pts);
+    return shape && { shape, top: shape.reduce((m, p) => (p[1] < m[1] ? p : m)) };
   };
-  // lay out before the first paint: no mid-layout jitter, and fit() sees final positions
-  for (let i = 0; i < 300; i++) sim.tick();
-  render();
-  sim.on("tick", render);                               // dragging restarts it
+  const drawHulls = () => hull.each(function outline([, ns]) {
+    const h = hullShape(ns);
+    const g = d3.select(this);
+    g.select("path").attr("d", h ? hullLine(h.shape) : null);
+    if (h) g.select("text").attr("x", h.top[0]).attr("y", h.top[1] - 5);
+  });
 
-  // the button row over the top edge and the caption under the graph stay clear of it
-  const top = toggle.hidden ? 0 : 48;
+  // calls curve gently (a call each way bows apart); arrowheads stop at the node's edge
+  const curve = (l) => {
+    const s = l.source, t = l.target;
+    const dx = t.x - s.x, dy = t.y - s.y;
+    const bend = l.type === "member" ? 0 : 0.1;
+    const cx = (s.x + t.x) / 2 - dy * bend, cy = (s.y + t.y) / 2 + dx * bend;
+    const ex = t.x - cx, ey = t.y - cy, len = Math.hypot(ex, ey) || 1;
+    const back = l.type === "calls" ? radius(t) + 2.5 : 0;
+    return `M${s.x},${s.y}Q${cx},${cy} ${t.x - (ex / len) * back},${t.y - (ey / len) * back}`;
+  };
+  const render = () => {
+    link.attr("d", curve);
+    flow.attr("d", curve);
+    node.attr("transform", (n) => `translate(${n.x},${n.y})`);
+    if (outlined) drawHulls();
+  };
+  const remember = () => { for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y }); };
+
+  // ── pointing: a node's calls stay, the rest steps back; its path flows ──
+  const highlight = (id) => {
+    if (id === null || id === undefined || !byId.has(id)) {
+      el.classList.remove("hovering");
+      node.attr("data-lit", null);
+      link.attr("data-lit", null).classed("on-path", false);
+      hull.attr("data-lit", null);
+      flow.classed("flowing", false);
+      return;
+    }
+    const near = related.get(id);
+    const path = trailOf(id);
+    el.classList.add("hovering");
+    node.attr("data-lit", (n) => (n.id === id ? "self" : near.has(n.id) ? "near" : path.ids.has(n.id) ? "path" : null));
+    link.attr("data-lit", (l) => (l.type === "member" ? null : nodeId(l.source) === id ? "out" : nodeId(l.target) === id ? "in" : null))
+      .classed("on-path", (l) => path.keys.has(keyOf(l)));
+    const file = byId.get(id).file;
+    hull.attr("data-lit", ([f]) => (f === file ? "" : null));
+    flow.classed("flowing", (l) => path.keys.has(keyOf(l)));
+    placeQuiet(new Set([id, ...near, ...path.ids]));
+  };
+  // the answer's paths flow once when it is first shown
+  let flowTimer = null;
+  const playTrails = () => {
+    if (!trailLinks.length || calm()) return;
+    flow.classed("flowing", true);
+    clearTimeout(flowTimer);
+    flowTimer = setTimeout(() => { if (!el.classList.contains("hovering")) flow.classed("flowing", false); }, 2400);
+  };
+
+  // ── camera ──
+  const bar = document.querySelector(".graph-actions");
+  const top = bar ? bar.getBoundingClientRect().height + 12 : 0;
   const room = height - top - (caption ? 40 : 0);
-  const fit = (animate) => {
-    const focus = nodes.filter((n) => state.retrieved.has(n.id));
+  const fitTransform = () => {
+    const focus = rings ? nodes : nodes.filter((n) => state.retrieved.has(n.id));
     const pts = focus.length ? focus : nodes;
     // bounding box including the labels hanging under each node; the answer's labels grow
     // when zoomed out, so refit until the scale and the label size agree
@@ -1080,7 +1305,7 @@ function drawGraph() {
       const half = (n) => Math.max(radius(n), (labelWidth(n) * grow(n)) / 2);
       x0 = Math.min(...pts.map((n) => n.x - half(n)));
       x1 = Math.max(...pts.map((n) => n.x + half(n)));
-      y0 = Math.min(...pts.map((n) => n.y - radius(n) - 4));
+      y0 = Math.min(...pts.map((n) => n.y - radius(n) - (rings ? 24 : 4)));
       y1 = Math.max(...pts.map((n) => n.y + radius(n) + 6 + 16 * grow(n)));
       scale = Math.min(1.5, 0.92 / Math.max((x1 - x0 + 40) / width, (y1 - y0 + 40) / room));
     }
@@ -1097,49 +1322,145 @@ function drawGraph() {
       cx = (Math.min(...c.map((n) => n.x - half(n))) + Math.max(...c.map((n) => n.x + half(n)))) / 2;
       cy = (Math.min(...c.map((n) => n.y)) + Math.max(...c.map((n) => n.y))) / 2 + 8;
     }
-    const transform = d3.zoomIdentity.translate(width / 2, top + room / 2).scale(scale).translate(-cx, -cy);
-    (animate ? svg.transition().duration(400) : svg).call(zoom.transform, transform);
-    placeLabels(scale);
+    return { scale, transform: d3.zoomIdentity.translate(width / 2, top + room / 2).scale(scale).translate(-cx, -cy) };
+  };
+  const camera = (transform, ms) => {
+    if (ms && !calm()) svg.transition().duration(ms).ease(d3.easeExpOut).call(zoom.transform, transform);
+    else svg.call(zoom.transform, transform);
+  };
+  const fit = (animate) => camera(fitTransform().transform, animate ? 420 : 0);
+  const zoomBy = (k) => (calm() ? svg.call(zoom.scaleBy, k) : svg.transition().duration(220).ease(d3.easeExpOut).call(zoom.scaleBy, k));
+  const zoomTo = (ids) => {
+    const ns = ids.map((id) => byId.get(id)).filter(Boolean);
+    const x0 = Math.min(...ns.map((n) => n.x)) - 60, x1 = Math.max(...ns.map((n) => n.x)) + 60;
+    const y0 = Math.min(...ns.map((n) => n.y)) - 40, y1 = Math.max(...ns.map((n) => n.y)) + 60;
+    const k = Math.min(2.2, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / room));
+    camera(d3.zoomIdentity.translate(width / 2, top + room / 2).scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2), 420);
   };
 
   // labels go below their node unless that covers a label already placed; then above,
   // right or left (cited first, then the answer's code by S-number, then the rest)
   const SIDES = ["below", "above", "right", "left"];
-  const placeLabels = (scale) => {
-    const placed = [];
-    const rect = (n, side) => {
-      // the label's box as drawn (measured: ~7.6px a character, 17px a line at 12px), plus a margin
-      const k = subject(n) ? labelScale(scale) : 1;
-      const w = (sidText(n) + labelText(n)).length * 7.7 * k + 6, h = 18 * k, r = radius(n) + 3;
-      if (side === "below") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y + r, y1: n.y + r + h };
-      if (side === "above") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y - r - h, y1: n.y - r };
-      if (side === "right") return { x0: n.x + r, x1: n.x + r + w, y0: n.y - h / 2, y1: n.y + h / 2 };
-      return { x0: n.x - r - w, x1: n.x - r, y0: n.y - h / 2, y1: n.y + h / 2 };
-    };
-    const covers = (q) => placed.reduce((sum, p) => sum + Math.max(0, Math.min(q.x1, p.x1) - Math.max(q.x0, p.x0))
-      * Math.max(0, Math.min(q.y1, p.y1) - Math.max(q.y0, p.y0)), 0);
-    const first = (n) => (state.cited?.has(n.id) ? 0 : state.retrieved.has(n.id) ? 1 : 2);
-    for (const n of nodes.filter(labelled).sort((a, b) => first(a) - first(b)
-      || (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity))) {
-      // the first side that's clear, else the one that covers least
-      let best = null;
-      for (const side of SIDES) {
-        const q = rect(n, side), area = covers(q);
-        if (!best || area < best.area) best = { side, q, area };
-        if (area === 0) break;
-      }
-      n.side = best.side;
-      placed.push(best.q);
+  // a label's box as drawn (measured: ~7.6px a character, 17px a line at 12px), plus a margin
+  const labelBox = (n, side, k) => {
+    const w = (sidText(n) + labelText(n)).length * 7.7 * k + 6, h = 18 * k, r = radius(n) + 3;
+    if (side === "below") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y + r, y1: n.y + r + h };
+    if (side === "above") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y - r - h, y1: n.y - r };
+    if (side === "right") return { x0: n.x + r, x1: n.x + r + w, y0: n.y - h / 2, y1: n.y + h / 2 };
+    return { x0: n.x - r - w, x1: n.x - r, y0: n.y - h / 2, y1: n.y + h / 2 };
+  };
+  const overlap = (q, boxes) => boxes.reduce((sum, p) => sum + Math.max(0, Math.min(q.x1, p.x1) - Math.max(q.x0, p.x0))
+    * Math.max(0, Math.min(q.y1, p.y1) - Math.max(q.y0, p.y0)), 0);
+  const sideFor = (n, k, boxes) => {
+    let best = null;
+    for (const side of SIDES) {
+      const q = labelBox(n, side, k), area = overlap(q, boxes);
+      if (!best || area < best.area) best = { side, q, area };
+      if (area === 0) break;
     }
+    return best;
+  };
+  const setSide = (sel) => {
     const gap = (n) => radius(n) + 4;
-    label
-      .attr("x", (n) => (n.side === "right" ? gap(n) : n.side === "left" ? -gap(n) : 0))
+    sel.attr("x", (n) => (n.side === "right" ? gap(n) : n.side === "left" ? -gap(n) : 0))
       .attr("y", (n) => (n.side === "below" ? gap(n) : n.side === "above" ? -gap(n) : 0))
       .attr("text-anchor", (n) => (n.side === "right" ? "start" : n.side === "left" ? "end" : "middle"))
       .attr("dominant-baseline", (n) => (n.side === "below" ? "hanging" : n.side === "above" ? "auto" : "central"));
   };
-  fit(false);
-  graphView = { node };
+  // names revealed by pointing go where they cover the fewest labels already showing
+  const placeQuiet = (ids) => {
+    const k = d3.zoomTransform(el).k;
+    const boxes = nodes.filter(labelled).map((n) => labelBox(n, n.side || "below", subject(n) ? labelScale(k) : 1));
+    const reveal = nodes.filter((n) => ids.has(n.id) && !labelled(n));
+    for (const n of reveal) {
+      const best = sideFor(n, Math.max(1, 1 / k), boxes);
+      n.side = best.side;
+      boxes.push(best.q);
+    }
+    setSide(node.filter((n) => ids.has(n.id) && !labelled(n)).select("text.quiet"));
+  };
+  const placeLabels = (scale) => {
+    const placed = [];
+    // the names already on the canvas (files, rings) are obstacles: node labels go around them
+    const named = (x, y, text, perChar) => {
+      const k = Math.max(1, 1 / scale), w = text.length * perChar * k + 8, h = 17 * k;
+      return { x0: x - w / 2, x1: x + w / 2, y0: y - h, y1: y + 3 };
+    };
+    for (const [file, ns] of groups) {
+      const h = hullShape(ns);
+      if (h) placed.push(named(h.top[0], h.top[1] - 5, file.split("/").pop(), 7.7));
+    }
+    if (rings) {
+      for (const i of new Set(nodes.map((n) => RING_RADII.indexOf(ringRadius(n))))) {
+        placed.push(named(width / 2, height / 2 - RING_RADII[i] - 6, RING_NAMES[i], 6.8));
+      }
+    }
+    const first = (n) => (state.cited?.has(n.id) ? 0 : state.retrieved.has(n.id) ? 1 : 2);
+    for (const n of nodes.filter(labelled).sort((a, b) => first(a) - first(b)
+      || (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity))) {
+      const best = sideFor(n, subject(n) ? labelScale(scale) : 1, placed);
+      n.side = best.side;
+      placed.push(best.q);
+    }
+    setSide(label);
+  };
+
+  // ── the morph: final positions are known; the scene glides there from where it was ──
+  const finals = new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+  const target = fitTransform();
+  placeLabels(target.scale);
+  remember();
+  const live = () => { sim.on("tick", render).on("end", remember); };
+  const finish = () => {
+    timer?.stop();
+    timer = null;
+    for (const n of nodes) Object.assign(n, finals.get(n.id));
+    node.style("opacity", null);
+    render();
+    live();
+  };
+  const glide = moving && start.size > 0;
+  if (glide) {
+    for (const n of nodes) {
+      const s = start.get(n.id);
+      if (s) Object.assign(n, s);
+    }
+    // new nodes grow out of a neighbour (or simply appear where they belong)
+    node.filter((n) => !start.has(n.id) || n.born).style("opacity", 0)
+      .transition().delay(140).duration(MORPH_MS - 140).ease(d3.easeExpOut).style("opacity", 1);
+    render();
+    timer = d3.timer((elapsed) => {
+      const t = Math.min(1, elapsed / MORPH_MS), e = d3.easeExpOut(t);
+      for (const n of nodes) {
+        const s = start.get(n.id), f = finals.get(n.id);
+        if (s) { n.x = s.x + (f.x - s.x) * e; n.y = s.y + (f.y - s.y) * e; }
+      }
+      render();
+      if (t === 1) finish();
+    });
+    camera(target.transform, MORPH_MS);
+  } else {
+    render();
+    camera(target.transform, 0);
+    live();
+  }
+
+  graphView = {
+    node, highlight, fit, zoomBy, playTrails,
+    stop: () => {
+      timer?.stop();
+      timer = null;
+      clearTimeout(flowTimer);
+      sim.stop();
+      svg.interrupt();
+      remember();                                       // a view interrupted mid-glide continues from here
+    },
+  };
+  // first sight of a written answer: its paths flow once
+  if (answer && state.cited && state.trailsShown !== state.answerTurn) {
+    state.trailsShown = state.answerTurn;
+    setTimeout(() => graphView?.playTrails(), glide ? MORPH_MS : 0);
+  }
 }
 
 /** Roving focus: one node is in the Tab order; the arrow keys move it. */
@@ -1386,7 +1707,22 @@ function autosize() {
   area.style.overflowY = area.scrollHeight > 160 ? "auto" : "hidden";
 }
 
+/** The account button: who is signed in, and the way out. */
+function setupAccount() {
+  const user = currentUser();
+  if (!user) return;
+  $("#user-initials").textContent = initials(user.name);
+  $("#user-button").title = `Signed in as ${user.name}`;
+  $("#user-name").textContent = user.name;
+  $("#user-provider").textContent = user.provider === "github" ? "GitHub" : "demo sign-in";
+  $("#sign-out").addEventListener("click", () => {
+    signOut();
+    window.location.href = "/";
+  });
+}
+
 async function start() {
+  setupAccount();
   setupSettings();
   setupSaved();
   const openAddRepo = setupAddRepo();
@@ -1406,6 +1742,15 @@ async function start() {
     });
   });
   renderCodeEmpty();
+  document.querySelectorAll("#graph-layout button").forEach((b) => b.addEventListener("click", () => {
+    if (state.graphLayout === b.dataset.layout) return;
+    state.graphLayout = b.dataset.layout;
+    hideNodeCard();
+    drawGraph();
+  }));
+  $("#zoom-in").addEventListener("click", () => graphView?.zoomBy(1.5));
+  $("#zoom-out").addEventListener("click", () => graphView?.zoomBy(1 / 1.5));
+  $("#zoom-fit").addEventListener("click", () => graphView?.fit(true));
   $("#graph-toggle").addEventListener("click", () => {
     state.graphMode = state.graphMode === "full" ? "focus" : "full";
     drawGraph();

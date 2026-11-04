@@ -147,6 +147,18 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-accent);
   font: 500 0.6875rem/16px var(--font-measured); text-align: center; font-variant-numeric: tabular-nums;
 }
 
+/* the account: initials in a circle, a small menu under it */
+.avatar { display: inline-grid; place-items: center; width: var(--control-s); height: var(--control-s); flex-shrink: 0; padding: 0;
+          border: 1px solid var(--color-rule-2); border-radius: 50%; background: var(--color-accent-soft); color: var(--color-ink);
+          font: 500 0.75rem/1 var(--font-body); text-decoration: none; cursor: pointer;
+          transition: border-color var(--dur-micro) var(--ease-out); }
+.avatar:hover { border-color: var(--color-accent); color: var(--color-ink); }
+.user-menu { position: fixed; inset: auto; top: calc(var(--bar-height) - 4px); right: var(--space-sm); margin: 0; min-width: 14rem;
+             padding: var(--space-sm) var(--space-md); border: 1px solid var(--color-rule-2); border-radius: var(--radius-card);
+             background: var(--color-paper-2); color: var(--color-ink); }
+.user-menu .who { display: grid; gap: var(--space-3xs); margin-bottom: var(--space-xs); overflow-wrap: anywhere; }
+.user-menu .who small { font-size: 0.8125rem; }
+
 .banner { padding: var(--space-xs) var(--space-md); border-bottom: 1px solid var(--color-rule);
           background: var(--color-paper-3); color: var(--color-ink-2); font-size: var(--text-sm); }
 .banner.error { background: var(--color-bad-soft); color: var(--color-ink); }
@@ -346,6 +358,7 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-accent);
 .key--neighbour { width: 8px; height: 8px; border: 0; background: var(--color-rule-2); }
 .key-line { display: inline-block; width: 18px; height: 0; flex-shrink: 0; border-top: 1.5px solid var(--color-rule-2); }
 .key-line--inherits { border-top-style: dashed; border-top-color: var(--color-muted); }
+.key-line--trail { border-top: 2px solid var(--color-cool); }
 
 /* the ask form: the person's one control */
 .ask-form { display: flex; align-items: flex-end; gap: var(--space-xs); padding: var(--space-sm) var(--space-lg) var(--space-md);
@@ -381,7 +394,21 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-accent);
 .legend li { display: inline-flex; align-items: center; gap: var(--space-xs); }
 .legend b { color: var(--color-ink); font-family: var(--font-measured); font-weight: 500; font-variant-numeric: tabular-nums; }
 .graph-wrap { position: relative; flex: 1; min-height: 0; }
-.graph-actions { position: absolute; top: var(--space-sm); right: var(--space-sm); z-index: var(--z-raised); display: flex; gap: var(--space-xs); }
+/* the graph's controls: layout, zoom, full graph (wraps on a phone) */
+.graph-actions { position: absolute; top: var(--space-sm); left: var(--space-sm); right: var(--space-sm); z-index: var(--z-raised);
+                 display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: var(--space-xs); pointer-events: none; }
+.graph-actions > * { pointer-events: auto; }
+.segmented, .zoom { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--color-rule-2); border-radius: var(--radius-pill);
+                    background: var(--color-paper-2); }
+.segmented[hidden] { display: none; }
+.segmented button { min-height: 26px; padding: 0 var(--space-sm); border: 0; border-radius: 4px; background: none; color: var(--color-muted);
+                    font: 500 var(--text-sm)/1 var(--font-body); transition: background-color var(--dur-micro) var(--ease-out), color var(--dur-micro) var(--ease-out); }
+.segmented button:hover { color: var(--color-ink); }
+.segmented button[aria-pressed="true"] { background: var(--color-paper-3); color: var(--color-ink); box-shadow: inset 0 0 0 1px var(--color-rule-2); }
+.segmented button:focus-visible { outline-offset: -2px; }
+.zoom .icon-button { width: 26px; height: 26px; border-radius: 4px; }
+.zoom .icon-button::before { inset: -3px; }
+.zoom .icon-button svg { width: 16px; height: 16px; stroke-linecap: round; }
 #graph { display: block; width: 100%; height: 100%; cursor: grab; }
 #graph:active { cursor: grabbing; }
 .graph-hint { position: absolute; inset: 0; height: fit-content; max-width: 34ch; margin: auto; padding: 0 var(--space-lg);
@@ -411,9 +438,45 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-accent);
 /* before a question every node is the subject: its label keeps 12px too, and never hides */
 #graph.overview .node text { fill: var(--color-ink); font-size: calc(12px * var(--label-scale, 1)); stroke-width: calc(3px * var(--label-scale, 1)); }
 #graph.zoomed-out:not(.overview) .node:not(.retrieved) text { display: none; }
-.link { fill: none; stroke: var(--color-rule-2); stroke-opacity: 0.9; }
-.link.inherits { stroke: var(--color-muted); stroke-dasharray: 5 3; }
-.link.member { stroke-dasharray: 1 3; stroke-opacity: 0.6; }
+#graph.hovering .node[data-lit] text.label { display: block; font-size: calc(12px * var(--label-scale-all, 1)); stroke-width: calc(3px * var(--label-scale-all, 1)); }
+/* edges: curved calls, dashed inheritance, dotted membership; the answer's paths in blue */
+#graph path.link { fill: none; stroke: var(--color-rule-2); stroke-opacity: 0.9; stroke-width: 1px; }
+#graph path.link.calls { marker-end: url(#arrow); }
+#graph path.link.inherits { stroke: var(--color-muted); stroke-dasharray: 5 3; }
+#graph path.link.member { stroke-dasharray: 1 3; stroke-opacity: 0.6; }
+#graph path.link.trail { stroke: var(--color-cool); stroke-opacity: 0.85; stroke-width: 1.6px; }
+#graph path.link.trail.calls { marker-end: url(#arrow-trail); }
+#arrow path { fill: var(--color-rule-2); }
+#arrow-lit path { fill: var(--color-ink-2); }
+#arrow-trail path { fill: var(--color-cool); }
+/* the evidence moving: dots travel each path the way retrieval walked it */
+#graph .trail-flow { fill: none; stroke: var(--color-cool); stroke-width: 3px; stroke-linecap: round; stroke-dasharray: 0.1 13; opacity: 0;
+                     transition: opacity var(--dur-short) var(--ease-out); pointer-events: none; }
+#graph .trail-flow.flowing { opacity: 1; animation: trail-fwd 0.8s linear infinite; }
+#graph .trail-flow.flowing[data-dir="rev"] { animation-name: trail-rev; }
+@keyframes trail-fwd { to { stroke-dashoffset: -13.1; } }
+@keyframes trail-rev { to { stroke-dashoffset: 13.1; } }
+/* files as soft regions, named at their top edge */
+#graph .hull path { fill: color-mix(in oklab, var(--color-ink) 4%, transparent); stroke: var(--color-rule); stroke-width: 1px; }
+/* with an answer, files are context: a hairline outline; the file pointed at fills in */
+#graph:not(.overview) .hull path { fill: none; stroke: var(--color-rule-2); stroke-dasharray: 3 4; }
+#graph.hovering:not(.overview) .hull[data-lit] path { fill: color-mix(in oklab, var(--color-ink) 4%, transparent); stroke-dasharray: none; }
+#graph .hull text { fill: var(--color-muted); font: 400 calc(12px * var(--label-scale-all, 1)) var(--font-measured); text-anchor: middle;
+                    paint-order: stroke; stroke: var(--color-paper-3); stroke-width: calc(3px * var(--label-scale-all, 1)); }
+/* By distance: faint guides, one per ring in use */
+#graph .rings circle { fill: none; stroke: var(--color-rule-2); stroke-dasharray: 2 6; }
+#graph .rings text { fill: var(--color-muted); font: 400 calc(12px * var(--label-scale-all, 1)) var(--font-body); text-anchor: middle;
+                     paint-order: stroke; stroke: var(--color-paper-3); stroke-width: calc(3px * var(--label-scale-all, 1)); }
+/* pointing at a node (or its source row): its calls and its path stay, the rest steps back */
+#graph .node, #graph path.link, #graph .hull { transition: opacity var(--dur-short) var(--ease-out); }
+#graph.hovering .node:not([data-lit]) { opacity: 0.18; }
+#graph.hovering path.link:not([data-lit]):not(.on-path) { opacity: 0.08; }
+#graph.hovering path.link[data-lit] { stroke: var(--color-ink-2); stroke-opacity: 1; }
+#graph.hovering path.link[data-lit].calls { marker-end: url(#arrow-lit); }
+#graph.hovering path.link.on-path { stroke: var(--color-cool); stroke-opacity: 1; stroke-width: 2px; }
+#graph.hovering path.link.on-path.calls { marker-end: url(#arrow-trail); }
+#graph.hovering .hull:not([data-lit]) { opacity: 0.3; }
+#graph .node text.quiet { display: none; }
 .node-card { position: absolute; right: var(--space-sm); bottom: var(--space-sm); width: min(320px, calc(100% - 24px));
              padding: var(--space-sm) var(--space-md); border: 1px solid var(--color-rule-2); border-radius: var(--radius-card);
              background: var(--color-paper-2); color: var(--color-ink-2); font-size: var(--text-sm); z-index: var(--z-raised); }
@@ -493,6 +556,7 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-accent);
   .source .hop { grid-column: 2; max-width: none; }
 }
 @media (prefers-reduced-motion: reduce) {
+  #graph .trail-flow.flowing { animation: none; opacity: 0; }
   .primary, .ghost, .add-repo, .icon-button, .link-button, .chip, .repo-tabs button, .panel-tabs button, .also > summary { transition: none; }
   .also > summary::before { transition: none; }
   .job .bar i { transition: none; }
