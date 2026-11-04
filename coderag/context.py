@@ -27,6 +27,26 @@ def display_name(meta):
     return f"{meta['parent']}.{meta['name']}" if meta.get("parent") else meta["name"]
 
 
+def module_path(meta):
+    """Dotted module of a chunk: 'pkg/sub.py' -> 'pkg.sub', 'pkg/__init__.py' -> 'pkg'."""
+    parts = meta["qname"].split("::")[0][:-3].split("/")
+    if parts[-1] == "__init__" and len(parts) > 1:
+        parts = parts[:-1]
+    return ".".join(parts)
+
+
+def public_name(meta):
+    """
+    Name shown to people (sources, graph): the display name, except that a
+    whole-file chunk is '<module> (module)' rather than its file name, so
+    'graphslam/__init__.py' reads 'graphslam (module)', not '__init__.py'.
+    Embeddings and the model's context keep display_name.
+    """
+    if meta.get("type") == "file" and "qname" in meta:
+        return f"{module_path(meta).split('.')[-1]} (module)"
+    return display_name(meta)
+
+
 def keyword_filter(query, results):
     """Keep results containing any query word; fall back to all if none match."""
     keywords = query.lower().split()

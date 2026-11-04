@@ -46,3 +46,15 @@ def test_header_styles():
     assert format_chunk(body, META, 0, "q", get_config("v0")) == body
     assert format_chunk(body, META, 0, "q", get_config("v1")) == "# class: Zoo (zoo.py)\n" + body
     assert format_chunk(body, META, 0, "q", get_config("v3")).startswith("# class: Zoo\n")
+
+
+def test_public_name_reads_module_chunks_as_modules():
+    from coderag.context import display_name, module_path, public_name
+    init = {"type": "file", "name": "__init__.py", "qname": "slam/graphslam/__init__.py::__init__.py"}
+    plain = {"type": "file", "name": "certs.py", "qname": "certs.py::certs.py"}
+    method = {"type": "method", "name": "send", "parent": "Session", "qname": "sessions.py::Session.send"}
+    assert module_path(init) == "slam.graphslam" and module_path(plain) == "certs"
+    assert public_name(init) == "graphslam (module)"
+    assert public_name(plain) == "certs (module)"
+    assert public_name(method) == display_name(method) == "Session.send"
+    assert display_name(init) == "__init__.py"          # embeddings and context are unchanged

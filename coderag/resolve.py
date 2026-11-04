@@ -12,7 +12,9 @@ links to every `convert` method. CodeGraph resolves each call from its form
   super().foo()  the base classes
   mod.foo()      the imported module's file; nothing if the module is external
   Class.foo()    that class's method
-  obj.foo()      classes defining `foo`, only if there are few of them
+  obj.foo()      classes defining `foo`, only if there are few of them, and never
+                 when `foo` is a method of a builtin type: `path.append(p)` is
+                 almost always a list, not the repo's one class with `append`
 
 Every edge records how it was resolved: exact | import | unique | ambiguous.
 Calls that can't be resolved confidently get no edge.
@@ -27,6 +29,17 @@ from .context import display_name
 
 EXACT, IMPORT, UNIQUE, AMBIGUOUS = "exact", "import", "unique", "ambiguous"
 _RANK = {EXACT: 0, IMPORT: 0, UNIQUE: 1, AMBIGUOUS: 2}
+
+# Saved graphs record the resolver version; older ones are migrated on load.
+#   2: obj.foo() with a builtin method name is no longer guessed
+RESOLVER_VERSION = 2
+
+# Method names of builtin types (and file objects). On an object of unknown
+# type these calls are far more likely to be the builtin than a repo class.
+_BUILTIN_TYPES = (list, dict, set, frozenset, str, bytes, bytearray, tuple, int, float, complex)
+BUILTIN_METHODS = frozenset(
+    {n for t in _BUILTIN_TYPES for n in dir(t) if not n.startswith("_")}
+    | {"read", "write", "close", "readline", "readlines", "seek", "tell", "flush"})
 
 
 def _rel(chunk):
@@ -288,6 +301,8 @@ class CodeGraph:
                         for t in self.method_in_hierarchy(c, name, include_overrides=False)]
 
         # obj.foo() on an object of unknown type
+        if name in BUILTIN_METHODS:
+            return []                          # list.append, dict.get, str.split, ...
         owners = [self.classes[key] for key in self.method_owners.get(name, [])
                   if key in self.classes]
         return [(t, how) for owner, how in self._by_popularity(owners)
@@ -337,6 +352,7 @@ class CodeGraph:
     # =========================================================================
     def to_dict(self):
         return {
+            "resolver": RESOLVER_VERSION,
             "max_ambiguous": self.max_ambiguous,
             "ignore_assert_calls": self.ignore_assert_calls,
             "callees": [[[j, how] for j, how in edges] for edges in self.callees],
@@ -355,7 +371,38 @@ class CodeGraph:
         graph.callers = [[(j, how) for j, how in edges] for edges in data["callers"]]
         graph.bases = data["bases"]
         graph.parent = data["parent"]
+        graph.migrated = data.get("resolver", 1) < RESOLVER_VERSION
+        if graph.migrated:
+            graph._drop_builtin_method_guesses()
         return graph
+
+    def _drop_builtin_method_guesses(self):
+        """
+        Migrate a graph saved before resolver 2: remove guessed edges (unique or
+        ambiguous) that only an `obj.<builtin method>()` call could have made.
+        The repo source isn't kept with an index, so this works from the saved
+        call sites: an edge stays if any other call site could explain it.
+        Only two paths make unique/ambiguous edges (exact and import edges are
+        never touched): a bare `foo()` found repo-wide, and the unknown-object guess.
+        """
+        def explained(i, j):
+            target = self.chunks[j]
+            method = target["name"].split(".")[-1]
+            for kind, _, name in self.chunks[i].get("call_sites", []):
+                if kind == "name" and name == target["name"]:
+                    return True                    # foo() resolved to a top-level foo
+                if kind != "name" and name not in BUILTIN_METHODS and (
+                        name == method or name in target.get("methods", [])):
+                    return True                    # obj.foo() with a non-builtin name
+            return False
+
+        for i, edges in enumerate(self.callees):
+            self.callees[i] = [(j, how) for j, how in edges
+                               if how not in (UNIQUE, AMBIGUOUS) or explained(i, j)]
+        self.callers = [[] for _ in self.chunks]
+        for i, edges in enumerate(self.callees):
+            for j, how in edges:
+                self.callers[j].append((i, how))
 
     def edge_counts(self):
         counts = defaultdict(int)

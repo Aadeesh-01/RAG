@@ -113,6 +113,93 @@ def test_ambiguous_calls_allowed_when_configured(tmp_path, graph):
         "core.py::Base.run": AMBIGUOUS, "other.py::Other.run": AMBIGUOUS}
 
 
+HUB_FILES = {
+    # two scripts, each with its own main() called from its own __main__ block
+    "plan_a.py": """
+        def main():
+            path = []
+            path.append(1)
+            return path.copy()
+
+        if __name__ == "__main__":
+            main()
+    """,
+    "plan_b.py": """
+        from states import States
+
+        def main():
+            s = States()
+            s.append(2)
+            States.append(s, 3)
+            return s
+
+        if __name__ == "__main__":
+            main()
+    """,
+    # the repo's only class with append/copy methods
+    "states.py": """
+        class States:
+            def append(self, x):
+                self.items.append(x)
+
+            def copy(self):
+                return States()
+
+            def merge(self, other):
+                self.append(other)
+    """,
+}
+
+
+@pytest.fixture
+def hub_graph(tmp_path):
+    root = tmp_path / "robots"
+    root.mkdir()
+    for name, body in HUB_FILES.items():
+        (root / name).write_text(textwrap.dedent(body))
+    config = get_config("v7", min_chunk_chars=0, min_segment_chars=0)
+    return CodeGraph(load_chunks(str(root), config, verbose=False), str(root))
+
+
+def test_each_script_main_is_its_own_node(hub_graph):
+    mains = [c["qname"] for c in hub_graph.chunks if c["name"] == "main"]
+    assert sorted(mains) == ["plan_a.py::main", "plan_b.py::main"]
+    callers_of = {c["qname"]: {hub_graph.chunks[i]["qname"] for i, _ in hub_graph.callers[j]}
+                  for j, c in enumerate(hub_graph.chunks) if c["name"] == "main"}
+    # each main is reached only from its own file, never across scripts
+    for qname, callers in callers_of.items():
+        assert all(c.split("::")[0] == qname.split("::")[0] for c in callers), (qname, callers)
+
+
+def test_builtin_method_names_on_unknown_objects_get_no_edge(hub_graph):
+    # path.append / path.copy are list methods, not the repo's one States class
+    assert edges(hub_graph, "plan_a.py::main") == {}
+
+
+def test_builtin_method_names_still_resolve_when_the_type_is_known(hub_graph):
+    # States.append(...) names the class; self.append() is the enclosing class
+    assert edges(hub_graph, "plan_b.py::main") == {
+        "states.py::States": IMPORT, "states.py::States.append": EXACT}
+    assert edges(hub_graph, "states.py::States.merge") == {"states.py::States.append": EXACT}
+
+
+def test_old_saved_graph_is_migrated_on_load(hub_graph):
+    saved = hub_graph.to_dict()
+    by_q = {c["qname"]: i for i, c in enumerate(hub_graph.chunks)}
+    a_main, append = by_q["plan_a.py::main"], by_q["states.py::States.append"]
+    # what resolver 1 saved: plan_a.main guessed into States.append
+    saved["resolver"] = 1
+    saved["callees"][a_main] = [[append, UNIQUE]]
+    saved["callers"][append] = saved["callers"][append] + [[a_main, UNIQUE]]
+    loaded = CodeGraph.from_dict(hub_graph.chunks, saved)
+    assert loaded.migrated
+    assert loaded.callees[a_main] == []
+    assert a_main not in [i for i, _ in loaded.callers[append]]
+    # exact edges are untouched
+    assert loaded.callees[by_q["plan_b.py::main"]] == hub_graph.callees[by_q["plan_b.py::main"]]
+    assert not CodeGraph.from_dict(hub_graph.chunks, hub_graph.to_dict()).migrated
+
+
 def test_called_by_uses_display_names(graph):
     graph.apply_called_by()
     by_q = {c["qname"]: c for c in graph.chunks}

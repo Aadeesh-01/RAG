@@ -6,7 +6,8 @@ from dataclasses import asdict, dataclass, field
 
 from .chunking import load_chunks
 from .config import get_config
-from .context import (asks_for_callers, build_context, display_name, format_chunk,
+from .repomap import is_broad_question, repo_map
+from .context import (asks_for_callers, build_context, display_name, format_chunk, public_name,
                       keyword_filter, parse_citations, source_location)
 from .graph import build_name_index, build_reverse_index, expand_bfs
 from .llm import LLMError, LLMRateLimited, LLMUnavailable
@@ -116,11 +117,13 @@ class RAGCodebaseAgent:
     # =========================================================================
     # Retrieval
     # =========================================================================
-    def retrieve(self, question, config=None, trace=None):
+    def retrieve(self, question, config=None, trace=None, vias=None):
         """
         Return [(chunk, meta, hop)]: vector hits (hop 0) then graph expansions.
         `trace` (a dict) is filled with chunk index -> {"rank", "similarity"} for
         vector hits and {"via": (from_index, edge)} for expansions.
+        `vias` (a dict) gets only the expansions' chunk index -> (from_index, edge);
+        unlike `trace` it doesn't switch vector search to the scored variant.
         """
         cfg = config or self.config
 
@@ -171,12 +174,31 @@ class RAGCodebaseAgent:
             for idx, hop, via in expansions:
                 if trace is not None:
                     trace[idx] = {"via": via}
+                if vias is not None:
+                    vias[idx] = via
                 meta = self.metadata[idx]
                 self._log(f"  [hop={hop}] {meta['type']} '{meta['name']}'  "
                           f"({os.path.basename(meta['file'])})")
                 results.append((self.chunks[idx], meta, hop))
 
         return results
+
+    def repo_map(self):
+        """Map of the whole repository (built once from the chunks)."""
+        if getattr(self, "_repo_map", None) is None:
+            self._repo_map = repo_map(self.documents)
+        return self._repo_map
+
+    def _via_names(self, idx, vias):
+        """Names on the call-graph path to chunk `idx`, from the vector hit: ['A', 'B']."""
+        names, node, seen = [], idx, {idx}
+        while node in vias:
+            node = vias[node][0]
+            if node in seen:                    # defensive: a path never revisits a chunk
+                break
+            seen.add(node)
+            names.append(public_name(self.metadata[node]))
+        return names[::-1]
 
     def _explain(self, idx, trace, chunk, meta, hop, question, cfg, n):
         """Debug info for one source: how it was retrieved and what it costs."""
@@ -237,15 +259,24 @@ class RAGCodebaseAgent:
 
         t0 = time.perf_counter()
         trace = {} if debug else None
-        retrieved = self.retrieve(question, cfg, trace)
+        vias = {}
+        retrieved = self.retrieve(question, cfg, trace, vias)
         context = build_context(question, retrieved, cfg)
+        # "what are the main modules?": a few chunks can't show the whole repo, the map can
+        with_map = cfg.prompt_style == "cited" and is_broad_question(question)
+        if with_map:
+            context = f"{self.repo_map()}\n\n---\n\n{context}"
         sources = [Source.from_meta(n, meta, hop, self._position[id(meta)])
                    for n, (_, meta, hop) in enumerate(retrieved, 1)]
+        for source in sources:
+            if source.hop:
+                source.via = self._via_names(source.chunk_id, vias)
         if debug:
             for n, (source, (chunk, meta, hop)) in enumerate(zip(sources, retrieved), 1):
                 source.debug = self._explain(source.chunk_id, trace, chunk, meta, hop,
                                              question, cfg, n)
         yield {"type": "sources", "sources": [asdict(s) for s in sources], "context": context,
+               "repo_map": with_map,
                "retrieve_ms": round((time.perf_counter() - t0) * 1000, 1)}
         self._log(f"\n--- CONTEXT SENT TO LLM ---\n{context[:1000]}")
 
@@ -324,12 +355,13 @@ class Source:
     hop: int            # 0 = vector hit, n = reached through the call graph
     qname: str
     chunk_id: int = -1  # position in agent.documents (= graph node id)
+    via: list | None = None     # hop > 0: names on the call-graph path from the vector hit
     debug: dict | None = None   # stream(debug=True): rank/similarity or graph path
 
     @classmethod
     def from_meta(cls, n, meta, hop, chunk_id=-1):
         path, lo, hi = source_location(meta)
-        return cls(id=n, name=display_name(meta), kind=meta["type"], file=path,
+        return cls(id=n, name=public_name(meta), kind=meta["type"], file=path,
                    start_line=lo, end_line=hi, hop=hop, qname=meta.get("qname", meta["name"]),
                    chunk_id=chunk_id)
 

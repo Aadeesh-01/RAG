@@ -5,6 +5,7 @@ FastAPI server for the pre-indexed demo repositories.
     GET  /api/demos
     GET  /api/repos/{repo_id}
     GET  /api/repos/{repo_id}/graph?version=v7
+    GET  /api/repos/{repo_id}/file?path=pkg/mod.py    whole indexed file, for the code viewer
     POST /api/repos/{repo_id}/retrieve      JSON: sources (+ context), no LLM
     POST /api/repos/{repo_id}/ask           Server-Sent Events: sources, token*, done | error
 
@@ -32,6 +33,7 @@ from .jobs import Indexer, NotAllowed, QueueFull
 from .limits import AnswerCache, RateLimiter, client_ip
 from .registry import Repos, load_demos
 from .settings import Settings
+from .sources import SourceUnavailable, fetch_url, read_source
 
 log = logging.getLogger("coderag.web")
 HOUR, DAY = 3600, 86400
@@ -121,13 +123,14 @@ def _sse(event):
 
 
 def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedder=None,
-               indexer=None):
+               indexer=None, fetch_source=fetch_url):
     """
     settings    : Settings (default: from CODERAG_* env vars)
     demos       : {id: Demo} (default: loaded from settings.data_dir)
     llm_factory : callable(LLMChoice) -> backend or None (default: LLMFactory)
     embedder    : embedding model shared by all indexes (default: loaded, behind a lock)
     indexer     : jobs.Indexer for visitors' repos (default: built from the above)
+    fetch_source: callable(url) -> text, for files not saved locally (default: GitHub raw)
     """
     settings = settings or Settings.from_env()
     if embedder is None:
@@ -235,6 +238,25 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         if key not in graphs:
             graphs[key] = graph_data(agent)
         return graphs[key]
+
+    @app.get("/api/repos/{repo_id}/file")
+    def source_file(repo_id: str, path: str, request: Request, version: str | None = None):
+        demo, version, agent = resolve(repo_id, version)
+        limit(request, "file", settings.retrieve_per_ip_per_hour)
+        if len(path) > 500:
+            raise HTTPException(404, "Not an indexed file")
+        base = (repos.directory(repo_id) if demo.kind == "user"
+                else os.path.join(settings.data_dir, "demos", repo_id))
+        try:
+            text, origin = read_source(demo, agent, path, os.path.join(base, "sources"),
+                                       fetch=fetch_source)
+        except KeyError:
+            raise HTTPException(404, "Not an indexed file")
+        except SourceUnavailable as e:
+            raise HTTPException(502, str(e))
+        url = demo.source_url(path, 1, 1)
+        return {"path": path, "text": text, "origin": origin,
+                "url": url.split("#")[0] if url else None}
 
     @app.post("/api/repos/{repo_id}/retrieve")
     def retrieve(repo_id: str, body: RetrieveRequest, request: Request):

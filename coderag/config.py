@@ -68,6 +68,11 @@ SYSTEM_PROMPT_CITED = (
     "(e.g. `Session.send`).\n"
     "- Only state that X calls Y if a source's code or its calls/called_by line shows it.\n"
     "- If the sources do not contain the answer, say so plainly instead of guessing.\n"
+    "- A REPO MAP may come before the sources for questions about the whole project: base "
+    "the project's structure on it, not on a few sources. It is not a numbered source; "
+    "don't cite it.\n"
+    "- Name symbols rather than writing full file paths in backticks; the citation carries "
+    "the location.\n"
     "- Be concise."
 )
 

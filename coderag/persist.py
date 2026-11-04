@@ -112,6 +112,9 @@ def load_agent(cls, directory, config=None, llm=None, load_llm=True, verbose=Tru
     if os.path.exists(os.path.join(directory, GRAPH_FILE)):
         from .resolve import CodeGraph
         code_graph = CodeGraph.from_dict(documents, _read_json(directory, GRAPH_FILE))
+        if code_graph.migrated:                     # saved by an older resolver: edges pruned
+            code_graph.apply_called_by()
+            agent._log("[RAG] Call graph migrated to the current resolver")
     agent._set_documents(documents, code_graph)
 
     agent.index = VectorIndex.load(directory, config.embed_model, embedder)

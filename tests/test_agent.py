@@ -70,3 +70,16 @@ def test_cli_graph(tmp_path, zoo_repo):
 
 def test_cli_bad_repo(tmp_path):
     assert main(["chunks", "--repo", str(tmp_path / "missing")]) == 1
+
+
+def test_graph_sources_name_the_path_that_reached_them(zoo_repo):
+    agent = make_agent(zoo_repo, "v8")
+    run_zoo = agent.chunks.index(next(c for c in agent.chunks if c.startswith("def run_zoo")))
+    agent.index.ranking = [run_zoo]
+    sources = next(agent.stream("how does the zoo run", llm=None))["sources"]
+    by_name = {s["name"]: s for s in sources}
+    assert by_name["run_zoo"]["hop"] == 0 and by_name["run_zoo"]["via"] is None
+    hop1 = [s for s in sources if s["hop"] == 1]
+    assert hop1 and all(s["via"] == ["run_zoo"] for s in hop1)
+    for s in (s for s in sources if s["hop"] >= 2):
+        assert len(s["via"]) == s["hop"] and s["via"][0] == "run_zoo"

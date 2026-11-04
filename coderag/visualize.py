@@ -9,7 +9,7 @@ import json
 
 from .chunking import load_chunks
 from .config import get_config
-from .context import display_name, source_location
+from .context import display_name, module_path, public_name, source_location
 from .graph import build_graph, build_reverse_index
 
 
@@ -267,10 +267,15 @@ def graph_data(agent):
     """
     docs = agent.documents
     labels = unique_labels([d.get("qname", d["name"]) for d in docs])
+    # whole-file chunks: 'graphslam (module)', with the package path only if two share a name
+    modules = {i: module_path(d) for i, d in enumerate(docs) if d["type"] == "file" and "qname" in d}
+    short = [m.split(".")[-1] for m in modules.values()]
+    for i, m in modules.items():
+        labels[i] = f"{m if short.count(m.split('.')[-1]) > 1 else m.split('.')[-1]} (module)"
     nodes = []
     for i, d in enumerate(docs):
         path, lo, hi = source_location(d)
-        nodes.append({"id": i, "name": display_name(d), "label": labels[i], "kind": d["type"],
+        nodes.append({"id": i, "name": public_name(d), "label": labels[i], "kind": d["type"],
                       "file": path, "start_line": lo, "end_line": hi,
                       "qname": d.get("qname", d["name"])})
 

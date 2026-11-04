@@ -1,0 +1,457 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-04T14:36:11+00:00",
+  "title": "Design System: coderag",
+  "extensions": {
+    "colorMeta": {
+      "operator-amber": {
+        "role": "primary",
+        "displayName": "Operator Amber",
+        "canonical": "oklch(54% 0.14 70)",
+        "dark": "oklch(82% 0.15 80)",
+        "tonalRamp": [
+          "oklch(15% 0.049 70)",
+          "oklch(26% 0.074 70)",
+          "oklch(37% 0.099 70)",
+          "oklch(48% 0.124 70)",
+          "oklch(59% 0.131 70)",
+          "oklch(70% 0.106 70)",
+          "oklch(82% 0.079 70)",
+          "oklch(95% 0.049 70)"
+        ]
+      },
+      "operator-amber-ink": {
+        "role": "primary",
+        "displayName": "Operator Amber Ink",
+        "canonical": "oklch(98.5% 0.006 85)",
+        "dark": "oklch(18% 0.04 75)",
+        "tonalRamp": [
+          "oklch(15% 0.002 85)",
+          "oklch(26% 0.003 85)",
+          "oklch(37% 0.004 85)",
+          "oklch(48% 0.005 85)",
+          "oklch(59% 0.006 85)",
+          "oklch(70% 0.005 85)",
+          "oklch(82% 0.003 85)",
+          "oklch(95% 0.002 85)"
+        ]
+      },
+      "operator-amber-soft": {
+        "role": "primary",
+        "displayName": "Operator Amber Soft",
+        "canonical": "oklch(92% 0.05 80)",
+        "dark": "oklch(29% 0.05 80)",
+        "tonalRamp": [
+          "oklch(15% 0.017 80)",
+          "oklch(26% 0.026 80)",
+          "oklch(37% 0.035 80)",
+          "oklch(48% 0.044 80)",
+          "oklch(59% 0.047 80)",
+          "oklch(70% 0.038 80)",
+          "oklch(82% 0.028 80)",
+          "oklch(95% 0.017 80)"
+        ]
+      },
+      "operator-amber-hover": {
+        "role": "primary",
+        "displayName": "Operator Amber Hover",
+        "canonical": "oklch(49% 0.13 70)",
+        "dark": "oklch(86% 0.13 80)",
+        "tonalRamp": [
+          "oklch(15% 0.045 70)",
+          "oklch(26% 0.069 70)",
+          "oklch(37% 0.092 70)",
+          "oklch(48% 0.115 70)",
+          "oklch(59% 0.122 70)",
+          "oklch(70% 0.098 70)",
+          "oklch(82% 0.073 70)",
+          "oklch(95% 0.045 70)"
+        ]
+      },
+      "readout-blue": {
+        "role": "secondary",
+        "displayName": "Readout Blue",
+        "canonical": "oklch(52% 0.14 250)",
+        "dark": "oklch(77% 0.12 245)",
+        "tonalRamp": [
+          "oklch(15% 0.049 250)",
+          "oklch(26% 0.074 250)",
+          "oklch(37% 0.099 250)",
+          "oklch(48% 0.124 250)",
+          "oklch(59% 0.131 250)",
+          "oklch(70% 0.106 250)",
+          "oklch(82% 0.079 250)",
+          "oklch(95% 0.049 250)"
+        ]
+      },
+      "readout-blue-soft": {
+        "role": "secondary",
+        "displayName": "Readout Blue Soft",
+        "canonical": "oklch(92.5% 0.03 245)",
+        "dark": "oklch(29% 0.05 245)",
+        "tonalRamp": [
+          "oklch(15% 0.01 245)",
+          "oklch(26% 0.016 245)",
+          "oklch(37% 0.021 245)",
+          "oklch(48% 0.027 245)",
+          "oklch(59% 0.028 245)",
+          "oklch(70% 0.023 245)",
+          "oklch(82% 0.017 245)",
+          "oklch(95% 0.01 245)"
+        ]
+      },
+      "paper": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "oklch(98% 0.006 85)",
+        "dark": "oklch(17% 0.008 250)",
+        "tonalRamp": [
+          "oklch(15% 0.002 85)",
+          "oklch(26% 0.003 85)",
+          "oklch(37% 0.004 85)",
+          "oklch(48% 0.005 85)",
+          "oklch(59% 0.006 85)",
+          "oklch(70% 0.005 85)",
+          "oklch(82% 0.003 85)",
+          "oklch(95% 0.002 85)"
+        ]
+      },
+      "paper-raised": {
+        "role": "neutral",
+        "displayName": "Paper Raised",
+        "canonical": "oklch(95.6% 0.008 85)",
+        "dark": "oklch(21% 0.009 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 85)",
+          "oklch(26% 0.004 85)",
+          "oklch(37% 0.006 85)",
+          "oklch(48% 0.007 85)",
+          "oklch(59% 0.007 85)",
+          "oklch(70% 0.006 85)",
+          "oklch(82% 0.004 85)",
+          "oklch(95% 0.003 85)"
+        ]
+      },
+      "paper-deep": {
+        "role": "neutral",
+        "displayName": "Paper Deep",
+        "canonical": "oklch(93.2% 0.009 85)",
+        "dark": "oklch(13.5% 0.007 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 85)",
+          "oklch(26% 0.005 85)",
+          "oklch(37% 0.006 85)",
+          "oklch(48% 0.008 85)",
+          "oklch(59% 0.008 85)",
+          "oklch(70% 0.007 85)",
+          "oklch(82% 0.005 85)",
+          "oklch(95% 0.003 85)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "oklch(19% 0.01 60)",
+        "dark": "oklch(95% 0.005 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 60)",
+          "oklch(26% 0.005 60)",
+          "oklch(37% 0.007 60)",
+          "oklch(48% 0.009 60)",
+          "oklch(59% 0.009 60)",
+          "oklch(70% 0.008 60)",
+          "oklch(82% 0.006 60)",
+          "oklch(95% 0.003 60)"
+        ]
+      },
+      "ink-soft": {
+        "role": "neutral",
+        "displayName": "Ink Soft",
+        "canonical": "oklch(31% 0.01 60)",
+        "dark": "oklch(83% 0.008 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 60)",
+          "oklch(26% 0.005 60)",
+          "oklch(37% 0.007 60)",
+          "oklch(48% 0.009 60)",
+          "oklch(59% 0.009 60)",
+          "oklch(70% 0.008 60)",
+          "oklch(82% 0.006 60)",
+          "oklch(95% 0.003 60)"
+        ]
+      },
+      "ink-muted": {
+        "role": "neutral",
+        "displayName": "Ink Muted",
+        "canonical": "oklch(45% 0.012 60)",
+        "dark": "oklch(71% 0.01 250)",
+        "tonalRamp": [
+          "oklch(15% 0.004 60)",
+          "oklch(26% 0.006 60)",
+          "oklch(37% 0.008 60)",
+          "oklch(48% 0.011 60)",
+          "oklch(59% 0.011 60)",
+          "oklch(70% 0.009 60)",
+          "oklch(82% 0.007 60)",
+          "oklch(95% 0.004 60)"
+        ]
+      },
+      "hairline": {
+        "role": "neutral",
+        "displayName": "Hairline",
+        "canonical": "oklch(87.5% 0.009 85)",
+        "dark": "oklch(31% 0.01 250)",
+        "tonalRamp": [
+          "oklch(15% 0.003 85)",
+          "oklch(26% 0.005 85)",
+          "oklch(37% 0.006 85)",
+          "oklch(48% 0.008 85)",
+          "oklch(59% 0.008 85)",
+          "oklch(70% 0.007 85)",
+          "oklch(82% 0.005 85)",
+          "oklch(95% 0.003 85)"
+        ]
+      },
+      "hairline-strong": {
+        "role": "neutral",
+        "displayName": "Hairline Strong",
+        "canonical": "oklch(76% 0.011 85)",
+        "dark": "oklch(42% 0.012 250)",
+        "tonalRamp": [
+          "oklch(15% 0.004 85)",
+          "oklch(26% 0.006 85)",
+          "oklch(37% 0.008 85)",
+          "oklch(48% 0.01 85)",
+          "oklch(59% 0.01 85)",
+          "oklch(70% 0.008 85)",
+          "oklch(82% 0.006 85)",
+          "oklch(95% 0.004 85)"
+        ]
+      },
+      "diff-ok": {
+        "role": "tertiary",
+        "displayName": "Diff Green",
+        "canonical": "oklch(50% 0.13 150)",
+        "dark": "oklch(76% 0.15 150)",
+        "tonalRamp": [
+          "oklch(15% 0.045 150)",
+          "oklch(26% 0.069 150)",
+          "oklch(37% 0.092 150)",
+          "oklch(48% 0.115 150)",
+          "oklch(59% 0.122 150)",
+          "oklch(70% 0.098 150)",
+          "oklch(82% 0.073 150)",
+          "oklch(95% 0.045 150)"
+        ]
+      },
+      "diff-bad": {
+        "role": "tertiary",
+        "displayName": "Diff Red",
+        "canonical": "oklch(52% 0.17 25)",
+        "dark": "oklch(70% 0.17 25)",
+        "tonalRamp": [
+          "oklch(15% 0.059 25)",
+          "oklch(26% 0.09 25)",
+          "oklch(37% 0.12 25)",
+          "oklch(48% 0.151 25)",
+          "oklch(59% 0.159 25)",
+          "oklch(70% 0.129 25)",
+          "oklch(82% 0.095 25)",
+          "oklch(95% 0.059 25)"
+        ]
+      },
+      "diff-bad-soft": {
+        "role": "tertiary",
+        "displayName": "Diff Red Soft",
+        "canonical": "oklch(93.5% 0.03 25)",
+        "dark": "oklch(24.5% 0.035 25)",
+        "tonalRamp": [
+          "oklch(15% 0.01 25)",
+          "oklch(26% 0.016 25)",
+          "oklch(37% 0.021 25)",
+          "oklch(48% 0.027 25)",
+          "oklch(59% 0.028 25)",
+          "oklch(70% 0.023 25)",
+          "oklch(82% 0.017 25)",
+          "oklch(95% 0.01 25)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "display": {
+        "displayName": "Display",
+        "purpose": "The repository name heading the chat column."
+      },
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Dialog titles."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Headings inside answers."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Answer prose (68ch max), suggestions, the question field."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Field labels, legends, tabs, meta lines, button text; sentence case, untracked."
+      },
+      "measured": {
+        "displayName": "Measured",
+        "purpose": "What the system measured: symbols, paths and line ranges, ids, counts, model names, commits."
+      }
+    },
+    "shadows": [],
+    "motion": [
+      {
+        "name": "ease-out",
+        "value": "cubic-bezier(0.16, 1, 0.3, 1)",
+        "purpose": "Arrivals and state changes."
+      },
+      {
+        "name": "dur-micro",
+        "value": "120ms",
+        "purpose": "Press, colour steps on hover and selection."
+      },
+      {
+        "name": "dur-short",
+        "value": "220ms",
+        "purpose": "Progress bars and small state transitions."
+      },
+      {
+        "name": "reduced-motion",
+        "value": "transitions off, spinner frozen",
+        "purpose": "prefers-reduced-motion: reduce."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "single-pane",
+        "value": "60rem"
+      },
+      {
+        "name": "phone",
+        "value": "40rem"
+      }
+    ],
+    "colourways": {
+      "light": "paper (the default)",
+      "dark": "graphite: Settings > Appearance, or Match the system on a dark system; values in colorMeta.*.dark"
+    }
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one filled action per view: Ask, or a dialog's confirm.",
+      "html": "<button class=\"ds-btn-primary\" type=\"button\">Ask</button>",
+      "css": ".ds-btn-primary { min-height: 40px; padding: 0 16px; border: 1px solid var(--color-accent, oklch(54% 0.14 70)); border-radius: 6px; background: var(--color-accent, oklch(54% 0.14 70)); color: var(--color-accent-ink, oklch(98.5% 0.006 85)); font: 500 1rem/1 var(--font-body, 'Host Grotesk', ui-sans-serif, system-ui, sans-serif); cursor: pointer; transition: background-color 120ms cubic-bezier(0.16,1,0.3,1), transform 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-primary:hover { background: var(--color-accent-hover, oklch(49% 0.13 70)); border-color: var(--color-accent-hover, oklch(49% 0.13 70)); } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: 2px solid var(--color-accent, oklch(54% 0.14 70)); outline-offset: 2px; } .ds-btn-primary:disabled { opacity: 0.55; cursor: not-allowed; }"
+    },
+    {
+      "name": "Ghost Button",
+      "kind": "button",
+      "refersTo": "button-ghost",
+      "description": "Secondary actions: Add repo, Show full graph, dialog secondaries.",
+      "html": "<button class=\"ds-btn-ghost\" type=\"button\">Add repo</button>",
+      "css": ".ds-btn-ghost { min-height: 32px; padding: 0 12px; border: 1px solid var(--color-rule-2, oklch(76% 0.011 85)); border-radius: 6px; background: var(--color-paper-2, oklch(95.6% 0.008 85)); color: var(--color-ink, oklch(19% 0.01 60)); font: 500 0.875rem/1 var(--font-body, 'Host Grotesk', ui-sans-serif, system-ui, sans-serif); cursor: pointer; transition: background-color 120ms cubic-bezier(0.16,1,0.3,1); } .ds-btn-ghost:hover { background: var(--color-paper-3, oklch(93.2% 0.009 85)); border-color: var(--color-muted, oklch(45% 0.012 60)); } .ds-btn-ghost:active { transform: translateY(1px); } .ds-btn-ghost:focus-visible { outline: 2px solid var(--color-accent, oklch(54% 0.14 70)); outline-offset: 2px; }"
+    },
+    {
+      "name": "Question Field",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Text input on the deepest step; the ring is an inset outline, the edge never changes width.",
+      "html": "<input class=\"ds-input\" type=\"text\" aria-label=\"Question\" placeholder=\"Ask about the code\">",
+      "css": ".ds-input { min-height: 40px; width: 100%; padding: 8px 12px; border: 1px solid var(--color-muted, oklch(45% 0.012 60)); border-radius: 6px; background: var(--color-paper-3, oklch(93.2% 0.009 85)); color: var(--color-ink, oklch(19% 0.01 60)); font: 400 1rem/1.45 var(--font-body, 'Host Grotesk', ui-sans-serif, system-ui, sans-serif); outline: 2px solid transparent; outline-offset: -3px; } .ds-input::placeholder { color: var(--color-muted, oklch(45% 0.012 60)); } .ds-input:hover { background: var(--color-paper-2, oklch(95.6% 0.008 85)); } .ds-input:focus-visible { outline-color: var(--color-accent, oklch(54% 0.14 70)); border-color: var(--color-ink-2, oklch(31% 0.01 60)); }"
+    },
+    {
+      "name": "Repository Tabs",
+      "kind": "nav",
+      "refersTo": "",
+      "description": "Text tabs; the current repository gets an amber underline.",
+      "html": "<nav class=\"ds-tabs\" aria-label=\"Repositories\"><button type=\"button\" aria-pressed=\"true\">pallets/click</button><button type=\"button\" aria-pressed=\"false\">psf/requests</button></nav>",
+      "css": ".ds-tabs { display: flex; gap: 4px; height: 56px; } .ds-tabs button { padding: 0 12px; border: 0; background: none; color: var(--color-muted, oklch(45% 0.012 60)); font: 500 0.875rem/1 var(--font-body, 'Host Grotesk', ui-sans-serif, system-ui, sans-serif); box-shadow: inset 0 -2px 0 transparent; cursor: pointer; } .ds-tabs button:hover { color: var(--color-ink, oklch(19% 0.01 60)); background: var(--color-paper-2, oklch(95.6% 0.008 85)); } .ds-tabs button[aria-pressed='true'] { color: var(--color-ink, oklch(19% 0.01 60)); box-shadow: inset 0 -2px 0 var(--color-accent, oklch(54% 0.14 70)); } .ds-tabs button:focus-visible { outline: 2px solid var(--color-accent, oklch(54% 0.14 70)); outline-offset: -2px; }"
+    },
+    {
+      "name": "Citation Chip",
+      "kind": "chip",
+      "refersTo": "citation-chip",
+      "description": "A numbered reference inside an answer; full blue once the answer cites that source.",
+      "html": "<span class=\"ds-cite\">S2</span> <span class=\"ds-cite ds-cite--cited\">S3</span>",
+      "css": ".ds-cite { display: inline-block; padding: 0 4px; border-radius: 4px; background: var(--color-cool-soft, oklch(92.5% 0.03 245)); color: var(--color-ink, oklch(19% 0.01 60)); font: 500 0.75rem/1.4 var(--font-outlier, 'Atkinson Hyperlegible Mono', ui-monospace, monospace); } .ds-cite--cited { background: var(--color-cool, oklch(52% 0.14 250)); color: var(--color-paper-3, oklch(93.2% 0.009 85)); }"
+    },
+    {
+      "name": "Question Entry",
+      "kind": "custom",
+      "refersTo": "question-entry",
+      "description": "The person's question in a notebook entry: amber-tinted, right-aligned.",
+      "html": "<div class=\"ds-question\">Who calls resolve_redirects?</div>",
+      "css": ".ds-question { display: inline-block; max-width: 85%; padding: 8px 16px; border-radius: 10px; background: var(--color-accent-soft, oklch(92% 0.05 80)); color: var(--color-ink, oklch(19% 0.01 60)); font: 400 1rem/1.55 var(--font-body, 'Host Grotesk', ui-sans-serif, system-ui, sans-serif); }"
+    },
+    {
+      "name": "Evidence Entry",
+      "kind": "card",
+      "refersTo": "answer-panel",
+      "description": "Signature: the answer and its sources cut from one raised surface; rows keyed like the graph's nodes (filled and ringed = cited, hollow = retrieved only); direct matches silent, graph sources name their path.",
+      "html": "<article class=\"ds-answer\"><p class=\"ds-answer__body\"><code>Session.send</code> calls <code>resolve_redirects</code> <span class=\"ds-cite ds-cite--cited\">S2</span>.</p><p class=\"ds-answer__meta\">Answered by <span class=\"ds-mono\">groq/openai/gpt-oss-120b</span></p><div class=\"ds-source\"><span class=\"ds-cite ds-cite--cited\">S2</span><span class=\"ds-source__what\"><span class=\"ds-mono ds-source__name\">SessionRedirectMixin.resolve_redirects</span><span class=\"ds-mono ds-source__where\">sessions.py:186-307</span></span><span class=\"ds-source__how\"><i class=\"ds-key ds-key--cited\"></i>Direct match</span></div><div class=\"ds-source\"><span class=\"ds-cite\">S5</span><span class=\"ds-source__what\"><span class=\"ds-mono ds-source__name\">Session.send</span><span class=\"ds-mono ds-source__where\">sessions.py:752-830</span></span><span class=\"ds-source__how\"><i class=\"ds-key\"></i>Call graph, hop 1</span></div></article>",
+      "css": ".ds-answer { border: 1px solid var(--color-rule, oklch(87.5% 0.009 85)); border-radius: 10px; background: var(--color-paper-2, oklch(95.6% 0.008 85)); color: var(--color-ink-2, oklch(31% 0.01 60)); overflow: hidden; font: 400 1rem/1.6 var(--font-body, 'Host Grotesk', ui-sans-serif, system-ui, sans-serif); } .ds-answer__body { margin: 16px 24px 0; } .ds-answer__body code { padding: 2px 4px; border-radius: 4px; background: var(--color-paper-3, oklch(93.2% 0.009 85)); color: var(--color-ink, oklch(19% 0.01 60)); font: 0.875em var(--font-outlier, 'Atkinson Hyperlegible Mono', ui-monospace, monospace); } .ds-answer__meta { margin: 12px 24px; color: var(--color-muted, oklch(45% 0.012 60)); font-size: 0.875rem; } .ds-mono { font-family: var(--font-outlier, 'Atkinson Hyperlegible Mono', ui-monospace, monospace); font-variant-numeric: tabular-nums slashed-zero; } .ds-cite { display: inline-block; padding: 0 4px; border-radius: 4px; background: var(--color-cool-soft, oklch(92.5% 0.03 245)); color: var(--color-ink, oklch(19% 0.01 60)); font: 500 0.75rem/1.4 var(--font-outlier, 'Atkinson Hyperlegible Mono', ui-monospace, monospace); } .ds-cite--cited { background: var(--color-cool, oklch(52% 0.14 250)); color: var(--color-paper-3, oklch(93.2% 0.009 85)); } .ds-source { display: grid; grid-template-columns: 2.5rem minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 8px 24px; border-top: 1px solid var(--color-rule, oklch(87.5% 0.009 85)); } .ds-source:hover { background: var(--color-paper-3, oklch(93.2% 0.009 85)); } .ds-source__what { display: grid; min-width: 0; } .ds-source__name { color: var(--color-ink, oklch(19% 0.01 60)); font-size: 0.875rem; } .ds-source__where { color: var(--color-muted, oklch(45% 0.012 60)); font-size: 0.8125rem; } .ds-source__how { display: inline-flex; align-items: center; gap: 8px; color: var(--color-muted, oklch(45% 0.012 60)); font-size: 0.8125rem; } .ds-key { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-cool, oklch(52% 0.14 250)); background: transparent; } .ds-key--cited { margin-inline: 2px; background: var(--color-cool, oklch(52% 0.14 250)); outline: 1.5px solid var(--color-cool, oklch(52% 0.14 250)); outline-offset: 2px; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Lab Notebook",
+    "overview": "Every answer is a notebook entry that carries its evidence (the sources it cites, where they live, and how they were reached), and the interface recedes so that record can be read and checked.",
+    "keyCharacteristics": [
+      "Three surface steps, depth by lightness, never by shadow.",
+      "Amber means the person; blue means the system. Never swapped.",
+      "Mono only for system-measured values: code, paths, line ranges, ids, counts, model names.",
+      "Show the code, not a picture of it: the right pane opens on the cited lines.",
+      "One filled primary action per view; everything else outlined or typographic.",
+      "Paper is the default colourway; graphite is the same tokens re-derived for dark, chosen in Settings or following the system."
+    ],
+    "rules": [
+      {
+        "name": "The Two Voices Rule",
+        "body": "Amber is the operator and blue is the readout, in every colourway. An amber citation or a blue Ask button is the system lying about who said what. Amber marks only the person's own state: their questions, the Ask button, the open repository tab, the keyboard focus ring. When the system points at something (a source row it opens, a node it pulses), that highlight is Readout Blue.",
+        "section": "colors"
+      },
+      {
+        "name": "The Signal Budget Rule",
+        "body": "Amber covers under 5% of any viewport. Its rarity is how the eye finds the next action.",
+        "section": "colors"
+      },
+      {
+        "name": "The Who-Wrote-It Rule",
+        "body": "Mono is reserved for what the system measured or the code contains. A label, heading or button in mono is costume.",
+        "section": "typography"
+      },
+      {
+        "name": "The Two Weights Rule",
+        "body": "400 and 500 only. Hierarchy past that comes from size, colour and the surface a line sits on.",
+        "section": "typography"
+      },
+      {
+        "name": "The No-Lamp Rule",
+        "body": "Nothing glows, blooms or casts a shadow. If something needs to stand forward, it moves one lightness step.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** keep amber for the person and blue for the system in every new component and in both colourways.",
+      "**Do** set code, paths, line ranges, ids, counts and model names in the measured mono with tabular figures; set everything else in Host Grotesk.",
+      "**Do** separate panels that belong together with 1px hairlines on one surface, and step lightness for depth.",
+      "**Do** give every control all its states: hover, instant 2px focus ring, pressed, disabled (opacity, cursor and attribute together), loading, error.",
+      "**Do** key anything that refers to retrieved code like the graph: filled and ringed when the answer cites it, hollow when it was only retrieved, and label it with its S-number.",
+      "**Do** keep the graph's labels at 12px or more on screen: the fit stops zooming out where they would shrink, and labels that can't hold that size give way to the answer's."
+    ],
+    "donts": [
+      "**Don't** add shadows, glows or gradients to any surface.",
+      "**Don't** use mono for labels, headings or buttons.",
+      "**Don't** put a second filled button beside the primary.",
+      "**Don't** join meta with middle dots or decorate labels with coloured dots; use columns, rules or separate elements.",
+      "**Don't** set labels in tracked capitals; labels are sentence case at 0.875rem, untracked.",
+      "**Don't** animate width, height or position; only transform and opacity, with a reduced-motion fallback."
+    ]
+  }
+}

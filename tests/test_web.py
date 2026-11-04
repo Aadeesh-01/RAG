@@ -12,6 +12,7 @@ from coderag.web.app import create_app  # noqa: E402
 from coderag.web.limits import RateLimiter, client_ip  # noqa: E402
 from coderag.web.registry import Demo  # noqa: E402
 from coderag.web.settings import Settings  # noqa: E402
+from coderag.web.sources import indexed_files  # noqa: E402
 from conftest import FakeIndex, FakeLLM, HashEncoder  # noqa: E402
 
 
@@ -28,7 +29,7 @@ class Factory:
         return None if choice.provider == "none" else self.llm
 
 
-def make_client(sample_repo, factory=None, tmp_dir=None, indexer=None, **settings):
+def make_client(sample_repo, factory=None, tmp_dir=None, indexer=None, fetch_source=None, **settings):
     agent = RAGCodebaseAgent(sample_repo, get_config("v7"), index=FakeIndex(),
                              load_llm=False, verbose=False)
     demo = Demo(id="sample", name="Sample", url="https://github.com/o/r", sha="a" * 40,
@@ -36,7 +37,8 @@ def make_client(sample_repo, factory=None, tmp_dir=None, indexer=None, **setting
     factory = factory or Factory()
     settings.setdefault("data_dir", str(tmp_dir or os.path.join(os.path.dirname(sample_repo), "_unused")))
     app = create_app(Settings(**settings), demos={"sample": demo}, llm_factory=factory,
-                     limiter=RateLimiter(), embedder=HashEncoder(), indexer=indexer)
+                     limiter=RateLimiter(), embedder=HashEncoder(), indexer=indexer,
+                     **({"fetch_source": fetch_source} if fetch_source else {}))
     return TestClient(app), factory
 
 
@@ -223,3 +225,56 @@ def test_graph_labels_are_unique():
     # methods keep their class even when the bare method name is unique
     assert unique_labels(["pipeline/processing.py::DataProcessor.transform",
                           "pipeline/main.py::run"]) == ["DataProcessor.transform", "run"]
+
+
+# ── whole files for the code viewer ─────────────────────────────────────────
+def test_file_from_local_checkout(sample_repo, tmp_path):
+    c, _ = make_client(sample_repo, tmp_dir=tmp_path, fetch_source=lambda url: pytest.fail(url))
+    agent = c.app.state.repos.get("sample").agents["v7"]
+    rel = sorted(indexed_files(agent))[0]
+    r = c.get("/api/repos/sample/file", params={"path": rel})
+    assert r.status_code == 200
+    body = r.json()
+    with open(os.path.join(sample_repo, rel), encoding="utf-8") as f:
+        assert body["text"] == f.read()
+    assert body["origin"] == "local"
+    assert body["url"] == f"https://github.com/o/r/blob/{'a' * 40}/src/{rel}"
+
+
+def test_file_only_serves_indexed_paths(sample_repo, tmp_path):
+    c, _ = make_client(sample_repo, tmp_dir=tmp_path, fetch_source=lambda url: pytest.fail(url))
+    for path in ["../conftest.py", "nope.py", "/etc/passwd", "..\\x.py", "x" * 600]:
+        assert c.get("/api/repos/sample/file", params={"path": path}).status_code == 404, path
+
+
+REMOTE = "def remote():\n    pass\n"
+
+
+def test_file_fetched_from_github_once_then_cached(sample_repo, tmp_path):
+    calls = []
+
+    def fetch(url):
+        calls.append(url)
+        return REMOTE
+
+    c, _ = make_client(sample_repo, tmp_dir=tmp_path, fetch_source=fetch)
+    agent = c.app.state.repos.get("sample").agents["v7"]
+    agent.repo_path = str(tmp_path / "gone")                  # clone deleted after indexing
+    rel = sorted(indexed_files(agent))[0]
+    first = c.get("/api/repos/sample/file", params={"path": rel}).json()
+    again = c.get("/api/repos/sample/file", params={"path": rel}).json()
+    assert calls == [f"https://raw.githubusercontent.com/o/r/{'a' * 40}/src/{rel}"]
+    assert (first["origin"], again["origin"]) == ("github", "cache")
+    assert again["text"] == REMOTE
+
+
+def test_file_fetch_failure_is_a_clear_502(sample_repo, tmp_path):
+    def fetch(url):
+        raise OSError("network down")
+
+    c, _ = make_client(sample_repo, tmp_dir=tmp_path, fetch_source=fetch)
+    agent = c.app.state.repos.get("sample").agents["v7"]
+    agent.repo_path = str(tmp_path / "gone")
+    rel = sorted(indexed_files(agent))[0]
+    r = c.get("/api/repos/sample/file", params={"path": rel})
+    assert r.status_code == 502 and "GitHub" in r.json()["error"]
