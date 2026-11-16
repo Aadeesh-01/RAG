@@ -11,8 +11,8 @@
 
 const KEY = "coderag.user";
 
-/** Is the app behind sign-in? (One switch, if a public demo is wanted again.) */
-export const REQUIRE_SIGN_IN = true;
+// The demo repositories (sample, requests, click) are open to everyone. Signing in is
+// needed to add a repository and to see the ones you added (app.js asks currentUser()).
 
 /** GitHub sign-in isn't wired up yet; the button says so. */
 export const GITHUB_READY = false;

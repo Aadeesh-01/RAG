@@ -34,7 +34,7 @@ def test_cdn_scripts_are_pinned_with_integrity(page):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="Node.js not installed")
-@pytest.mark.parametrize("script", ["auth.js", "home.js", "login.js"])
+@pytest.mark.parametrize("script", ["auth.js", "home.js", "login.js", "hero-graph.js"])
 def test_page_scripts_parse(script):
     result = subprocess.run(["node", "--check", script], cwd=FRONTEND, capture_output=True, text=True, timeout=60)
     assert result.returncode == 0, result.stderr

@@ -263,7 +263,8 @@ function setupAddRepo() {
         + `${limits.skipped_dirs.join(", ")} folders are skipped.` : "";
     dialog.showModal();
   };
-  $("#add-repo-button").addEventListener("click", () => open());
+  // adding a repository needs an account (it costs the server an index); the demos don't
+  $("#add-repo-button").addEventListener("click", () => (currentUser() ? open() : toSignIn()));
   $("#add-repo-cancel").addEventListener("click", () => dialog.close());
   $("#add-repo-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -1710,6 +1711,10 @@ function autosize() {
 /** The account button: who is signed in, and the way out. */
 function setupAccount() {
   const user = currentUser();
+  // signed out: the demo repositories are open; the header offers sign-in instead of an account
+  $("#sign-in-link").hidden = Boolean(user);
+  $("#user-button").hidden = !user;
+  $("#sign-in-link").href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   if (!user) return;
   $("#user-initials").textContent = initials(user.name);
   $("#user-button").title = `Signed in as ${user.name}`;
@@ -1721,12 +1726,17 @@ function setupAccount() {
   });
 }
 
+/** To sign-in, coming back to this exact view afterwards. */
+function toSignIn() {
+  window.location.href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
+}
+
 async function start() {
   setupAccount();
   setupSettings();
   setupSaved();
   const openAddRepo = setupAddRepo();
-  state.userRepos = loadUserRepos();
+  state.userRepos = currentUser() ? loadUserRepos() : [];   // your added repositories need you signed in
   showPanel("chat");
   document.querySelectorAll(".panel-tabs button").forEach((b) => b.addEventListener("click", () => showPanel(b.dataset.panel)));
   // Code | Call graph: a tablist, so the arrow keys move between the two tabs
@@ -1817,6 +1827,9 @@ async function start() {
 
   const params = new URL(window.location.href).searchParams;
   const wanted = params.get("repo");
+  // a link to a repository someone added (not a demo) needs an account, as adding it did
+  const demo = wanted && state.demos.some((d) => d.id === wanted || d.name === wanted);
+  if (wanted && !demo && !currentUser()) { toSignIn(); return; }
   const info = wanted ? await repoInfo(wanted) : null;
   await selectRepo(info ? info.id : state.demos[0]?.id);
   if (wanted && !info) {

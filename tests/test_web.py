@@ -286,5 +286,5 @@ def test_pages_home_app_and_sign_in(client):
     c, _ = client
     assert "home.js" in c.get("/").text
     app = c.get("/app")
-    assert app.status_code == 200 and "app.js" in app.text and "coderag.user" in app.text   # signed-out visitors go to /login
+    assert app.status_code == 200 and "app.js" in app.text and 'id="sign-in-link"' in app.text   # demos open signed out
     assert "login.js" in c.get("/login").text

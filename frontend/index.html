@@ -14,6 +14,12 @@
       try { choice = JSON.parse(localStorage.getItem("coderag.settings") || "{}").theme || "light"; } catch (e) {}
       var dark = choice === "dark" || (choice === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
       document.documentElement.setAttribute("data-mode", dark ? "dark" : "light");
+      // the hero plays its sequence once: hold its start state from the first paint, unless motion is
+      // reduced; if the script never starts, show the final state anyway
+      if (!window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
+        document.documentElement.classList.add("hero-intro");
+        setTimeout(function () { if (!window.__heroStarted) document.documentElement.classList.remove("hero-intro"); }, 1500);
+      }
     })();
   </script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -23,7 +29,7 @@
   <link rel="stylesheet" href="site.css">
   <script type="module" src="home.js"></script>
 </head>
-<body class="site">
+<body class="site home">
   <a class="skip-link" href="#main">Skip to the content</a>
   <header class="site-top">
     <a class="brand" href="/" aria-label="coderag home">
@@ -43,28 +49,55 @@
         <h1 id="hero-title">Ask a Python codebase. Get answers that cite the code.</h1>
         <p class="lead">coderag reads a repository the way you would: it finds the functions that match your question, follows the calls between them, and answers with a citation for every claim. Click one and you are at the exact lines.</p>
         <div class="hero-actions">
-          <a id="primary-cta" class="primary" href="/login?next=%2Fapp">Sign in to start</a>
-          <a class="ghost" href="/app?repo=sample">Try the sample repository</a>
+          <a id="primary-cta" class="primary" href="/app?repo=sample&amp;q=Which%20functions%20call%20normalize_name%3F">Try the sample repository</a>
         </div>
         <p class="fine">Python only. Public GitHub repositories. Code is read, never run.</p>
       </div>
 
-      <figure class="hero-example">
-        <!-- a real answer from the sample repository, in the app's own components -->
-        <div class="turn">
-          <div class="question">Which functions call normalize_name?</div>
-          <div class="answer">
-            <div class="body"><p><code>normalize_name</code> is called by <span class="cite-run"><code>DataProcessor.transform</code> <span class="cite">S3</span>.</span></p></div>
-            <div class="meta"><span class="by">Answered by <span class="measured">groq/openai/gpt-oss-120b</span> <span class="measured">1.0 s</span></span></div>
-            <section class="sources" aria-label="Sources of this example">
-              <h2>Cited (1)</h2>
-              <div class="source"><div class="row"><span class="sid cited">S3</span><span class="what"><span class="name">DataProcessor.transform</span> <span class="where">pipeline/processing.py:22-26</span></span></div></div>
-              <div class="source"><div class="row"><span class="sid">S1</span><span class="what"><span class="name">normalize_name</span> <span class="where">pipeline/processing.py:29-31</span></span></div></div>
-              <p class="also-line">Also retrieved (8), sent to the model as context, not cited</p>
-            </section>
+      <figure id="exhibit" class="hero-exhibit" aria-labelledby="exhibit-note">
+        <!-- the sample repository's call graph (pipeline package), drawn by hero-graph.js -->
+        <div class="hero-graph" aria-hidden="false"></div>
+
+        <!-- a real answer about the sample repository; this markup is its final state -->
+        <div class="exhibit-card">
+          <p class="prompt">
+            <svg class="prompt-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5 9.5 8 5 12.5"/></svg>
+            <span class="visually-hidden">Question: Which functions call normalize_name?</span>
+            <span class="prompt-text" aria-hidden="true">Which functions call normalize_name?</span><span class="caret" aria-hidden="true"></span>
+          </p>
+          <!-- while the sequence plays, the card says what the system is doing (as the app does) -->
+          <p class="exhibit-status" aria-hidden="true"><span class="st-search">Searching the code…</span><span class="st-follow">Following the calls…</span></p>
+          <div class="exhibit-answer">
+            <p class="answer-text"><code>normalize_name</code> is called by <span class="cite-run"><code>DataProcessor.transform</code> <button type="button" class="cite" data-sid="3" aria-label="S3: DataProcessor.transform, pipeline/processing.py lines 22 to 26">S3</button>.</span></p>
+            <p class="answered-by">Answered by <span class="measured">groq/openai/gpt-oss-120b</span> in <span class="measured">1.0 s</span></p>
+          </div>
+          <div class="exhibit-sources">
+            <p class="sources-head">Cited (1)</p>
+            <div class="src cited" data-sid="3">
+              <button type="button" class="src-row" data-sid="3" aria-describedby="code-s3">
+                <span class="sid cited">S3</span>
+                <span class="src-what"><span class="src-name">DataProcessor.transform</span> <span class="src-where">pipeline/processing.py:22-26</span></span>
+              </button>
+              <pre class="src-code" id="code-s3" aria-label="pipeline/processing.py, lines 22 to 26"><code><span class="ln" data-n="22">def transform(self, record):</span>
+<span class="ln" data-n="23">    cleaned = {key.strip().lower(): str(value).strip() for key, value in record.items()}</span>
+<span class="ln hit" data-n="24">    cleaned["name"] = <mark>normalize_name</mark>(cleaned["name"])</span>
+<span class="ln" data-n="25">    cleaned["age"] = int(cleaned["age"])</span>
+<span class="ln" data-n="26">    return cleaned</span></code></pre>
+            </div>
+            <p class="sources-head">Also retrieved (9) <span class="sources-note">sent to the model as context, not cited</span></p>
+            <div class="src" data-sid="1">
+              <button type="button" class="src-row" data-sid="1">
+                <span class="sid">S1</span>
+                <span class="src-what"><span class="src-name">normalize_name</span> <span class="src-where">pipeline/processing.py:29-31</span></span>
+              </button>
+            </div>
           </div>
         </div>
-        <figcaption>From the sample repository: the answer names its evidence, and S3 opens <code>pipeline/processing.py</code> at lines 22 to 26.</figcaption>
+
+        <figcaption id="exhibit-note" class="footnote">
+          <span>A real answer about the sample repository. S-numbers are its sources; the filled one is cited. Point at S3 or S1 to see where each sits in the call graph.</span>
+          <button id="replay" class="link-button" type="button">Replay</button>
+        </figcaption>
       </figure>
     </section>
 
@@ -89,16 +122,19 @@
     <section id="repos" class="repos" aria-labelledby="repos-title">
       <div class="repos-head">
         <h2 id="repos-title">Ready to ask</h2>
-        <p>Indexed and waiting, or add any public GitHub repository from the app<span id="limits"></span>.</p>
+        <p id="repos-lead">Open one without signing in, or sign in to add any public GitHub repository<span id="limits"></span>.</p>
       </div>
-      <ul id="repo-list" class="repo-list" aria-live="polite">
-        <li class="loading">Loading the repositories…</li>
+      <p id="repo-status" class="repo-status" role="status"></p>
+      <ul id="repo-list" class="repo-list" aria-busy="true">
+        <li class="repo skeleton" aria-hidden="true"><span></span><span></span><span></span></li>
+        <li class="repo skeleton" aria-hidden="true"><span></span><span></span><span></span></li>
+        <li class="repo skeleton" aria-hidden="true"><span></span><span></span><span></span></li>
       </ul>
     </section>
   </main>
 
   <footer class="site-foot">
-    <p>Sign-in is a demo for now: any name and password work, and only the name is kept in this browser. GitHub sign-in is coming.</p>
+    <p>Signing in, needed to add your own repositories, is a demo for now: any name and password work, and only the name is kept in this browser. GitHub sign-in is coming.</p>
     <a href="https://github.com/Aadeesh-01/RAG" target="_blank" rel="noopener">Source on GitHub</a>
   </footer>
 </body>
