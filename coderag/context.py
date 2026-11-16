@@ -9,6 +9,8 @@ Retrieved items are (chunk_text, meta, hop) triples:
 import os
 import re
 
+from .languages import fence_of
+
 # "who calls X", "which functions use X", "callers of X", "where is X called"
 _CALLER_INTENT = re.compile(
     r"\b(?:who|what|which(?:\s+\w+){0,2})\s+(?:calls?|uses?|invokes?)\b"
@@ -29,7 +31,7 @@ def display_name(meta):
 
 def module_path(meta):
     """Dotted module of a chunk: 'pkg/sub.py' -> 'pkg.sub', 'pkg/__init__.py' -> 'pkg'."""
-    parts = meta["qname"].split("::")[0][:-3].split("/")
+    parts = os.path.splitext(meta["qname"].split("::")[0])[0].split("/")
     if parts[-1] == "__init__" and len(parts) > 1:
         parts = parts[:-1]
     return ".".join(parts)
@@ -168,7 +170,7 @@ def format_chunk(chunk, meta, hop, question, config, n=None):
     if config.header == "cite" or config.prompt_style == "cited":
         # numbered source the LLM can cite; relationship lines from the rich header
         extra = build_rich_header(meta, hop).split("\n")[1:]
-        return "\n".join([source_label(n, meta, hop)] + extra + ["```python", body, "```"])
+        return "\n".join([source_label(n, meta, hop)] + extra + [f"```{fence_of(meta)}", body, "```"])
     if config.header == "none":
         return body
     if config.header == "name":

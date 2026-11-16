@@ -1,39 +1,113 @@
+/* coderag tokens: every colour, size, space, type and motion value lives here.
+   Two colourways for the app (paper, graphite) and two for the home and sign-in pages (body.site). */
+
 :root {
+  /* type */
+  --font-body: "Host Grotesk", ui-sans-serif, system-ui, sans-serif;
+  --font-display: var(--font-body);
+  --font-measured: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
+  --font-outlier: var(--font-measured);
+  --text-2xs: 0.6875rem; --text-xs: 0.75rem; --text-code: 0.8125rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lead: 1.125rem;
+  --text-lg: 1.2rem; --text-xl: 1.44rem; --text-2xl: 1.728rem; --text-3xl: 2.074rem;
+  --text-hero: clamp(1.9rem, 1.3rem + 1.6vw, 2.5rem);
+  --text-display: var(--text-2xl); --text-section: var(--text-xl); --text-title: var(--text-md); --text-measured: var(--text-sm);
+  --leading-tight: 1.05; --leading-snug: 1.3; --leading-base: 1.45; --leading-body: 1.6; --leading-code: 1.65;
+  --tracking-display: -0.025em; --tracking-tight: -0.01em; --display-weight: 500;
+  --underline-offset: 0.2em; --underline-weight: 1px;
+
+  /* measures */
+  --measure: 68ch; --measure-narrow: 42ch; --measure-note: 60ch; --measure-hint: 34ch;
+  --column: 46rem; --site-width: 72rem; --dialog-w: 30rem; --dialog-w-l: 48rem; --login-w: 24rem; --menu-w: 14rem; --card-w: 320px;
+
+  /* space */
+  --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px;
+  --gutter: var(--space-lg);
+
+  /* sizes */
+  --bar-height: 52px; --control: 36px; --control-s: 30px; --control-xs: 26px; --hit: 44px; --row: 44px;
+  --icon: 18px; --icon-s: 16px; --icon-xs: 14px; --mark: 20px; --badge: 18px;
+  --rule: 1px; --rule-strong: 2px; --ring: 2px; --ring-offset: 2px; --ring-inset: -3px;
+  --hero-graph-h: 280px; --hero-graph-h-s: 220px; --code-max-h: 320px; --field-max-h: 160px; --progress-h: 3px; --skeleton-h: 0.9em;
+  --graph-label: 12px; --graph-stroke: 1px; --graph-stroke-2: 1.5px; --graph-stroke-3: 2px; --graph-halo: 3px;
+  --gutter-digits: 5.5ch; --gutter-digits-s: 4ch; --gutter-digits-xs: 3.5ch; --gutter-gap: 1.5ch; --sid-col: 2.5rem; --sid-col-s: 2.25rem;
+  --fade: 32px; --scrollbar: 10px; --scrollbar-pad: 3px;
+
+  /* shape */
+  --radius-panel: 10px; --radius-control: 6px; --radius-chip: 4px; --radius-round: 50%;
+  --radius-card: var(--radius-panel); --radius-pill: var(--radius-control);
+
+  /* motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); --ease: var(--ease-out);
+  --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms; --dur-trace: 450ms; --dur-caret: 0.9s; --dur-spin: 0.8s; --dur-flow: 0.8s; --step-delay: 60ms;
+  --press: translateY(1px); --press-scale: scale(0.98); --cite-lift: scale(1.08); --cite-small: scale(0.85); --ring-grow: scale(1.4); --rise: translateY(4px);
+  --dim: 0.18; --dim-link: 0.08; --dim-hull: 0.3; --dim-hero: 0.28; --disabled: 0.55;
+
+  /* layers */
+  --z-base: 1; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200; --z-modal: 400; --z-toast: 500;
+
+  /* graphite (dark) colourway: the app when the visitor asks for dark */
   color-scheme: dark;
-  --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px; --space-4xl: 144px;
-  --text-xs: 0.75rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lg: 1.2rem; --text-xl: 1.44rem; --text-2xl: 1.728rem; --text-3xl: 2.074rem;
-  --text-display-s: 1.44rem; --text-display: 1.728rem; --text-section: 1.2rem; --text-title: 1rem; --text-lead: 1rem;
-  --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
-  --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms;
-  --color-error: oklch(72% 0.15 27); --color-success: oklch(76% 0.13 150);
-  --container: 1440px; --gutter: 64px; --gap-columns: 32px; --section-gap-s: 120px; --section-gap: 144px; --section-gap-l: 176px;
-  --z-base: 1; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200; --z-sticky-nav: 300; --z-modal: 400; --z-toast: 500; --z-tooltip: 600;
   --color-paper: oklch(17% 0.008 250); --color-paper-2: oklch(21% 0.009 250); --color-paper-3: oklch(13.5% 0.007 250);
   --color-ink: oklch(95% 0.005 250); --color-ink-2: oklch(83% 0.008 250); --color-muted: oklch(71% 0.01 250);
   --color-rule: oklch(31% 0.01 250); --color-rule-2: oklch(42% 0.012 250);
-  --color-accent: oklch(82% 0.15 80); --color-accent-ink: oklch(18% 0.04 75); --color-accent-soft: oklch(29% 0.05 80); --color-focus: oklch(82% 0.15 80);
-  --color-cool: oklch(77% 0.12 245); --color-cool-soft: oklch(29% 0.05 245);
+  --color-accent: oklch(82% 0.15 80); --color-accent-ink: oklch(18% 0.04 75); --color-accent-soft: oklch(29% 0.05 80); --color-accent-hover: oklch(86% 0.13 80);
+  --color-focus: var(--color-accent);
+  --color-cool: oklch(77% 0.12 245); --color-cool-soft: oklch(29% 0.05 245); --color-cool-hover: oklch(82% 0.1 245); --color-cool-ink: var(--color-paper-3);
   --color-ok: oklch(76% 0.15 150); --color-ok-soft: oklch(24.5% 0.03 150); --color-bad: oklch(70% 0.17 25); --color-bad-soft: oklch(24.5% 0.035 25);
-  --font-display: "Host Grotesk", ui-sans-serif, system-ui, sans-serif; --font-body: var(--font-display);
-  --font-outlier: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
-  --radius-card: 10px; --radius-pill: 6px; --rule-hair: 1px;
-  --shadow-card: none;
-  --tracking-display: -0.03em; --display-weight: 500;
-}
-:root { --color-accent-hover: oklch(86% 0.13 80); --color-cool-hover: oklch(82% 0.1 245); }
+  --color-error: var(--color-bad); --color-success: var(--color-ok);
+  --color-string: color-mix(in oklab, var(--color-ok) 60%, var(--color-ink-2));
+  --color-selection: color-mix(in oklab, var(--color-accent) 25%, transparent);
+  --color-backdrop: color-mix(in oklab, var(--color-paper-3) 70%, transparent);
+  --color-hull: color-mix(in oklab, var(--color-ink) 4%, transparent);
+  --color-retrieved-line: color-mix(in oklab, var(--color-cool-soft) 45%, transparent);
+  --color-code-inline: color-mix(in oklab, var(--color-paper-3) 55%, var(--color-paper-2));
+  --color-cool-dim: color-mix(in oklab, var(--color-cool) 50%, var(--color-paper-3));
 
-/* Console, paper colourway: the default. Graphite (above) only when the visitor chooses dark,
-   or chooses "match the system" on a dark system (data-mode="dark", set before first paint) */
-@media all {
-  :root:not([data-mode="dark"]) {
-    color-scheme: light;
-    --color-paper: oklch(98% 0.006 85); --color-paper-2: oklch(95.6% 0.008 85); --color-paper-3: oklch(93.2% 0.009 85);
-    --color-ink: oklch(19% 0.01 60); --color-ink-2: oklch(31% 0.01 60); --color-muted: oklch(45% 0.012 60);
-    --color-rule: oklch(87.5% 0.009 85); --color-rule-2: oklch(76% 0.011 85);
-    --color-accent: oklch(54% 0.14 70); --color-accent-ink: oklch(98.5% 0.006 85); --color-accent-soft: oklch(92% 0.05 80);
-    --color-accent-hover: oklch(49% 0.13 70); --color-focus: oklch(54% 0.14 70);
-    --color-cool: oklch(52% 0.14 250); --color-cool-soft: oklch(92.5% 0.03 245); --color-cool-hover: oklch(46% 0.13 250);
-    --color-ok: oklch(50% 0.13 150); --color-ok-soft: oklch(93% 0.035 150); --color-bad: oklch(52% 0.17 25); --color-bad-soft: oklch(93.5% 0.03 25);
-    --color-error: oklch(52% 0.17 27); --color-success: oklch(50% 0.13 150);
-  }
+  /* relations: how a source relates to the code that reached it. Six hues spread for
+     colour-blind safety (blue, green, purple, vermilion, magenta, olive); always paired with a word or glyph. */
+  --rel-match: var(--color-cool); --rel-match-soft: var(--color-cool-soft);
+  --rel-callee: oklch(76% 0.13 160); --rel-callee-soft: oklch(27% 0.045 160);
+  --rel-caller: oklch(77% 0.13 310); --rel-caller-soft: oklch(28% 0.05 310);
+  --rel-parent: oklch(76% 0.15 35); --rel-parent-soft: oklch(28% 0.05 35);
+  --rel-child: oklch(78% 0.14 350); --rel-child-soft: oklch(28% 0.05 350);
+  --rel-method: oklch(80% 0.12 105); --rel-method-soft: oklch(28% 0.04 105);
+  --rel-ink: var(--color-paper-3);
+}
+
+/* paper (light) colourway: the app's default */
+:root:not([data-mode="dark"]) {
+  color-scheme: light;
+  --color-paper: oklch(98% 0.006 85); --color-paper-2: oklch(95.6% 0.008 85); --color-paper-3: oklch(93.2% 0.009 85);
+  --color-ink: oklch(19% 0.01 60); --color-ink-2: oklch(31% 0.01 60); --color-muted: oklch(45% 0.012 60);
+  --color-rule: oklch(87.5% 0.009 85); --color-rule-2: oklch(76% 0.011 85);
+  --color-accent: oklch(54% 0.14 70); --color-accent-ink: oklch(98.5% 0.006 85); --color-accent-soft: oklch(92% 0.05 80); --color-accent-hover: oklch(49% 0.13 70);
+  --color-cool: oklch(52% 0.14 250); --color-cool-soft: oklch(92.5% 0.03 245); --color-cool-hover: oklch(46% 0.13 250);
+  --color-ok: oklch(50% 0.13 150); --color-ok-soft: oklch(93% 0.035 150); --color-bad: oklch(52% 0.17 25); --color-bad-soft: oklch(93.5% 0.03 25);
+  --rel-callee: oklch(50% 0.13 160); --rel-callee-soft: oklch(93% 0.04 160);
+  --rel-caller: oklch(50% 0.15 310); --rel-caller-soft: oklch(93% 0.04 310);
+  --rel-parent: oklch(53% 0.17 35); --rel-parent-soft: oklch(93% 0.04 35);
+  --rel-child: oklch(54% 0.17 350); --rel-child-soft: oklch(93.5% 0.04 350);
+  --rel-method: oklch(50% 0.12 105); --rel-method-soft: oklch(93% 0.05 105);
+}
+
+/* the home and sign-in colourway: cool paper, graphite ink, graphite primary; blue only for citations */
+body.site {
+  --color-paper: oklch(98.4% 0.002 250); --color-paper-2: oklch(96.2% 0.003 250); --color-paper-3: oklch(93.6% 0.004 250);
+  --color-ink: oklch(22% 0.012 255); --color-ink-2: oklch(33% 0.012 255); --color-muted: oklch(47% 0.012 255);
+  --color-rule: oklch(89% 0.005 255); --color-rule-2: oklch(79% 0.006 255);
+  --color-accent: var(--color-ink); --color-accent-ink: var(--color-paper); --color-accent-hover: oklch(32% 0.014 255);
+  --color-accent-soft: var(--color-paper-3); --color-focus: var(--color-ink);
+  --color-cool: oklch(50% 0.17 258); --color-cool-soft: oklch(93.5% 0.035 255); --color-cool-ink: var(--color-paper);
+  --color-selection: var(--color-cool-soft);
+}
+[data-mode="dark"] body.site {
+  --color-paper: oklch(15.5% 0.008 255); --color-paper-2: oklch(19.5% 0.01 255); --color-paper-3: oklch(23% 0.011 255);
+  --color-ink: oklch(94% 0.005 255); --color-ink-2: oklch(84% 0.007 255); --color-muted: oklch(71% 0.012 255);
+  --color-rule: oklch(29% 0.01 255); --color-rule-2: oklch(40% 0.012 255);
+  --color-accent-hover: oklch(84% 0.007 255);
+  --color-cool: oklch(75% 0.13 252); --color-cool-soft: oklch(30% 0.06 258);
+}
+
+@media (max-width: 40rem) {
+  :root { --gutter: var(--space-md); }
 }

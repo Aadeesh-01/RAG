@@ -58,3 +58,19 @@ def test_rejects_unsafe_inputs(tmp_path, url, sha):
     with pytest.raises(FetchError):
         fetch_commit(url, sha, str(tmp_path / "x"))
     assert not (tmp_path / "x").exists()
+
+
+def test_token_reaches_git_only_through_the_environment(tmp_path):
+    from coderag.gitfetch import _env, _scrub
+
+    token = "gho_" + "x" * 36
+    env = _env(str(tmp_path), token)
+    assert token not in env["GIT_CONFIG_VALUE_0"]              # base64 in a Basic header
+    out = subprocess.run(["git", "config", "--get-urlmatch", "http.extraHeader", "https://github.com/a/b.git"],
+                         cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert out.stdout.startswith("Authorization: Basic ")
+    other = subprocess.run(["git", "config", "--get-urlmatch", "http.extraHeader", "https://evil.example/a.git"],
+                           cwd=tmp_path, env=env, capture_output=True, text=True)
+    assert other.stdout == ""                                   # sent to github.com only
+    assert "GIT_CONFIG_COUNT" not in _env(str(tmp_path))
+    assert _scrub(f"fatal: {token} denied", token) == "fatal: *** denied"

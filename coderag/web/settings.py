@@ -1,7 +1,7 @@
 """Web server settings, read from CODERAG_* environment variables."""
 
 import os
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,11 @@ class Settings:
     max_py_mb: int = 25
     fetch_timeout: int = 120
     index_ignore_dirs: tuple = ("tests", "test", "docs", "examples", "benchmarks")
+    # GitHub sign-in (all three needed; without them the site works signed out)
+    github_client_id: str = ""
+    github_client_secret: str = field(default="", repr=False)
+    session_secret: str = field(default="", repr=False)    # signs cookies, encrypts tokens
+    public_url: str = ""                                   # e.g. https://coderag.example.com
 
     @classmethod
     def from_env(cls, environ=None):

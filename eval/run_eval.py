@@ -7,6 +7,11 @@ and score it against hand-labelled gold symbols.
     python eval/run_eval.py                                  # all question sets, v0-v5
     python eval/run_eval.py eval/questions/sample_repo.yaml --versions v1 v5
     python eval/run_eval.py --by-type --csv eval/results.csv
+    python eval/run_eval.py eval/questions/commander.yaml --versions v9   # JavaScript
+    python eval/run_eval.py eval/questions/coderag.yaml --versions v9 v10 # across HTTP
+
+Gold symbols in .py files are located with `ast`; in other languages (v9) with
+the same tree-sitter chunker the index uses (coderag/languages.py).
 
 Metrics (averaged over questions)
   R@ctx  gold symbols whose code lies in a retrieved chunk (ignores truncation)
@@ -55,8 +60,31 @@ def _norm(path):
     return os.path.normcase(os.path.abspath(path))
 
 
+def resolve_gold_tree_sitter(root, ref):
+    """Gold symbol in a non-Python file: the chunk the tree-sitter chunker makes for it."""
+    from coderag.chunking import parse_tree_sitter_file
+    from coderag.languages import language_for
+
+    rel = ref.split("::")[0]
+    path = os.path.join(root, rel)
+    chunks = parse_tree_sitter_file(path, language_for(path), root, max_file_chars=10**8,
+                                    min_segment_chars=0, chunk_methods=True)
+    found = [c for c in chunks if c["qname"] == ref]
+    if not found:
+        raise KeyError(f"gold symbol not found: {ref}")
+    chunk = found[-1]
+    with open(path, encoding="utf-8", errors="ignore") as f:
+        lines = f.read().splitlines()
+    start, end = chunk["start_line"], chunk["end_line"]
+    return Gold(ref=ref, path=_norm(path), start=start, end=end,
+                signature=lines[start - 1].strip(),
+                body=frozenset(l.strip() for l in lines[start - 1:end] if l.strip()))
+
+
 def resolve_gold(root, ref):
     rel, dotted = ref.split("::")
+    if not rel.endswith(".py"):
+        return resolve_gold_tree_sitter(root, ref)
     path = os.path.join(root, rel)
     with open(path, encoding="utf-8", errors="ignore") as f:
         source = f.read()
@@ -168,11 +196,17 @@ def evaluate(paths, versions, verbose=False):
 
         for version in versions:
             config = parse_version(version)
+            if spec.get("ignore_dirs"):            # e.g. coderag itself: leave out its tests and fixtures
+                config = config.with_overrides(ignore_dirs=tuple(spec["ignore_dirs"]))
             if config.embed_model not in shared:
                 shared[config.embed_model] = VectorIndex(config.embed_model).model
             index = VectorIndex(config.embed_model, model=shared[config.embed_model])
-            agent = RAGCodebaseAgent(root, config, index=index, load_llm=False,
-                                     verbose=False)
+            try:
+                agent = RAGCodebaseAgent(root, config, index=index, load_llm=False,
+                                         verbose=False)
+            except ValueError:              # e.g. v1-v8 on a JavaScript repo: no Python to index
+                print(f"[eval] {name} {version}: nothing to index, skipped", file=sys.stderr)
+                continue
             for question, qtype, golds in questions:
                 row = {"set": name, "version": version, "type": qtype, "q": question}
                 row.update(score_question(agent, question, golds))

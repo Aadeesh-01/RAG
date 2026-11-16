@@ -5,14 +5,22 @@ One worker thread processes a bounded queue, one repo at a time (free CPU):
 
     queued -> fetching -> parsing -> embedding -> saving -> ready | failed
 
-Only *.py files are downloaded (gitfetch python_only), nothing from the repo
+Only source files are downloaded (gitfetch python_only: *.py and the languages in
+languages.py), nothing from the repo
 is executed (the chunker only calls ast.parse), symlinks are not followed,
 and the clone is deleted once the index is saved.
+
+A signed-in visitor's GitHub token is used only when the repository can't be
+seen without it; such a repo is marked private (only people who added it can
+open it), its indexed files are saved beside the index (raw.githubusercontent
+needs a token), and the token is dropped from the job once it finishes.
 """
 
 import logging
 import os
 import queue
+import shutil
+from collections import Counter
 import threading
 import time
 import uuid
@@ -21,8 +29,10 @@ from datetime import datetime, timezone
 
 from ..agent import RAGCodebaseAgent
 from ..config import get_config
-from ..gitfetch import FetchError, fetch_commit, parse_github_url, resolve_sha, rmtree
+from ..gitfetch import SHA, FetchError, fetch_commit, parse_github_url, resolve_sha, rmtree
+from ..languages import language_for
 from .registry import Demo, repo_id_for, repo_stats, write_repo_meta
+from .sources import indexed_files
 
 log = logging.getLogger("coderag.web.jobs")
 
@@ -54,6 +64,9 @@ class IndexJob:
     message: str = "Waiting for a free indexing slot…"
     error: str = ""
     created: float = field(default_factory=time.time)
+    owner_id: int | None = None      # user who asked for it
+    private: bool = False            # only visible with that user's token
+    token: str = field(default="", repr=False)      # never in public() or logs; cleared when done
 
     def public(self, queue_position=0):
         return {"job_id": self.id, "repo_id": self.repo_id, "name": self.name, "sha": self.sha,
@@ -61,23 +74,52 @@ class IndexJob:
                 "message": self.message, "error": self.error, "queue_position": queue_position}
 
 
+def source_language(name):
+    """'python', 'go', ... for an indexable file name, else None."""
+    if name.endswith(".py"):
+        return "python"
+    lang = language_for(name)
+    return lang.name if lang else None
+
+
 def check_limits(root, max_files, max_mb):
-    """Python file count and size of a checkout; IndexFailure if out of bounds."""
-    files, size = 0, 0
+    """
+    Source files (Python and every registered language) of a checkout: count,
+    size and files per language. IndexFailure if out of bounds; the limits
+    (max_py_files, max_py_mb: names kept from Python-only days) cover them all.
+    """
+    languages, size = Counter(), 0
     for dirpath, dirnames, filenames in os.walk(root):
         dirnames[:] = [d for d in dirnames if d != ".git"]
         for name in filenames:
             path = os.path.join(dirpath, name)
-            if name.endswith(".py") and not os.path.islink(path):
-                files += 1
+            lang = source_language(name)
+            if lang and not os.path.islink(path):
+                languages[lang] += 1
                 size += os.path.getsize(path)
+    files = sum(languages.values())
+    what = "Python" if set(languages) <= {"python"} else "source"
     if files == 0:
-        raise IndexFailure("No Python files found in this repository.")
+        raise IndexFailure("No Python files or other supported source files found in this repository.")
     if files > max_files:
-        raise IndexFailure(f"Too many Python files ({files:,}; the limit is {max_files:,}).")
+        raise IndexFailure(f"Too many {what} files ({files:,}; the limit is {max_files:,}).")
     if size > max_mb * 1024 * 1024:
-        raise IndexFailure(f"Too much Python code ({size / 1e6:.0f} MB; the limit is {max_mb} MB).")
-    return {"py_files": files, "py_bytes": size}
+        raise IndexFailure(f"Too much {what} code ({size / 1e6:.0f} MB; the limit is {max_mb} MB).")
+    return {"files": files, "bytes": size, "languages": dict(languages)}
+
+
+def version_for(languages):
+    """v8 for Python-only repos (v9 would index them identically), v9 when other languages are there."""
+    return "v9" if set(languages) - {"python"} else "v8"
+
+
+def save_sources(agent, clone, cache_dir):
+    """Copy the indexed files next to the index (the code viewer's cache, see sources.py)."""
+    for rel in indexed_files(agent):
+        src, dst = os.path.join(clone, rel), os.path.join(cache_dir, rel)
+        if os.path.isfile(src) and not os.path.islink(src):
+            os.makedirs(os.path.dirname(dst), exist_ok=True)
+            shutil.copyfile(src, dst)
 
 
 class Indexer:
@@ -95,14 +137,29 @@ class Indexer:
         self.worker = None
 
     # ── submitting ───────────────────────────────────────────────────────────
-    def submit(self, text, allow_new=lambda: (True, 0)):
+    def _resolve(self, owner, repo, ref, token):
+        """(sha, private): anonymously if possible, else with `token`. FetchError if neither works."""
+        def attempt(**kw):
+            sha = self.resolve(owner, repo, ref, **kw)
+            if ref and SHA.match(ref):      # a full SHA isn't looked up: check the repo itself is visible
+                self.resolve(owner, repo, None, **kw)
+            return sha
+        try:
+            return attempt(), False
+        except FetchError:
+            if not token:
+                raise
+        return attempt(token=token), True
+
+    def submit(self, text, allow_new=lambda: (True, 0), token=None, owner_id=None):
         """
         Queue `text` (a GitHub URL) for indexing. Returns (job, queued_new).
         Already-indexed commits and in-flight duplicates don't create jobs.
         allow_new() -> (allowed, retry_after) is consulted only for new work.
+        token: the visitor's GitHub token, for private repositories.
         """
         owner, repo, ref = parse_github_url(text)
-        sha = self.resolve(owner, repo, ref)
+        sha, private = self._resolve(owner, repo, ref, token)
         repo_id = repo_id_for(owner, repo, sha)
         name = f"{owner}/{repo}"
 
@@ -122,7 +179,8 @@ class Indexer:
             if self.queue.qsize() >= self.settings.max_index_queue:
                 raise QueueFull("The indexing queue is full; please try again in a few minutes.")
             job = IndexJob(id=uuid.uuid4().hex, repo_id=repo_id, name=name,
-                           url=f"https://github.com/{owner}/{repo}", sha=sha, ref=ref or "")
+                           url=f"https://github.com/{owner}/{repo}", sha=sha, ref=ref or "",
+                           owner_id=owner_id, private=private, token=token if private else "")
             self._remember(job)
             self.inflight[repo_id] = job.id
             self.queue.put(job)
@@ -165,12 +223,13 @@ class Indexer:
         s = self.settings
         clone = os.path.join(os.path.dirname(self.repos.root), ".clones", job.id)
         try:
-            self._set(job, "fetching", 0.05, f"Downloading the Python files of {job.name}…")
-            self.fetch(job.url, job.sha, clone, timeout=s.fetch_timeout, python_only=True)
-            check_limits(clone, s.max_py_files, s.max_py_mb)
+            self._set(job, "fetching", 0.05, f"Downloading the source files of {job.name}…")
+            self.fetch(job.url, job.sha, clone, timeout=s.fetch_timeout, python_only=True,
+                       **({"token": job.token} if job.token else {}))
+            found = check_limits(clone, s.max_py_files, s.max_py_mb)
 
             self._set(job, "parsing", 0.25, "Parsing code and resolving calls…")
-            config = get_config(ignore_dirs=tuple(s.index_ignore_dirs))
+            config = get_config(version_for(found["languages"]), ignore_dirs=tuple(s.index_ignore_dirs))
             from ..index import VectorIndex
 
             def progress(stage, fraction):
@@ -182,17 +241,20 @@ class Indexer:
                                          index=VectorIndex(config.embed_model, model=self.embedder),
                                          load_llm=False, verbose=False, progress=progress)
             except ValueError:
-                raise IndexFailure("No Python code to index (tests, docs and examples are skipped).")
+                raise IndexFailure("No code to index (tests, docs and examples are skipped).")
 
             self._set(job, "saving", 0.97, "Saving the index…")
             out = self.repos.directory(job.repo_id)
             agent.save(os.path.join(out, config.name))
+            if job.private:
+                save_sources(agent, clone, os.path.join(out, "sources"))
             stats = repo_stats(agent)
             meta = {
                 "id": job.repo_id, "name": job.name, "kind": "user", "ref": job.ref,
                 "description": f"Indexed from GitHub{f' ({job.ref})' if job.ref else ''}.",
                 "url": job.url, "sha": job.sha, "root": "", "questions": [],
                 "stats": stats, "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                "owner_id": job.owner_id, "private": job.private,
             }
             write_repo_meta(out, {**meta, "versions": [config.name]})
             # the in-memory record matches what a reload from disk would give
@@ -204,6 +266,7 @@ class Indexer:
             log.exception("indexing %s failed", job.name)
             job.error = "Indexing failed unexpectedly."
         finally:
+            job.token = ""
             # clean up first, so "ready"/"failed" means the job is completely finished
             if os.path.isdir(clone):
                 rmtree(clone)

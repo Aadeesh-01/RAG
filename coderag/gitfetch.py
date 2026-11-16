@@ -1,5 +1,5 @@
 """
-Fetch one commit of a public GitHub repository, safely.
+Fetch one commit of a GitHub repository, safely.
 
 Only shallow-fetches the exact commit: no tags, no history, no credential
 prompts. Inputs are validated so they can't be read as git options, and
@@ -9,14 +9,26 @@ Every git command names its repository explicitly (--git-dir/--work-tree) and
 runs with GIT_CEILING_DIRECTORIES set, so git can never fall back to a
 repository *above* the destination (e.g. the project's own repo) when the
 destination's .git is missing or broken.
+
+Private repositories: pass the signed-in user's GitHub token. It reaches git
+only through GIT_CONFIG_* environment variables (an Authorization header for
+https://github.com/), so it never appears in a command line, a remote URL,
+.git/config or an error message.
 """
 
+import base64
 import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+
+def _source_patterns():
+    """Sparse-checkout patterns of every indexable file: *.py and the registered languages."""
+    from .languages import LANGUAGES
+    return ["*.py"] + sorted({f"*{ext}" for lang in LANGUAGES.values() for ext in lang.extensions})
+
 
 GITHUB_URL = re.compile(r"^https://github\.com/[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$")
 SHA = re.compile(r"^[0-9a-f]{40}$")
@@ -26,9 +38,23 @@ class FetchError(ValueError):
     pass
 
 
-def _env(dest):
+def _auth_env(token):
+    """git config, via the environment, that sends `token` to github.com only."""
+    if not token:
+        return {}
+    basic = base64.b64encode(f"x-access-token:{token}".encode()).decode()
+    return {"GIT_CONFIG_COUNT": "1",
+            "GIT_CONFIG_KEY_0": "http.https://github.com/.extraHeader",
+            "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}"}
+
+
+def _scrub(text, token):
+    return text.replace(token, "***") if token else text
+
+
+def _env(dest, token=None):
     return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1",
-            "GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.abspath(dest))}
+            "GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.abspath(dest)), **_auth_env(token)}
 
 
 def _repo_args(dest):
@@ -36,12 +62,13 @@ def _repo_args(dest):
     return [f"--git-dir={os.path.join(dest, '.git')}", f"--work-tree={dest}"]
 
 
-def _git(dest, *args, timeout=120, check=True):
+def _git(dest, *args, timeout=120, check=True, token=None):
     try:
         return subprocess.run(["git", *_repo_args(dest), *args], cwd=dest, check=check,
-                              timeout=timeout, env=_env(dest), capture_output=True)
+                              timeout=timeout, env=_env(dest, token), capture_output=True)
     except subprocess.CalledProcessError as e:
-        raise FetchError(f"git {args[0]} failed: {e.stderr.decode(errors='replace')[:300]}")
+        stderr = _scrub(e.stderr.decode(errors="replace"), token)
+        raise FetchError(f"git {args[0]} failed: {stderr[:300]}")
     except subprocess.TimeoutExpired:
         raise FetchError(f"git {args[0]} timed out after {timeout}s")
 
@@ -76,11 +103,13 @@ def prepare_repo(dest):
                        env=_env(dest), capture_output=True)
 
 
-def fetch_commit(url, sha, dest, timeout=120, python_only=False):
+def fetch_commit(url, sha, dest, timeout=120, python_only=False, token=None):
     """
     Check out commit `sha` of `url` into `dest` (reused if already there).
-    python_only: download only *.py files (blob-less partial fetch + sparse
-    checkout), so large data or media files in the repo are never transferred.
+    python_only: download only source files (blob-less partial fetch + sparse
+    checkout): *.py plus the extensions of the languages in languages.py (the
+    name predates them), so data and media files are never transferred.
+    token: GitHub token for a private repository (see the module docstring).
     """
     url = url.rstrip("/").removesuffix(".git")
     if not GITHUB_URL.match(url):
@@ -95,14 +124,16 @@ def fetch_commit(url, sha, dest, timeout=120, python_only=False):
         _git(dest, "remote", "add", "origin", url + ".git")
         # a partial fetch through a named remote lets checkout fetch the missing blobs
         _git(dest, "fetch", "-q", "--depth", "1", "--no-tags", "--filter=blob:none",
-             "--", "origin", sha, timeout=timeout)
-        _git(dest, "sparse-checkout", "set", "--no-cone", "*.py", timeout=timeout)
+             "--", "origin", sha, timeout=timeout, token=token)
+        _git(dest, "sparse-checkout", "set", "--no-cone", *_source_patterns(), timeout=timeout,
+             token=token)
     else:
         # "--" ends option parsing: url and sha are positional no matter what they contain
         _git(dest, "fetch", "-q", "--depth", "1", "--no-tags", "--", url + ".git", sha,
-             timeout=timeout)
+             timeout=timeout, token=token)
+    # checkout fetches the missing source blobs of a partial fetch, so it needs the token too
     _git(dest, "-c", "core.symlinks=false", "checkout", "-q", "--detach", "FETCH_HEAD",
-         timeout=timeout)
+         timeout=timeout, token=token)
     return dest
 
 
@@ -130,11 +161,11 @@ def parse_github_url(text):
     return m["owner"], m["repo"], ref
 
 
-def resolve_sha(owner, repo, ref=None, timeout=30):
+def resolve_sha(owner, repo, ref=None, timeout=30, token=None):
     """
     Commit SHA of `ref` (branch, tag or full SHA; default branch if None),
     without cloning. Raises FetchError if the repo or ref doesn't exist or
-    isn't public.
+    isn't public (or, with `token`, isn't visible to that GitHub user).
     """
     if ref and SHA.match(ref):
         return ref
@@ -142,11 +173,12 @@ def resolve_sha(owner, repo, ref=None, timeout=30):
     try:
         result = subprocess.run(["git", "ls-remote", "--", url, *( [ref] if ref else ["HEAD"] )],
                                 capture_output=True, text=True, timeout=timeout,
-                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **_auth_env(token)})
     except subprocess.TimeoutExpired:
         raise FetchError("GitHub did not respond in time")
     if result.returncode != 0:
-        raise FetchError("Repository not found, or it isn't public")
+        raise FetchError("Repository not found, or your GitHub account can't access it" if token
+                         else "Repository not found, or it isn't public")
     refs = dict(reversed(line.split("\t")) for line in result.stdout.splitlines() if "\t" in line)
     for name in (["HEAD"] if not ref else
                  [f"refs/heads/{ref}", f"refs/tags/{ref}^{{}}", f"refs/tags/{ref}"]):

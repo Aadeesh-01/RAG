@@ -4,6 +4,12 @@ FastAPI server for the pre-indexed demo repositories.
     GET  /  /app  /login                     home page, the app, sign-in (frontend/)
     GET  /api/health
     GET  /api/demos
+    GET  /api/auth/github, /api/auth/github/callback, /api/auth/me; POST /api/auth/logout  (auth.py)
+    POST /api/repos                         index a GitHub repo (signed in)
+    GET  /api/repos/mine                    repos the signed-in user added (their repo tabs)
+    PUT  /api/repos/mine/{repo_id}          add an indexed repo they can open to that list
+    DELETE /api/repos/mine/{repo_id}        take it off the list (the index stays)
+    GET  /api/github/repos                  the user's GitHub repos, for the add-repo picker
     GET  /api/repos/{repo_id}
     GET  /api/repos/{repo_id}/graph?version=v7
     GET  /api/repos/{repo_id}/file?path=pkg/mod.py    whole indexed file, for the code viewer
@@ -15,6 +21,9 @@ Run:  uvicorn coderag.web.app:app --port 7860
 
 Visitors may send their own provider key with a question (llm.api_key). It is
 used for that request only and never logged, cached or returned.
+
+Demos are public. Adding a repo needs a GitHub sign-in; a private repo can be
+opened only by the users who added it (anyone else gets 404).
 """
 
 import json
@@ -22,17 +31,21 @@ import logging
 import os
 from typing import Literal
 
+import httpx
+
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
+from starlette.datastructures import MutableHeaders
 
 from ..config import get_config
 from ..gitfetch import FetchError
 from ..llm import DEFAULT_REMOTE_MODELS, FallbackChain, LLMUnavailable, RemoteLLM
 from ..visualize import graph_data
+from .auth import Auth, GitHubError, GitHubReauth
 from .jobs import Indexer, NotAllowed, QueueFull
 from .limits import AnswerCache, RateLimiter, client_ip
-from .registry import Repos, load_demos
+from .registry import Repos, load_demos, repo_name_of
 from .settings import Settings
 from .sources import SourceUnavailable, fetch_url, read_source
 
@@ -118,13 +131,41 @@ class LLMFactory:
 # =============================================================================
 # APP
 # =============================================================================
+class RevalidateFrontend:
+    """
+    Cache-Control: no-cache on the site's pages, scripts and stylesheets, so
+    browsers check for a new version every time (a cheap 304 when unchanged).
+    Without it, browsers guess a freshness lifetime from Last-Modified and can
+    keep running an old auth.js next to a new login.js.
+    Plain ASGI, so the answer stream (SSE) passes through untouched.
+    """
+
+    PAGES = ("/", "/app", "/login")
+    SUFFIXES = (".html", ".js", ".mjs", ".css")
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        path = scope.get("path", "") if scope["type"] == "http" else ""
+        if not path or path.startswith("/api/") or not (path in self.PAGES or path.endswith(self.SUFFIXES)):
+            return await self.app(scope, receive, send)
+
+        async def send_revalidating(message):
+            if message["type"] == "http.response.start":
+                MutableHeaders(scope=message)["Cache-Control"] = "no-cache"
+            await send(message)
+
+        await self.app(scope, receive, send_revalidating)
+
+
 def _sse(event):
     data = {k: v for k, v in event.items() if k != "type"}
     return f"event: {event['type']}\ndata: {json.dumps(data)}\n\n"
 
 
 def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedder=None,
-               indexer=None, fetch_source=fetch_url):
+               indexer=None, fetch_source=fetch_url, github=None):
     """
     settings    : Settings (default: from CODERAG_* env vars)
     demos       : {id: Demo} (default: loaded from settings.data_dir)
@@ -132,6 +173,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     embedder    : embedding model shared by all indexes (default: loaded, behind a lock)
     indexer     : jobs.Indexer for visitors' repos (default: built from the above)
     fetch_source: callable(url) -> text, for files not saved locally (default: GitHub raw)
+    github      : GitHub OAuth client (default: auth.GitHubOAuth from the settings)
     """
     settings = settings or Settings.from_env()
     if embedder is None:
@@ -144,15 +186,25 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     indexer = indexer or Indexer(settings, repos, embedder)
     llm_factory = llm_factory or LLMFactory(settings)
     limiter = limiter or RateLimiter()
+    auth = Auth(settings, github)
     cache = AnswerCache(settings.answer_cache_size)
     graphs = {}
 
     app = FastAPI(title="coderag", version="0.1.0",
-                  description="Ask questions about a Python codebase, with cited sources.")
-    app.state.repos, app.state.indexer = repos, indexer
+                  description="Ask questions about a codebase, with cited sources.")
+    app.state.repos, app.state.indexer, app.state.auth = repos, indexer, auth
+    app.add_middleware(RevalidateFrontend)
+    app.include_router(auth.router())
 
-    def resolve(repo_id, version):
-        demo = repos.get(repo_id)
+    def can_open(repo_id, request):
+        """Private repos only for users who added them; everything else for everyone."""
+        if not repos.private(repo_id):
+            return True
+        user = auth.current_user(request)
+        return user is not None and auth.users.has_repo(user.id, repo_id)
+
+    def resolve(repo_id, version, request):
+        demo = repos.get(repo_id) if can_open(repo_id, request) else None
         if demo is None:
             raise HTTPException(404, f"Unknown repository {repo_id!r}")
         version = version or demo.versions[-1]
@@ -197,7 +249,8 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                 "indexing": {"max_py_files": settings.max_py_files,
                              "max_py_mb": settings.max_py_mb,
                              "skipped_dirs": list(settings.index_ignore_dirs),
-                             "per_hour": settings.index_per_ip_per_hour}}
+                             "per_hour": settings.index_per_ip_per_hour},
+                "auth": {"github": auth.enabled}}
 
     @app.get("/api/demos")
     def list_demos():
@@ -205,20 +258,82 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
 
     @app.post("/api/repos")
     def index_repo(body: IndexRequest, request: Request):
-        """Index a public GitHub repo (202 + job), or 200 if this commit is already indexed."""
+        """Index a GitHub repo (202 + job), or 200 if this commit is already indexed. Signed in only."""
+        user = auth.current_user(request)
+        if user is None:
+            raise HTTPException(401, "Sign in with GitHub to add a repository.")
         limit(request, "submit", settings.submit_per_ip_per_hour)
         ip = client_ip(request, settings.trusted_proxy_hops)
         try:
             job, queued = indexer.submit(
                 body.url, allow_new=lambda: limiter.hit(f"index:{ip}",
-                                                        settings.index_per_ip_per_hour, HOUR))
+                                                        settings.index_per_ip_per_hour, HOUR),
+                token=auth.token(user), owner_id=user.id)
         except FetchError as e:
             raise HTTPException(400, str(e))
         except NotAllowed as e:
             raise HTTPException(429, str(e), headers={"Retry-After": str(int(e.retry_after))})
         except QueueFull as e:
             raise HTTPException(503, str(e), headers={"Retry-After": "60"})
+        auth.users.add_repo(user.id, job.repo_id)
         return JSONResponse(job.public(indexer.position(job)), status_code=202 if queued else 200)
+
+    @app.get("/api/repos/mine")
+    def my_repos(request: Request):
+        """Repos the signed-in user added (newest first) that are indexed."""
+        user = auth.current_user(request)
+        if user is None:
+            raise HTTPException(401, "Not signed in")
+        found = (repos.summary(repo_id) for repo_id in auth.users.repo_ids(user.id))
+        return [info for info in found if info is not None]
+
+    def signed_in(request):
+        user = auth.current_user(request)
+        if user is None:
+            raise HTTPException(401, "Not signed in")
+        return user
+
+    @app.get("/api/github/repos")
+    def github_repos(request: Request):
+        """
+        The signed-in user's GitHub repos, newest push first (up to 300):
+        [{full_name, private, language, pushed_at, description, default_branch, indexed, repo_id}].
+        `indexed`: the user already added it (repo_id: the newest such index, to open it).
+        401 {"error": "reauth"} when GitHub no longer accepts their token.
+        """
+        user = signed_in(request)
+        limit(request, "github-repos", settings.retrieve_per_ip_per_hour)
+        try:
+            listed = auth.github_repos(user)
+        except GitHubReauth:
+            raise HTTPException(401, "reauth")
+        except (GitHubError, httpx.HTTPError, ValueError) as e:
+            log.warning("listing GitHub repos failed: %s", e if isinstance(e, GitHubError) else type(e).__name__)
+            raise HTTPException(502, "Couldn't load your repositories from GitHub. You can still paste a URL.")
+        added = {}
+        for repo_id in auth.users.repo_ids(user.id):           # newest first: keep the first
+            added.setdefault(repo_name_of(repo_id), repo_id)
+        out = []
+        for r in listed:
+            repo_id = added.get(str(r["full_name"]).lower())
+            out.append({**r, "indexed": repo_id is not None, "repo_id": repo_id})
+        return out
+
+    @app.put("/api/repos/mine/{repo_id}")
+    def keep_repo(repo_id: str, request: Request):
+        """Add a visitor repo the user can open (e.g. from a shared link) to their list."""
+        user = signed_in(request)
+        info = repos.summary(repo_id) if can_open(repo_id, request) else None
+        if info is None or info.get("kind") != "user":
+            raise HTTPException(404, f"Unknown repository {repo_id!r}")
+        auth.users.add_repo(user.id, repo_id)
+        return info
+
+    @app.delete("/api/repos/mine/{repo_id}", status_code=204)
+    def forget_repo(repo_id: str, request: Request):
+        """Take a repo off the user's list. A private one can then be opened again only by re-adding it."""
+        auth.users.remove_repo(signed_in(request).id, repo_id)
+        return Response(status_code=204)
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str):
@@ -228,13 +343,13 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         return job.public(indexer.position(job))
 
     @app.get("/api/repos/{repo_id}")
-    def repo_info(repo_id: str):
-        demo, _, _ = resolve(repo_id, None)
+    def repo_info(repo_id: str, request: Request):
+        demo, _, _ = resolve(repo_id, None, request)
         return demo.info()
 
     @app.get("/api/repos/{repo_id}/graph")
-    def graph(repo_id: str, version: str | None = None):
-        demo, version, agent = resolve(repo_id, version)
+    def graph(repo_id: str, request: Request, version: str | None = None):
+        demo, version, agent = resolve(repo_id, version, request)
         key = (repo_id, version)
         if key not in graphs:
             graphs[key] = graph_data(agent)
@@ -242,7 +357,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
 
     @app.get("/api/repos/{repo_id}/file")
     def source_file(repo_id: str, path: str, request: Request, version: str | None = None):
-        demo, version, agent = resolve(repo_id, version)
+        demo, version, agent = resolve(repo_id, version, request)
         limit(request, "file", settings.retrieve_per_ip_per_hour)
         if len(path) > 500:
             raise HTTPException(404, "Not an indexed file")
@@ -261,7 +376,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
 
     @app.post("/api/repos/{repo_id}/retrieve")
     def retrieve(repo_id: str, body: RetrieveRequest, request: Request):
-        demo, version, agent = resolve(repo_id, body.version)
+        demo, version, agent = resolve(repo_id, body.version, request)
         limit(request, "retrieve", settings.retrieve_per_ip_per_hour)
         first = next(agent.stream(body.question, llm=None, debug=body.debug, **body.overrides()))
         return {"version": version,
@@ -269,7 +384,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
 
     @app.post("/api/repos/{repo_id}/ask")
     def ask(repo_id: str, body: AskRequest, request: Request):
-        demo, version, agent = resolve(repo_id, body.version)
+        demo, version, agent = resolve(repo_id, body.version, request)
         own_key = body.llm.api_key is not None and body.llm.provider != "server"
         if body.llm.provider == "none":
             limit(request, "retrieve", settings.retrieve_per_ip_per_hour)
@@ -331,14 +446,23 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         from fastapi.responses import FileResponse
         from fastapi.staticfiles import StaticFiles
 
+        def page(name, request):
+            """The page, or 304 when the browser's copy (If-None-Match) is current."""
+            path = os.path.join(FRONTEND_DIR, name)
+            response = FileResponse(path, stat_result=os.stat(path))
+            etag = response.headers.get("etag")
+            if etag and etag in request.headers.get("if-none-match", ""):
+                return Response(status_code=304, headers={"ETag": etag})
+            return response
+
         # pages: / is the home page (index.html, served by the mount), the tool lives at /app
         @app.get("/app", include_in_schema=False)
-        def app_page():
-            return FileResponse(os.path.join(FRONTEND_DIR, "app.html"))
+        def app_page(request: Request):
+            return page("app.html", request)
 
         @app.get("/login", include_in_schema=False)
-        def login_page():
-            return FileResponse(os.path.join(FRONTEND_DIR, "login.html"))
+        def login_page(request: Request):
+            return page("login.html", request)
 
         app.mount("/", StaticFiles(directory=FRONTEND_DIR, html=True), name="frontend")
     else:

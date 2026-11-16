@@ -1,0 +1,13 @@
+set,version,type,q,R@ctx,Sig,Body,Hit@1,Hit@3,MRR,Chunks,Chars,ms
+commander,v9,locate,How does commander suggest a similar command or option name when the user makes a typo?,0.0,0.0,0.03125,0.0,0.0,0.0,12,8756,36.805500043556094
+commander,v9,locate,How is the edit distance between two strings computed?,1.0,1.0,1.0,1.0,1.0,1.0,12,9907,31.272699998226017
+commander,v9,locate,"How are option flags like ""-s, --separator <char>"" split into the short and long flag?",1.0,1.0,0.825,0.0,1.0,0.5,12,9604,44.80929998680949
+commander,v9,locate,How is an option's name turned into the camelCase key used in opts()?,1.0,1.0,1.0,1.0,1.0,1.0,12,7682,38.9147000387311
+commander,v9,locate,Where are option values read from environment variables?,1.0,0.0,0.14285714285714285,0.0,0.0,0.2,6,3877,24.6149999438785
+commander,v9,locate,How is the --inspect port changed when a subcommand executable is spawned under the Node debugger?,1.0,1.0,1.0,1.0,1.0,1.0,12,9609,30.853500007651746
+commander,v9,locate,How does the help text wrap long descriptions to the terminal width?,1.0,1.0,0.8076923076923077,0.0,0.0,0.2,12,10907,35.812699992675334
+commander,v9,locate,Where does commander detect that two conflicting options were used together?,1.0,1.0,1.0,1.0,1.0,1.0,12,11167,28.434099978767335
+commander,v9,callers,Which functions call suggestSimilar?,0.0,0.0,0.08630952380952381,0.0,0.0,0.0,12,9580,22.734499943908304
+commander,v9,callers,What calls _checkForMissingMandatoryOptions?,1.0,1.0,0.24219150025601638,0.0,0.0,0.2,12,8779,27.35350001603365
+commander,v9,callees,"What does Command.error do after it displays the message, and how does the program exit?",1.0,0.5,0.5294117647058824,1.0,1.0,1.0,5,3251,27.595399995334446
+commander,v9,inheritance,"What error is thrown for an invalid option-argument, and which class does it extend?",1.0,1.0,0.5227272727272727,0.0,0.0,0.25,12,7409,30.107200029306114

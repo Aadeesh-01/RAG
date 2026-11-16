@@ -1,0 +1,60 @@
+# tj/commander.js (JavaScript), pinned to v14.0.3. Gold = "path::Class.method" relative to `root`.
+# The first non-Python set: v0-v8 index Python only, so only v9 can answer it.
+# Questions were written from the source before any retrieval was run; call
+# relationships verified against the code at this SHA.
+url: https://github.com/tj/commander.js
+sha: b7d43804d27bc90fad1c201470ac528971b9888c
+root: lib
+language: javascript
+
+questions:
+  # ── locate ───────────────────────────────────────────────────────────────
+  - q: How does commander suggest a similar command or option name when the user makes a typo?
+    type: locate
+    gold: [suggestSimilar.js::suggestSimilar]
+
+  - q: How is the edit distance between two strings computed?
+    type: locate
+    gold: [suggestSimilar.js::editDistance]
+
+  - q: How are option flags like "-s, --separator <char>" split into the short and long flag?
+    type: locate
+    gold: [option.js::splitOptionFlags]
+
+  - q: How is an option's name turned into the camelCase key used in opts()?
+    type: locate
+    gold: [option.js::Option.attributeName, option.js::camelcase]
+
+  - q: Where are option values read from environment variables?
+    type: locate
+    gold: [command.js::Command._parseOptionsEnv]
+
+  - q: How is the --inspect port changed when a subcommand executable is spawned under the Node debugger?
+    type: locate
+    gold: [command.js::incrementNodeInspectorPort]
+
+  - q: How does the help text wrap long descriptions to the terminal width?
+    type: locate
+    gold: [help.js::Help.boxWrap]
+
+  - q: Where does commander detect that two conflicting options were used together?
+    type: locate
+    gold: [command.js::Command._checkForConflictingLocalOptions]
+
+  # ── callers ──────────────────────────────────────────────────────────────
+  - q: Which functions call suggestSimilar?
+    type: callers
+    gold: [command.js::Command.unknownOption, command.js::Command.unknownCommand]
+
+  - q: What calls _checkForMissingMandatoryOptions?
+    type: callers
+    gold: [command.js::Command._executeSubCommand, command.js::Command._parseCommand]
+
+  # ── callees / inheritance ────────────────────────────────────────────────
+  - q: What does Command.error do after it displays the message, and how does the program exit?
+    type: callees
+    gold: [command.js::Command.error, command.js::Command._exit]
+
+  - q: What error is thrown for an invalid option-argument, and which class does it extend?
+    type: inheritance
+    gold: [error.js::InvalidArgumentError, error.js::CommanderError]

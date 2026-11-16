@@ -1,5 +1,6 @@
-import { currentUser, initials } from "./auth.js";
+import { currentUser } from "./auth.js";
 import { mountHeroGraph } from "./hero-graph.js";
+import { avatarSrc, initials } from "./lib.js";
 
 const $ = (s) => document.querySelector(s);
 
@@ -19,9 +20,13 @@ function el(tag, attrs = {}, ...children) {
 // signed in: the header leads to the app (the hero's action stays the sample)
 const user = currentUser();
 if (user) {
+  const label = el("span", { "aria-hidden": "true", text: initials(user.name) });
+  const src = avatarSrc(user);
+  const picture = src && el("img", { alt: "", src, referrerpolicy: "no-referrer",
+                                     onload: () => { label.hidden = true; }, onerror: (e) => e.target.remove() });
   $("#account").replaceChildren(
     el("a", { class: "avatar", href: "/app", title: `Signed in as ${user.name}`, "aria-label": `Open coderag (signed in as ${user.name})` },
-      el("span", { "aria-hidden": "true", text: initials(user.name) })));
+      label, picture));
 }
 
 // the hero: one real citation, found through the real call graph, once

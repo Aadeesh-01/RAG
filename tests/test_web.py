@@ -87,6 +87,9 @@ def test_retrieve_returns_linked_sources(client):
     assert body["version"] == "v7" and "context" not in body
     assert s["url"] == (f"https://github.com/o/r/blob/{'a' * 40}/src/{s['file']}"
                         f"#L{s['start_line']}-L{s['end_line']}")
+    relations = {"match", "callee", "caller", "parent", "child", "method"}
+    assert all(x["relation"] in relations for x in body["sources"])
+    assert all((x["relation"] == "match") == (x["hop"] == 0) for x in body["sources"])
     with_ctx = c.post("/api/repos/sample/retrieve",
                       json={"question": "x", "include_context": True}).json()
     assert with_ctx["context"].startswith("# ")
@@ -288,3 +291,43 @@ def test_pages_home_app_and_sign_in(client):
     app = c.get("/app")
     assert app.status_code == 200 and "app.js" in app.text and 'id="sign-in-link"' in app.text   # demos open signed out
     assert "login.js" in c.get("/login").text
+
+
+def test_sign_in_button_is_a_working_link(client):
+    c, _ = client
+    html = c.get("/login").text
+    button = html[html.index('id="github"') - 3:].split(">", 1)[0]
+    assert button.startswith("<a ") and 'href="/api/auth/github"' in button and "disabled" not in button
+    login_js = c.get("/login.js").text
+    assert "GITHUB_READY" not in login_js and "/api/auth/github?next=" in login_js
+
+
+@pytest.mark.parametrize("path", ["/", "/app", "/login", "/index.html", "/login.html", "/auth.js",
+                                  "/login.js", "/app.js", "/lib.js", "/styles.css", "/site.css"])
+def test_frontend_files_are_always_revalidated(client, path):
+    c, _ = client
+    r = c.get(path)
+    assert r.status_code == 200 and r.headers["cache-control"] == "no-cache", path
+    if "etag" in r.headers:                     # the check is cheap: 304 while unchanged
+        again = c.get(path, headers={"If-None-Match": r.headers["etag"]})
+        assert again.status_code == 304 and again.headers["cache-control"] == "no-cache", path
+
+
+def test_api_responses_keep_their_own_caching(client):
+    c, _ = client
+    assert "cache-control" not in c.get("/api/health").headers
+    assert c.get("/api/auth/me").headers["cache-control"] == "no-store"
+    r = c.post("/api/repos/sample/ask", json={"question": "x"})
+    assert r.headers["cache-control"] == "no-cache" and sse_events(r)[-1][0] == "done"
+
+
+def test_add_repo_dialog_has_the_picker_and_keeps_the_url_field(client):
+    c, _ = client
+    html = c.get("/app").text
+    for needed in ['id="repo-picker"', 'id="repo-search"', 'id="repo-options"', 'role="listbox"',
+                   'data-filter="private"', 'id="repo-url"', 'id="add-repo-submit"', 'id="index-limits"']:
+        assert needed in html, needed
+    assert "Public and private repositories. Only source files are downloaded and parsed. Code is never run." in html
+    assert "Public repositories only" not in html
+    js = c.get("/app.js").text
+    assert "/api/github/repos" in js and "Reconnect GitHub" in js and "Or paste a URL" in js

@@ -190,6 +190,35 @@ On the site, **+ Add repo** takes a public GitHub URL (`https://github.com/owner
 Typical times on a laptop CPU: pallets/itsdangerous 9 s, pallets/flask 33 s (362 chunks).
 django/django is rejected after about 20 s (2,939 Python files).
 
+## Sign in with GitHub
+
+Demos are open to everyone. Adding a repository needs a GitHub sign-in. Once signed in, you can also
+index private repositories you have access to. They are visible only to the people who added them.
+Your repository tabs belong to your GitHub account, not the browser: `GET /api/repos/mine` lists them,
+`PUT /api/repos/mine/{id}` adds an indexed repo you can open, and `DELETE /api/repos/mine/{id}`
+removes one from the list (the index stays on the server).
+
+1. On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**.
+2. Set **Homepage URL** to your site, e.g. `https://coderag.example.com`, and **Authorization
+   callback URL** to `PUBLIC_URL/api/auth/github/callback`, e.g.
+   `https://coderag.example.com/api/auth/github/callback` (for local use:
+   `http://127.0.0.1:7860/api/auth/github/callback`).
+3. Create a client secret, then set:
+
+```bash
+export CODERAG_GITHUB_CLIENT_ID=Ov23li...
+export CODERAG_GITHUB_CLIENT_SECRET=...
+export CODERAG_SESSION_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+export CODERAG_PUBLIC_URL=https://coderag.example.com       # must match the callback URL's origin
+```
+
+The app asks for the `read:user repo` scopes. The session is a signed, HttpOnly, SameSite=Lax cookie.
+Users are stored in `data/coderag.db` (SQLite). The GitHub token is encrypted with a key derived from
+`CODERAG_SESSION_SECRET`, is never logged or returned, and reaches git only through environment
+variables. Changing the session secret signs everyone out and makes the stored tokens unreadable, so
+private repos need a fresh sign-in. Without these settings the server still runs: everyone is
+signed out and demos work as usual.
+
 ## Debugging retrieval
 
 Add `?debug=1` to the site's URL, or call `agent.stream(question, debug=True)` / `POST

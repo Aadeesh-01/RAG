@@ -6,6 +6,10 @@ Two strategies:
   • ast   : one chunk per top-level class / function of each .py file (v1+),
             carrying structural metadata (calls, bases, methods, docstring ...)
 
+With `config.languages` (v9), files of the registered languages (languages.py)
+are chunked too, by one generic tree-sitter walker driven by each language's
+config, into the same schema plus a `language` field. Python keeps `ast`.
+
 Every chunk is a dict with at least: content, type, file, name.
 """
 
@@ -16,6 +20,7 @@ import re
 import textwrap
 
 from .config import SKIP_DIRS
+from .languages import language_for
 
 
 # =============================================================================
@@ -417,6 +422,372 @@ def parse_python_file(file_path, repo_path=None, max_file_chars=30_000, min_segm
     return [_make_chunk(code, "file", file_path, name, repo_path, tree, 1, max(len(lines), 1))]
 
 
+# =============================================================================
+# TREE-SITTER CHUNKING  (v9: every registered language except Python)
+# =============================================================================
+_COMMENT_MARKS = re.compile(r"^(?:/\*+!?|\*+/?|//[/!]?|#|--)\s?")
+_DECORATIONS = ("attribute_item", "decorator", "annotation", "marker_annotation")
+
+
+def _ts_text(node, src):
+    return src[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+
+
+def _ts_tail_name(node, lang, src, depth=0):
+    """Last name in a (possibly qualified) name or callee: a.b.c() -> 'c', ns::f -> 'f'."""
+    if node is None or depth > 12:
+        return ""
+    if node.type in lang.name_types:
+        return _ts_text(node, src)
+    for name in ("name", "field", "property", "function", "type"):
+        child = node.child_by_field_name(name)
+        if child is not None:
+            return _ts_tail_name(child, lang, src, depth + 1)
+    kids = [c for c in node.named_children if c.type not in lang.skip]
+    return _ts_tail_name(kids[-1], lang, src, depth + 1) if kids else ""
+
+
+def _ts_type_names(node, lang, src):
+    """Names of the types listed under `node` (bases), ignoring type and call arguments."""
+    if node is None or node.type in lang.skip:
+        return []
+    if node.type in lang.name_types:
+        return [_ts_text(node, src)]
+    if node.type in lang.qualified:
+        return [_ts_tail_name(node, lang, src)]
+    return [n for child in node.named_children for n in _ts_type_names(child, lang, src)]
+
+
+def _ts_first_name(node, lang, src):
+    """The type named under `node`: a receiver's or impl block's owner (not a parameter name)."""
+    if node is None:
+        return ""
+    typed = _ts_find(node, lang.owner_types)
+    if typed:
+        return _ts_text(typed[0], src)
+    names = _ts_type_names(node, lang, src)
+    return names[0] if names else ""
+
+
+def _ts_name(node, lang, src):
+    """
+    Name of a definition: its `name` field, else the end of its `declarator`
+    chain (C/C++: int *f(void) -> 'f'; out-of-class C++ methods keep
+    'Class::method'), else its first name-holding child (Kotlin).
+    """
+    target = node.child_by_field_name("name")
+    if target is None and node.child_by_field_name("declarator") is not None:
+        target = node.child_by_field_name("declarator")
+        while target.child_by_field_name("declarator") is not None:
+            target = target.child_by_field_name("declarator")
+    if target is None:
+        target = next((c for c in node.named_children if c.type in lang.name_types), None)
+    if target is None:
+        return ""
+    text = _ts_text(target, src).strip()
+    if target.type in lang.name_types or ("::" in text and text.replace("::", "").replace("~", "").isidentifier()):
+        return text
+    return _ts_tail_name(target, lang, src)
+
+
+def _ts_is_class(node, lang):
+    if node.type not in lang.classes:
+        return False
+    condition = lang.classes[node.type]
+    if not condition:
+        return True
+    for field_name, types in condition.items():
+        child = node.child_by_field_name(field_name)
+        if child is not None and child.type in types:
+            return True
+    return False
+
+
+def _ts_body(node, lang):
+    """The node holding a definition's members."""
+    if node is None:
+        return None
+    body = node.child_by_field_name("body")
+    if body is not None:
+        return body
+    queue = list(node.named_children)
+    while queue:                                  # e.g. Go: type_spec > struct_type > field list
+        child = queue.pop(0)
+        if child.type in lang.class_bodies:
+            return child
+        if child.type not in lang.skip:
+            queue.extend(child.named_children)
+    return None
+
+
+def _ts_code_body(node):
+    """A function's statement body (None for a signature): elided in class outlines."""
+    body = node.child_by_field_name("body")
+    if body is not None:
+        return body
+    kids = node.named_children
+    if kids and ("body" in kids[-1].type or "block" in kids[-1].type):
+        return kids[-1]
+    return None
+
+
+def _ts_scan(node, lang):
+    """Top-level definitions under `node`, looking through containers (export, namespace ...)."""
+    for child in node.named_children:
+        if child.type in lang.containers:
+            yield from _ts_scan(child, lang)
+        else:
+            yield child
+
+
+def _ts_members(body, lang):
+    for child in body.named_children if body is not None else ():
+        if child.type in lang.containers:
+            yield from _ts_members(child, lang)
+        elif child.type in lang.methods:
+            yield child
+
+
+def _ts_find(node, types):
+    """`node` and its descendants of the given types (not looking inside matches)."""
+    if node.type in types:
+        return [node]
+    return [m for child in node.named_children for m in _ts_find(child, types)]
+
+
+def _ts_span(node, lang, root):
+    """The node a chunk covers: climbs single-child wrappers (export, const, Go's type)."""
+    while (node.parent is not None and node.parent != root and node.parent.type in lang.containers
+           and [c for c in node.parent.named_children if c.type not in lang.comments] == [node]):
+        node = node.parent
+    return node
+
+
+def _ts_docstring(node, lang, src):
+    """
+    Comments directly above a definition: attributes or decorators in between
+    are fine, and so is one blank line under the closest comment (JSDoc often has one).
+    """
+    comments, line = [], node.start_point[0]
+    sibling, gap = node.prev_named_sibling, 2
+    while sibling is not None and sibling.end_point[0] >= line - gap:
+        gap = 1
+        if sibling.type in lang.comments:
+            comments.append(_ts_text(sibling, src))
+        elif sibling.type not in _DECORATIONS:
+            break
+        line = sibling.start_point[0]
+        sibling = sibling.prev_named_sibling
+    lines = []
+    for text in reversed(comments):
+        for raw in text.splitlines():
+            cleaned = re.sub(r"\s*\*+/$", "", _COMMENT_MARKS.sub("", raw.strip())).strip()
+            if cleaned:
+                lines.append(cleaned)
+    return " ".join(lines)[:200]
+
+
+def _ts_calls(nodes, lang, src, skip=()):
+    """Sorted names called inside `nodes`, not descending into the nodes in `skip`."""
+    calls, stack = set(), list(nodes)
+    skipped = {(n.start_byte, n.end_byte, n.type) for n in skip}
+    while stack:
+        n = stack.pop()
+        if (n.start_byte, n.end_byte, n.type) in skipped:
+            continue
+        if n.type in lang.calls:
+            field_name = lang.calls[n.type]
+            callee = (n.child_by_field_name(field_name) if field_name
+                      else next(iter(n.named_children), None))
+            name = _ts_tail_name(callee, lang, src)
+            if name.isidentifier():
+                calls.add(name)
+        stack.extend(n.named_children)
+    return sorted(calls)
+
+
+def _ts_imports(root, lang, src):
+    """Module paths a file imports ('./util.js', 'com.x.Util', 'fmt'), outside definitions."""
+    found, stack = set(), [root]
+    while stack:
+        n = stack.pop()
+        if n.type in lang.imports:
+            target = next((c for c in (n.child_by_field_name(f) for f in ("source", "path", "argument"))
+                           if c is not None), None) or next(iter(n.named_children), None)
+            if target is not None:
+                found.add(_ts_text(target, src).strip("\"'<>` "))
+        elif n.type not in lang.functions and not _ts_is_class(n, lang):
+            stack.extend(n.named_children)
+    return sorted(found)
+
+
+def _ts_outline(span, members, lang, src):
+    """Class source with every method body replaced by lang.elide."""
+    bodies = sorted((b for m in members for b in [_ts_code_body(m)] if b is not None),
+                    key=lambda b: b.start_byte)
+    out, pos = [], src.rfind(b"\n", 0, span.start_byte) + 1    # from the start of its first line
+    for body in bodies:
+        out += [src[pos:body.start_byte], lang.elide.encode()]
+        pos = body.end_byte
+    out.append(src[pos:span.end_byte])
+    return textwrap.dedent(b"".join(out).decode("utf-8", errors="replace")).rstrip("\n")
+
+
+def _ts_chunk(lang, content, type_, file_path, name, repo_path, start, end, doc="",
+              calls=(), bases=(), methods=(), parent="", imports=()):
+    """A chunk in parse_python_file's schema, plus `language` and the file's `imports`."""
+    return {
+        "content":      content,
+        "type":         type_,
+        "file":         file_path,
+        "name":         name,
+        "qname":        make_qname(file_path, f"{parent}.{name}" if parent else name, repo_path),
+        "start_line":   start,
+        "end_line":     end,
+        "content_hash": content_hash(content),
+        "base_classes": list(bases),
+        "methods":      list(methods),
+        "calls":        list(calls),
+        "call_sites":   [],                       # Python only: scoped resolution
+        "assert_call_sites": [],
+        "decorators":   [],
+        "docstring":    doc,
+        "parent":       parent,
+        "called_by":    [],
+        "also_in":      [],
+        "language":     lang.name,
+        "imports":      list(imports),
+    }
+
+
+def parse_tree_sitter_file(file_path, lang, repo_path=None, max_file_chars=30_000,
+                           min_segment_chars=60, chunk_methods=False):
+    """
+    Chunks of one file in a registered language (languages.py), in the schema
+    of parse_python_file: top-level functions and classes; with `chunk_methods`
+    a class becomes an outline plus one chunk per method. Methods defined away
+    from their type are attached to it: Go receivers, Rust impl blocks (whose
+    trait becomes a base) and C++ Class::method definitions. A file without
+    definitions becomes one 'file' chunk.
+    """
+    from .languages import parser_for
+
+    try:
+        with open(file_path, "rb") as f:
+            src = f.read()
+    except OSError as e:
+        print(f"[ERROR] Cannot open {file_path}: {e}")
+        return []
+    if len(src) > max_file_chars:
+        print(f"[SKIP] Too large ({len(src)//1000}k chars): {file_path}")
+        return []
+    try:
+        root = parser_for(file_path).parse(src).root_node
+    except Exception as e:                         # grammar unavailable, parser failure
+        print(f"[SKIP] Cannot parse: {file_path} ({type(e).__name__}: {e})")
+        return []
+
+    lines = src.decode("utf-8", errors="replace").splitlines(keepends=True)
+    imports = _ts_imports(root, lang, src)
+    classes, chunks, methods_by_owner, extra_bases = {}, [], {}, {}
+
+    def span_lines(node):
+        return node.start_point[0] + 1, node.end_point[0] + 1
+
+    def text_of(node):
+        lo, hi = span_lines(node)
+        return textwrap.dedent("".join(lines[lo - 1:hi])).rstrip("\n")
+
+    def method_chunk(node, owner, name=None):
+        name = name or _ts_name(node, lang, src)
+        if not name:
+            return
+        methods_by_owner.setdefault(owner, []).append(name)
+        if _ts_code_body(node) is None:
+            return                                 # a signature: listed, not chunked
+        content = text_of(node)
+        if len(content) >= min_segment_chars:
+            lo, hi = span_lines(node)
+            chunks.append(_ts_chunk(lang, content, "method", file_path, name, repo_path, lo, hi,
+                                    _ts_docstring(node, lang, src), _ts_calls([node], lang, src),
+                                    parent=owner, imports=imports))
+
+    def class_chunk(node, span):
+        name = _ts_name(node, lang, src)
+        if not name:
+            return
+        body = _ts_body(node, lang)
+        members = list(_ts_members(body, lang))
+        bases = [b for child in node.named_children if child != body
+                 for inheritance in _ts_find(child, lang.inheritance)
+                 for b in _ts_type_names(inheritance, lang, src)]
+        for member in (body.named_children if body is not None else ()):    # Go: embedded types
+            if member.type in lang.embedded_bases and member.child_by_field_name("name") is None:
+                bases += _ts_type_names(member.child_by_field_name("type"), lang, src)
+        lo, hi = span_lines(span)
+        if chunk_methods:
+            content, calls = _ts_outline(span, members, lang, src), _ts_calls([node], lang, src, members)
+        else:
+            content, calls = text_of(span), _ts_calls([node], lang, src)
+        chunk = _ts_chunk(lang, content, "class", file_path, name, repo_path, lo, hi,
+                          _ts_docstring(span, lang, src), calls, list(dict.fromkeys(bases)),
+                          imports=imports)
+        classes[name] = chunk
+        chunks.append(chunk)
+        for member in members:
+            method_chunk(member, name)
+
+    for node in _ts_scan(root, lang):
+        span = _ts_span(node, lang, root)
+        if _ts_is_class(node, lang):
+            class_chunk(node, span)
+        elif node.type in lang.receiver_methods:
+            receiver = node.child_by_field_name(lang.receiver_methods[node.type])
+            method_chunk(node, _ts_first_name(receiver, lang, src))
+        elif node.type in lang.impl_blocks:
+            type_field, trait_field = lang.impl_blocks[node.type]
+            owner = _ts_first_name(node.child_by_field_name(type_field), lang, src)
+            trait = _ts_first_name(node.child_by_field_name(trait_field), lang, src)
+            if owner and trait:
+                extra_bases.setdefault(owner, []).append(trait)
+            for member in _ts_members(_ts_body(node, lang), lang):
+                method_chunk(member, owner)
+        elif node.type in lang.functions or node.type in lang.function_values:
+            if node.type in lang.function_values:
+                value_field, kinds = lang.function_values[node.type]
+                value = node.child_by_field_name(value_field)
+                if value is None or value.type not in kinds:
+                    continue
+            name = _ts_name(node, lang, src)
+            if "::" in name:                       # C++: double Circle::area() { ... }
+                owner, _, method = name.rpartition("::")
+                method_chunk(node, owner.split("::")[-1], method)
+                continue
+            content = text_of(span)
+            if not name or len(content) < min_segment_chars:
+                continue
+            lo, hi = span_lines(span)
+            chunks.append(_ts_chunk(lang, content, "function", file_path, name, repo_path, lo, hi,
+                                    _ts_docstring(span, lang, src), _ts_calls([node], lang, src),
+                                    imports=imports))
+
+    for owner, names in methods_by_owner.items():
+        if owner in classes:
+            known = classes[owner]["methods"]
+            known.extend(n for n in names if n not in known)
+    for owner, traits in extra_bases.items():
+        if owner in classes:
+            known = classes[owner]["base_classes"]
+            known.extend(t for t in traits if t not in known)
+    if not chunk_methods:                          # methods stay inside their class's chunk
+        chunks = [c for c in chunks if c["type"] != "method" or c["parent"] not in classes]
+
+    if chunks:
+        return chunks
+    return [_ts_chunk(lang, "".join(lines), "file", file_path, os.path.basename(file_path),
+                      repo_path, 1, max(len(lines), 1), imports=imports)]
+
+
 def dedup_chunks(chunks, verbose=True):
     """
     Drop chunks with the same name + normalised content hash. The first
@@ -447,17 +818,32 @@ def dedup_chunks(chunks, verbose=True):
 def load_ast_chunks(repo_path, config, verbose=True):
     chunks = []
     file_count = 0
-    for file_path in iter_source_files(repo_path, config.extensions, config.prune_dirs,
+    for file_path in iter_source_files(repo_path, config.source_extensions(), config.prune_dirs,
                                        config.ignore_dirs):
         if verbose:
             print(f"[RAG]   Parsing: {os.path.relpath(file_path, repo_path)}")
-        chunks.extend(parse_python_file(
-            file_path, repo_path,
-            max_file_chars=config.max_file_chars,
-            min_segment_chars=config.min_segment_chars,
-            chunk_methods=config.chunk_methods,
-            skip_overloads=config.skip_overloads,
-        ))
+        lang = language_for(file_path, config.languages)
+        if lang is not None:
+            chunks.extend(parse_tree_sitter_file(
+                file_path, lang, repo_path,
+                max_file_chars=config.max_file_chars,
+                min_segment_chars=config.min_segment_chars,
+                chunk_methods=config.chunk_methods,
+            ))
+        elif file_path.endswith(tuple(config.extensions)):
+            found = parse_python_file(
+                file_path, repo_path,
+                max_file_chars=config.max_file_chars,
+                min_segment_chars=config.min_segment_chars,
+                chunk_methods=config.chunk_methods,
+                skip_overloads=config.skip_overloads,
+            )
+            if config.languages:                 # multi-language index: say what each chunk is
+                for chunk in found:
+                    chunk["language"] = "python"
+            chunks.extend(found)
+        else:
+            continue
         file_count += 1
 
     if verbose:

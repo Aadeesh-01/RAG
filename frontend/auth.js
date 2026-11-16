@@ -1,59 +1,58 @@
 /**
  * Who is signed in.
  *
- * For now this is a demo sign-in: any name and password are accepted and only
- * the name is kept, in this browser. It protects nothing; the server doesn't
- * know about it. GitHub sign-in will replace `signIn`: the button sends the
- * visitor to the server (/api/auth/github), which completes OAuth and sets a
- * session cookie; `currentUser` will then ask the server (/api/auth/me) instead
- * of reading localStorage. Pages only use the functions below, so they won't change.
+ * Sign-in is GitHub OAuth, done by the server: `signIn` sends the visitor to
+ * /api/auth/github, which completes OAuth and sets an HttpOnly session cookie
+ * (this page never sees it, or the GitHub token). `currentUser` is what
+ * /api/auth/me answered: this module asks once when it loads (top-level await),
+ * so every page that imports it starts with the answer and `currentUser` stays
+ * synchronous. This module is data only; pages draw the avatar themselves
+ * (initials and avatarSrc in lib.js).
  */
 
-const KEY = "coderag.user";
+const OLD_DEMO_KEY = "coderag.user";     // the old demo sign-in kept a name here
 
 // The demo repositories (sample, requests, click) are open to everyone. Signing in is
 // needed to add a repository and to see the ones you added (app.js asks currentUser()).
 
-/** GitHub sign-in isn't wired up yet; the button says so. */
-export const GITHUB_READY = false;
+export const GITHUB_READY = true;
 
-/** {name, provider, since} or null. */
+async function fetchMe() {
+  try {
+    const r = await fetch("/api/auth/me", { credentials: "same-origin", headers: { Accept: "application/json" } });
+    if (!r.ok) return null;
+    const me = await r.json();
+    if (!me || typeof me.login !== "string" || !me.login) return null;
+    return { name: me.name || me.login, login: me.login, avatar_url: me.avatar_url || "", provider: "github" };
+  } catch {
+    return null;              // offline, or not served by coderag (e.g. unit tests)
+  }
+}
+
+try { globalThis.localStorage?.removeItem(OLD_DEMO_KEY); } catch { /* storage blocked */ }
+let user = await fetchMe();
+
+/** {name, login, avatar_url, provider: "github"} or null. */
 export function currentUser() {
-  try {
-    const user = JSON.parse(localStorage.getItem(KEY) || "null");
-    return user && typeof user.name === "string" && user.name.trim() ? user : null;
-  } catch {
-    return null;
-  }
+  return user;
 }
 
-/** Demo sign-in: any non-empty name and password. The password is never stored. */
-export function signIn(name, password) {
-  name = (name || "").trim();
-  if (!name) return { ok: false, error: "Enter a name or email." };
-  if (!password) return { ok: false, error: "Enter a password (any password works for now)." };
-  const user = { name: name.slice(0, 80), provider: "demo", since: new Date().toISOString() };
-  try {
-    localStorage.setItem(KEY, JSON.stringify(user));
-  } catch {
-    return { ok: false, error: "This browser is blocking storage, so sign-in can't be remembered." };
-  }
-  return { ok: true, user };
+/** Go to GitHub to sign in; come back to `next` (a path on this site). */
+export function signIn(next = "/app") {
+  window.location.assign(`/api/auth/github?next=${encodeURIComponent(safeNext(next))}`);
 }
 
+/** Forget the user here at once and end the server session. Resolves when the server has. */
 export function signOut() {
-  try { localStorage.removeItem(KEY); } catch { /* nothing kept */ }
+  user = null;
+  return fetch("/api/auth/logout", { method: "POST", credentials: "same-origin", keepalive: true })
+    .catch(() => {});
 }
 
 /** Where to go after signing in: a path on this site only (never another origin). */
 export function safeNext(raw, fallback = "/app") {
-  if (!raw || !raw.startsWith("/") || raw.startsWith("//") || raw.includes("\\")) return fallback;
+  if (typeof raw !== "string" || !raw.startsWith("/") || raw.startsWith("//") || /[\\\x00-\x1f\x7f]/.test(raw)) {
+    return fallback;
+  }
   return raw;
-}
-
-/** Two letters for the avatar: "Ada Lovelace" -> "AL", "ada@x.io" -> "AD". */
-export function initials(name) {
-  const words = name.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);
-  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] || "?").slice(0, 2);
-  return letters.toUpperCase();
 }

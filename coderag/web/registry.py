@@ -18,6 +18,7 @@ import yaml
 from ..agent import RAGCodebaseAgent
 from ..config import get_config
 from ..gitfetch import fetch_commit, rmtree
+from ..languages import label_of, language_of
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -36,6 +37,8 @@ class Demo:
     order: int = 0                  # position in demos.yaml
     kind: str = "demo"              # "demo" (curated) | "user" (indexed by a visitor)
     ref: str = ""                   # branch or tag the visitor asked for, if any
+    owner_id: int | None = None     # user who indexed it (visitor repos)
+    private: bool = False           # private on GitHub: only users who added it may open it
     agents: dict = field(default_factory=dict, repr=False)     # version -> agent
 
     @property
@@ -57,17 +60,38 @@ class Demo:
                 "functions": sum(d["type"] in ("function", "method") for d in docs),
                 "classes": sum(d["type"] == "class" for d in docs)}
 
+    def languages(self):
+        """{"Python": 12, "Go": 3}: indexed files per language, most files first."""
+        agent = self.agents.get(self.versions[-1]) if self.agents else None
+        if agent is None:
+            return self.stats.get("languages", {})
+        return language_files(agent.documents)
+
     def info(self):
         return {"id": self.id, "name": self.name, "description": self.description, "counts": self.counts(),
+                "languages": self.languages(),
                 "url": self.url, "sha": self.sha, "root": self.root, "questions": self.questions,
                 "stats": self.stats, "built": self.built, "versions": self.versions,
-                "kind": self.kind, "ref": self.ref}
+                "kind": self.kind, "ref": self.ref, "private": self.private}
+
+
+def language_files(documents):
+    """{"Python": 12, "Go": 3}: files per language label, most files first."""
+    files = {}
+    for d in documents:
+        if "qname" in d:
+            files.setdefault(d["qname"].split("::")[0], language_of(d))
+    counts = {}
+    for lang in files.values():
+        counts[label_of(lang)] = counts.get(label_of(lang), 0) + 1
+    return dict(sorted(counts.items(), key=lambda kv: (-kv[1], kv[0])))
 
 
 def repo_stats(agent):
     edges = agent.code_graph.edge_counts() if agent.code_graph else {}
     return {"files": len({d["qname"].split("::")[0] for d in agent.documents if "qname" in d}),
-            "chunks": len(agent.documents), "call_edges": sum(edges.values())}
+            "chunks": len(agent.documents), "call_edges": sum(edges.values()),
+            "languages": language_files(agent.documents)}
 
 
 # =============================================================================
@@ -167,6 +191,25 @@ class Repos:
         return repo_id in self.demos or os.path.exists(
             os.path.join(self.directory(repo_id), "demo.json"))
 
+    def summary(self, repo_id):
+        """info()-like dict from demo.json without loading the index, or None."""
+        loaded = self.demos.get(repo_id) or self.loaded.get(repo_id)
+        if loaded is not None:
+            return loaded.info()
+        path = os.path.join(self.directory(repo_id), "demo.json")
+        if not _REPO_ID.match(repo_id) or not os.path.exists(path):
+            return None
+        with open(path, encoding="utf-8") as f:
+            meta = json.load(f)
+        keys = ("id", "name", "description", "url", "sha", "root", "questions", "stats", "built",
+                "versions", "kind", "ref", "private")
+        return {**{k: meta.get(k) for k in keys}, "languages": (meta.get("stats") or {}).get("languages", {})}
+
+    def private(self, repo_id):
+        """True if `repo_id` is a visitor repo that is private on GitHub (read without loading it)."""
+        info = self.summary(repo_id)
+        return bool(info and info.get("private"))
+
     def get(self, repo_id):
         """Demo with indexes loaded, or None."""
         if repo_id in self.demos:
@@ -208,3 +251,10 @@ _REPO_ID = re.compile(r"^[a-z0-9-]{1,39}__[a-z0-9._-]{1,100}__[0-9a-f]{12}$")
 
 def repo_id_for(owner, repo, sha):
     return f"{owner}__{repo}__{sha[:12]}".lower()
+
+
+def repo_name_of(repo_id):
+    """'owner/repo' (lowercase) of a visitor repo id; the repo name itself may contain '__'."""
+    head = repo_id.rsplit("__", 1)[0]
+    owner, _, repo = head.partition("__")
+    return f"{owner}/{repo}"

@@ -64,3 +64,16 @@ def zoo_repo(tmp_path):
     """Just the original toy inheritance file."""
     shutil.copy(os.path.join(SAMPLE_REPO, "test_inheritance.py"), tmp_path)
     return str(tmp_path)
+
+
+# ── GitHub sign-in (coderag/web/auth.py) ────────────────────────────────────
+AUTH_SETTINGS = {"github_client_id": "test-client-id", "github_client_secret": "test-client-secret",
+                 "session_secret": "test-session-secret"}
+
+
+def sign_in(client, app, github_id=1, login="ada", token="gho_test"):
+    """Save a user and give `client` their session cookie, without the OAuth round trip."""
+    auth = app.state.auth
+    user = auth.users.upsert({"id": github_id, "login": login, "name": login.title(), "avatar_url": ""}, token)
+    client.cookies.set("coderag_session", auth.session_cookie(user.id))
+    return user

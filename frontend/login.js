@@ -1,9 +1,18 @@
-import { GITHUB_READY, currentUser, safeNext, signIn, signOut } from "./auth.js";
+import { currentUser, safeNext, signOut } from "./auth.js";
 
 const $ = (s) => document.querySelector(s);
-const next = safeNext(new URLSearchParams(window.location.search).get("next"));
+const params = new URLSearchParams(window.location.search);
+const next = safeNext(params.get("next"));
 const form = $("#login-form");
 const error = $("#login-error");
+
+// the server sends people back here with ?error=<code> when sign-in didn't finish
+const ERRORS = {
+  unavailable: "GitHub sign-in isn't set up on this server yet.",
+  denied: "Sign-in was cancelled on GitHub.",
+  state: "That sign-in attempt expired or didn't match. Please try again.",
+  github: "GitHub didn't complete the sign-in. Please try again.",
+};
 
 // came from a link into the app: say where they'll land
 if (next !== "/app") $("#login-why").textContent = "to continue to coderag.";
@@ -13,39 +22,26 @@ function showSignedIn(user) {
   form.hidden = Boolean(user);
   if (!user) return;
   $("#signed-in-name").textContent = user.name;
+  $("#signed-in-login").textContent = user.login && user.login !== user.name ? ` (@${user.login})` : "";
   $("#continue").href = next;
   $("#continue").focus();
 }
 
-function showError(message) {
-  error.textContent = message || "";
+function showError(code) {
+  const message = code ? ERRORS[code] || ERRORS.github : "";
+  error.textContent = message;
   error.hidden = !message;
-  for (const input of [$("#login-name"), $("#login-password")]) {
-    if (message) input.setAttribute("aria-invalid", String(!input.value.trim()));
-    else input.removeAttribute("aria-invalid");
-  }
 }
 
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const result = signIn($("#login-name").value, $("#login-password").value);
-  if (!result.ok) {
-    showError(result.error);
-    (!$("#login-name").value.trim() ? $("#login-name") : $("#login-password")).focus();
-    return;
-  }
-  window.location.replace(next);
-});
-for (const input of form.querySelectorAll("input")) input.addEventListener("input", () => showError(""));
+// a plain link, so it works before (or without) this script; here it only learns where to return
+$("#github").href = `/api/auth/github?next=${encodeURIComponent(next)}`;
 
-$("#switch").addEventListener("click", () => {
-  signOut();
+$("#switch").addEventListener("click", async () => {
+  await signOut();
   showSignedIn(null);
-  $("#login-name").focus();
+  $("#github").focus();
 });
 
-// GitHub sign-in: the button is ready for it; the server side isn't yet
-$("#github").disabled = !GITHUB_READY;
-
+showError(params.get("error"));
 showSignedIn(currentUser());
-if (!currentUser()) $("#login-name").focus();
+if (!currentUser()) $("#github").focus();

@@ -1,0 +1,11 @@
+set,version,type,q,R@ctx,Sig,Body,Hit@1,Hit@3,MRR,Chunks,Chars,ms
+coderag,v9,cross-language,What happens when the Add repo button is clicked?,0.5,0.5,0.2835820895522388,0.0,1.0,0.5,12,9430,23.97209999617189
+coderag,v9,cross-language,How does the page find out who is signed in?,0.5,0.0,0.05,0.0,0.0,0.1111111111111111,9,5314,21.724299993366003
+coderag,v9,cross-language,What does the server do when the user signs out?,0.5,0.5,0.5,1.0,1.0,1.0,7,4272,22.357799985911697
+coderag,v9,cross-language,Where does the add-repo dialog get the user's GitHub repositories from?,0.5,0.5,0.1437841530054645,0.0,1.0,0.5,12,8502,26.002899976447225
+coderag,v9,cross-language,How are the user's repository tabs loaded when the app starts?,0.5,0.5,0.5,1.0,1.0,1.0,12,9047,22.056099958717823
+coderag,v10,cross-language,What happens when the Add repo button is clicked?,1.0,0.5,0.2835820895522388,0.0,1.0,0.5,12,10187,19.101199985016137
+coderag,v10,cross-language,How does the page find out who is signed in?,0.5,0.0,0.05,0.0,0.0,0.1111111111111111,12,6596,17.786300042644143
+coderag,v10,cross-language,What does the server do when the user signs out?,1.0,0.5,0.5833333333333334,1.0,1.0,1.0,12,6875,20.733000012114644
+coderag,v10,cross-language,Where does the add-repo dialog get the user's GitHub repositories from?,1.0,0.5,0.1646174863387978,0.0,1.0,0.5,12,9175,20.113700011279434
+coderag,v10,cross-language,How are the user's repository tabs loaded when the app starts?,1.0,0.5,0.5,1.0,1.0,1.0,12,9548,18.28909997129813

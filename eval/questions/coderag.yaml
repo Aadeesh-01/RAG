@@ -1,0 +1,29 @@
+# coderag itself: the frontend (JavaScript) calling the web API (Python) over HTTP.
+# Cross-language questions: each gold pairs the browser code with the route that serves it,
+# so a version has to reach across the HTTP boundary to cover both.
+# Not pinned: it indexes this working tree, so the set follows the code (gold symbols are
+# looked up by name each run). Routes nested in create_app / Auth.router are gold as
+# create_app.index_repo etc.; their chunk is the enclosing function.
+repo: .
+ignore_dirs: [tests, sample_repo, eval, data, improvements, scripts]
+
+questions:
+  - q: What happens when the Add repo button is clicked?
+    type: cross-language
+    gold: [frontend/app.js::setupAddRepo, coderag/web/app.py::create_app.index_repo]
+
+  - q: How does the page find out who is signed in?
+    type: cross-language
+    gold: [frontend/auth.js::fetchMe, coderag/web/auth.py::Auth.router.me]
+
+  - q: What does the server do when the user signs out?
+    type: cross-language
+    gold: [frontend/auth.js::signOut, coderag/web/auth.py::Auth.router.logout]
+
+  - q: Where does the add-repo dialog get the user's GitHub repositories from?
+    type: cross-language
+    gold: [frontend/app.js::setupRepoPicker, coderag/web/app.py::create_app.github_repos]
+
+  - q: How are the user's repository tabs loaded when the app starts?
+    type: cross-language
+    gold: [frontend/app.js::loadUserRepos, coderag/web/app.py::create_app.my_repos]

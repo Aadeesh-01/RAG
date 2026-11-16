@@ -8,6 +8,7 @@ top-level area with its size and sub-areas, and the likely entry points. It is
 built from the indexed chunks, so existing indexes get it without re-indexing.
 """
 
+import os
 import re
 from collections import defaultdict
 
@@ -47,7 +48,7 @@ def repo_map(documents, max_areas=30, max_children=10):
         if len(parts) > 2:
             children[area].add(f"{parts[1]}/")
         else:
-            children[area].add(parts[-1][:-3])
+            children[area].add(os.path.splitext(parts[-1])[0])
     areas = sorted(files, key=lambda a: (-functions[a], a))[:max_areas]
 
     lines = ["REPO MAP: the whole repository (for overview questions; not a numbered source)",

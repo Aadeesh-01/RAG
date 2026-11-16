@@ -62,7 +62,8 @@ def build_messages(config, context, question):
     """Chat messages for `config.prompt_style`."""
     if config.prompt_style == "cited":
         return [
-            {"role": "system", "content": SYSTEM_PROMPT_CITED},
+            {"role": "system", "content": (SYSTEM_PROMPT_CITED.replace("a Python codebase", "a codebase")
+                                           if getattr(config, "languages", ()) else SYSTEM_PROMPT_CITED)},
             {"role": "user", "content": f"Sources:\n\n{context}\n\nQuestion: {question}"},
         ]
     return [

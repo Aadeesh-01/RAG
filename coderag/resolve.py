@@ -18,6 +18,10 @@ links to every `convert` method. CodeGraph resolves each call from its form
 
 Every edge records how it was resolved: exact | import | unique | ambiguous.
 Calls that can't be resolved confidently get no edge.
+
+Chunks in other languages (v9) have no resolver: their calls, bases and owning
+classes are linked by name within their own language (graph.NameMatcher), as
+`name_match` edges. Python lookups never see them, so no edge crosses languages.
 """
 
 import ast
@@ -26,9 +30,11 @@ from collections import defaultdict
 
 from .chunking import get_imports, iter_source_files
 from .context import display_name
+from .graph import NAME_MATCH, BridgeIndex, NameMatcher
+from .languages import language_of
 
 EXACT, IMPORT, UNIQUE, AMBIGUOUS = "exact", "import", "unique", "ambiguous"
-_RANK = {EXACT: 0, IMPORT: 0, UNIQUE: 1, AMBIGUOUS: 2}
+_RANK = {EXACT: 0, IMPORT: 0, UNIQUE: 1, AMBIGUOUS: 2, NAME_MATCH: 3}
 
 # Saved graphs record the resolver version; older ones are migrated on load.
 #   2: obj.foo() with a builtin method name is no longer guessed
@@ -76,10 +82,12 @@ class CodeGraph:
         self.root_package = os.path.basename(os.path.normpath(repo_path))
 
         n = len(chunks)
+        self.python = [language_of(c) == "python" for c in chunks]
         self.callees = [[] for _ in range(n)]     # [(j, how)], best resolution first
         self.callers = [[] for _ in range(n)]
         self.bases = [[] for _ in range(n)]       # class chunk -> base class chunks
         self.parent = [None] * n                  # method chunk -> class chunk
+        self.bridges = BridgeIndex()              # v10: set_bridges()
 
         self._load_imports(repo_path)
         self._index()
@@ -111,6 +119,8 @@ class CodeGraph:
         self.method_owners = defaultdict(list)              # method -> [(rel, cls)]
 
         for i, c in enumerate(self.chunks):
+            if not self.python[i]:
+                continue                          # other languages: graph.NameMatcher
             rel = _rel(c)
             if c["type"] == "method":
                 self.class_methods[(rel, c["parent"])][c["name"]] = i
@@ -122,9 +132,11 @@ class CodeGraph:
                 for m in c["methods"]:
                     self.method_owners[m].append((rel, c["name"]))
 
+        self.others = NameMatcher(self.chunks, [i for i, py in enumerate(self.python) if not py])
         for i, c in enumerate(self.chunks):
             if c["type"] == "method":
-                self.parent[i] = self.classes.get((_rel(c), c["parent"]))
+                self.parent[i] = (self.classes.get((_rel(c), c["parent"])) if self.python[i]
+                                  else self.others.owner(i))
 
     def _find_module(self, dotted):
         """Repo file for a dotted module name, or None if it's not in the repo."""
@@ -208,6 +220,12 @@ class CodeGraph:
         self.subclasses = defaultdict(list)
         for i, c in enumerate(self.chunks):
             if c["type"] != "class":
+                continue
+            if not self.python[i]:
+                for j in self.others.bases(i):
+                    if j not in self.bases[i]:
+                        self.bases[i].append(j)
+                        self.subclasses[j].append(i)
                 continue
             for base in c["base_classes"]:
                 for j, _ in self.lookup_name(_rel(c), base):
@@ -310,6 +328,11 @@ class CodeGraph:
 
     def _resolve_calls(self):
         for i, c in enumerate(self.chunks):
+            if not self.python[i]:
+                self.callees[i] = self.others.calls(i)
+                for j, how in self.callees[i]:
+                    self.callers[j].append((i, how))
+                continue
             best = {}
             skip = ({tuple(s) for s in c.get("assert_call_sites", [])}
                     if self.ignore_assert_calls else set())
@@ -331,18 +354,25 @@ class CodeGraph:
         for j, c in enumerate(self.chunks):
             c["called_by"] = sorted({display_name(self.chunks[i]) for i, _ in self.callers[j]})
 
+    def set_bridges(self, edges):
+        """Add cross-language bridge edges (bridges.detect)."""
+        self.bridges = BridgeIndex(edges)
+
     def typed_neighbors(self, i, include_callers=False, callers_first=False):
         """
-        [(j, edge)] in BFS priority: bases, callees, owning class, then callers
-        (or callers first, for "who calls X?" questions).
+        [(j, edge)] in BFS priority: bases, callees, bridges out, owning class,
+        then callers (or callers first, for "who calls X?" questions), and last
+        the code reaching this chunk over a bridge.
         """
         callers = ([(j, f"called by:{how}") for j, how in self.callers[i]]
                    if include_callers else [])
         out = [(j, "inherits") for j in self.bases[i]]
         out += [(j, f"calls:{how}") for j, how in self.callees[i]]
+        out += self.bridges.forward(i)
         if self.parent[i] is not None:
             out.append((self.parent[i], "member of"))
-        return callers + out if callers_first else out + callers
+        ordered = callers + out if callers_first else out + callers
+        return ordered + self.bridges.backward(i)
 
     def neighbors(self, i, include_callers=False):
         return [j for j, _ in self.typed_neighbors(i, include_callers)]
@@ -351,7 +381,8 @@ class CodeGraph:
     # Persistence: only what retrieval needs (neighbors, called_by)
     # =========================================================================
     def to_dict(self):
-        return {
+        extra = {"bridges": self.bridges.to_list()} if len(self.bridges) else {}
+        return {**extra,
             "resolver": RESOLVER_VERSION,
             "max_ambiguous": self.max_ambiguous,
             "ignore_assert_calls": self.ignore_assert_calls,
@@ -371,6 +402,7 @@ class CodeGraph:
         graph.callers = [[(j, how) for j, how in edges] for edges in data["callers"]]
         graph.bases = data["bases"]
         graph.parent = data["parent"]
+        graph.bridges = BridgeIndex.from_list(data.get("bridges"))
         graph.migrated = data.get("resolver", 1) < RESOLVER_VERSION
         if graph.migrated:
             graph._drop_builtin_method_guesses()

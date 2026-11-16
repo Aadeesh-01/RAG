@@ -6,11 +6,13 @@ writes a self-contained D3 force-directed HTML page.
 """
 
 import json
+import re
 
 from .chunking import load_chunks
 from .config import get_config
 from .context import display_name, module_path, public_name, source_location
-from .graph import build_graph, build_reverse_index
+from .graph import build_graph, build_reverse_index, confidence
+from .languages import language_of
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -244,7 +246,7 @@ def unique_labels(qnames):
     functions -> 'core.__getattr__', 'parser.__getattr__'.
     Identical qnames keep their full form.
     """
-    parts = [q.replace(".py::", ".").replace("/", ".").split(".") for q in qnames]
+    parts = [re.sub(r"\.\w+::", ".", q, count=1).replace("/", ".").split(".") for q in qnames]
     labels = []
     for q, p in zip(qnames, parts):
         shortest = len(q.split("::")[-1].split("."))     # 'Class.method' -> 2
@@ -277,22 +279,26 @@ def graph_data(agent):
         path, lo, hi = source_location(d)
         nodes.append({"id": i, "name": public_name(d), "label": labels[i], "kind": d["type"],
                       "file": path, "start_line": lo, "end_line": hi,
-                      "qname": d.get("qname", d["name"])})
+                      "qname": d.get("qname", d["name"]), "language": language_of(d)})
 
     links = []
     g = agent.code_graph
     if g is not None:                                   # scoped resolution (v7+)
         for i, edges in enumerate(g.callees):
-            links += [{"source": i, "target": j, "type": "calls", "resolution": how}
-                      for j, how in edges]
+            links += [{"source": i, "target": j, "type": "calls", "resolution": how,
+                       "confidence": confidence(how)} for j, how in edges]
         for i, bases in enumerate(g.bases):
-            links += [{"source": i, "target": j, "type": "inherits"} for j in bases]
+            how = "resolved" if language_of(docs[i]) == "python" else "name_match"
+            links += [{"source": i, "target": j, "type": "inherits", "confidence": how} for j in bases]
         links += [{"source": p, "target": i, "type": "member"}
                   for i, p in enumerate(g.parent) if p is not None]
+        links += [{"source": e.src, "target": e.dst, "type": "bridge", "mechanism": e.mechanism,
+                   "confidence": e.confidence, "label": e.label, "evidence": e.evidence}
+                  for e in getattr(g, "bridges", ()).edges] if getattr(g, "bridges", None) else []
     elif docs and "calls" in docs[0]:                   # name-based (v1-v6)
         _, edges = build_graph(docs)
         links = [{"source": e["source"], "target": e["target"], "type": e["kind"],
-                  "resolution": "name"} for e in edges]
+                  "resolution": "name", "confidence": "name_match"} for e in edges]
     return {"nodes": nodes, "links": links}
 
 

@@ -1,6 +1,7 @@
 import pytest
 
 from coderag import RAGCodebaseAgent, get_config
+from coderag.agent import RELATIONS, relation_of
 from coderag.cli import main
 from conftest import FakeIndex, FakeLLM
 
@@ -51,7 +52,7 @@ def test_retrieve_only_agent_cannot_answer(zoo_repo):
 
 def test_unknown_version():
     with pytest.raises(ValueError):
-        get_config("v9")
+        get_config("v99")
 
 
 def test_cli_versions_and_chunks(capsys, sample_repo):
@@ -87,3 +88,19 @@ def test_graph_sources_name_the_path_that_reached_them(zoo_repo):
     for s in (s for s in sources if s["hop"]):
         assert s["via_ids"][0] == run_zoo and len(s["via_ids"]) == len(s["via"])
         assert [agent.documents[i]["name"] for i in s["via_ids"]][0] == "run_zoo"
+    # how each source relates to the step that reached it
+    assert by_name["run_zoo"]["relation"] == "match"
+    assert all(s["relation"] in RELATIONS for s in sources)
+    assert all(s["relation"] == "match" for s in sources if s["hop"] == 0)
+    assert all(s["relation"] != "match" for s in sources if s["hop"])
+    assert {s["relation"] for s in hop1} <= {"callee", "caller", "parent", "method"}
+    assert "callee" in {s["relation"] for s in hop1}      # run_zoo calls what it reaches first
+
+
+def test_relation_of_maps_edge_labels():
+    assert relation_of(0, None) == "match"
+    assert relation_of(1, "calls:exact") == "callee"
+    assert relation_of(2, "called by:method") == "caller"
+    assert relation_of(1, "inherits") == "parent"
+    assert relation_of(1, "member of") == "method"
+    assert relation_of(1, "name match") == "callee"

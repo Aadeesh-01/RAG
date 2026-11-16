@@ -1,8 +1,8 @@
 import {
   citedSources, createSSEParser, errorMessage, focusSubgraph, formatLocation, hopLabel, middleTruncate,
-  normalizeCitations, renderAnswer, repoOverview, suggestedQuestions, viaLabel,
+  normalizeCitations, renderAnswer, repoOverview, suggestedQuestions, viaLabel, initials, avatarSrc,
 } from "./lib.js";
-import { currentUser, initials, signOut } from "./auth.js";
+import { currentUser, signIn, signOut } from "./auth.js";
 
 const $ = (selector) => document.querySelector(selector);
 const SETTINGS_KEY = "coderag.settings";
@@ -24,7 +24,7 @@ const state = {
   overviews: new Map(),                // repo id -> repoOverview(graph)
   busy: false, turn: 0, controller: null,
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
-  userRepos: [],                       // [{id, name}] indexed by this visitor
+  userRepos: [],                       // [{id, name}] the signed-in user's repositories (from the server)
   chats: new Map(),                    // repo id -> {turns, evidence} while another repo is open
 };
 
@@ -214,28 +214,55 @@ function svgIcon(d) {
   return svg;
 }
 
-// ── visitor-indexed repositories (remembered in this browser) ───────────────
-const REPOS_KEY = "coderag.repos";
+// ── the signed-in user's repositories: kept on the server, per GitHub account ──
+const OLD_REPOS_KEY = "coderag.repos";     // this browser's list before accounts; no longer used
 
-function loadUserRepos() {
-  try { return JSON.parse(localStorage.getItem(REPOS_KEY) || "[]"); } catch { return []; }
+async function loadUserRepos() {
+  try { localStorage.removeItem(OLD_REPOS_KEY); } catch { /* storage blocked */ }
+  try {
+    const mine = await fetchJSON("/api/repos/mine");
+    return mine.map((r) => ({ id: r.id, name: r.name }));
+  } catch {
+    return [];                 // signed out meanwhile, or the server is unreachable: no tabs
+  }
 }
 
-function saveUserRepos() {
-  try { localStorage.setItem(REPOS_KEY, JSON.stringify(state.userRepos)); } catch { /* not persisted */ }
-}
-
+/** Show `id` as one of the user's tabs, and keep it on their account. */
 function rememberUserRepo(id, name) {
-  state.userRepos = [{ id, name }, ...state.userRepos.filter((r) => r.id !== id)].slice(0, 12);
-  saveUserRepos();
+  const known = state.userRepos.some((r) => r.id === id);
+  state.userRepos = [{ id, name }, ...state.userRepos.filter((r) => r.id !== id)];
+  if (!known && currentUser()) {
+    fetch(`/api/repos/mine/${encodeURIComponent(id)}`, { method: "PUT" }).catch(() => {});
+  }
 }
 
 function removeUserRepo(id) {
   state.userRepos = state.userRepos.filter((r) => r.id !== id);
-  saveUserRepos();
+  if (currentUser()) fetch(`/api/repos/mine/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
   // switching away stores the open chat, so forget it only afterwards
   if (state.demo?.id === id) selectRepo(state.demos[0]?.id).then(() => state.chats.delete(id));
   else { state.chats.delete(id); renderRepoTabs(); }
+}
+
+// ── languages: the indexer's (coderag/languages.py) labels and highlight.js names ──
+const LANGUAGE_LABELS = { python: "Python", javascript: "JavaScript", typescript: "TypeScript", java: "Java",
+  kotlin: "Kotlin", c: "C", cpp: "C++", go: "Go", rust: "Rust" };
+const EXTENSION_LANGUAGES = { py: "python", js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
+  ts: "typescript", mts: "typescript", cts: "typescript", tsx: "typescript", java: "java", kt: "kotlin", kts: "kotlin",
+  c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp", hxx: "cpp", go: "go", rs: "rust" };
+const INDEXED_GITHUB_LANGUAGES = new Set(Object.values(LANGUAGE_LABELS));
+
+/** "go", "python" ... for a file path (by extension), or null. */
+function languageOfPath(path) {
+  return EXTENSION_LANGUAGES[(path || "").split(".").pop().toLowerCase()] || null;
+}
+
+/** Language tags say something only when a repository mixes languages, or isn't Python. */
+function languageTag(language) {
+  if (!language) return null;
+  const mixed = Object.keys(state.demo?.languages || {}).length > 1;
+  if (!mixed && language === "python") return null;
+  return el("span", { class: "lang-tag", "data-language": language, text: LANGUAGE_LABELS[language] || language });
 }
 
 const GENERIC_QUESTIONS = [
@@ -243,38 +270,248 @@ const GENERIC_QUESTIONS = [
   "What is the main entry point and what does it call?",
 ];
 
+/** "3 days ago", "last month", "just now": when a repository was last pushed to. */
+function pushedAgo(iso, now = Date.now()) {
+  const at = Date.parse(iso || "");
+  if (Number.isNaN(at)) return "";
+  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  let value = (at - now) / 1000;
+  for (const [size, unit] of [[60, "second"], [60, "minute"], [24, "hour"], [7, "day"], [4.345, "week"], [12, "month"], [Infinity, "year"]]) {
+    if (Math.abs(value) < size) return unit === "second" ? "just now" : rtf.format(Math.round(value), unit);
+    value /= size;
+  }
+  return "";
+}
+
+/**
+ * The signed-in user's GitHub repositories above the URL field: search, an
+ * All / Private / Public filter, and a listbox driven from the search box
+ * (arrows move, Enter adds or opens). Already added repositories open instead.
+ */
+function setupRepoPicker({ onChange, onAdd, onOpen }) {
+  const box = $("#repo-picker");
+  const search = $("#repo-search");
+  const list = $("#repo-options");
+  const status = $("#repo-picker-status");
+  const filters = [...box.querySelectorAll("[data-filter]")];
+  let repos = null;          // null while loading or unavailable
+  let shown = [];
+  let filter = "all";
+  let selected = null;       // full_name of the chosen row
+  let request = 0;           // only the newest load may draw
+
+  const optionId = (i) => `repo-option-${i}`;
+  const setStatus = (...children) => status.replaceChildren(...children);
+
+  function sync() {
+    const i = shown.findIndex((r) => r.full_name === selected);
+    [...list.children].forEach((o, j) => o.setAttribute("aria-selected", String(j === i)));
+    for (const host of [search, list]) {
+      if (i >= 0) host.setAttribute("aria-activedescendant", optionId(i));
+      else host.removeAttribute("aria-activedescendant");
+    }
+    if (i >= 0) list.children[i].scrollIntoView({ block: "nearest" });
+    onChange();
+  }
+
+  function choose(fullName) {
+    selected = fullName;
+    sync();
+  }
+
+  function option(r, i) {
+    const [owner, name] = r.full_name.split("/");
+    const meta = [r.language || "No language", r.pushed_at && `pushed ${pushedAgo(r.pushed_at)}`].filter(Boolean).join(" · ");
+    return el("li", {
+      id: optionId(i), role: "option", class: `repo-option${r.indexed ? " indexed" : ""}`,
+      "aria-selected": String(r.full_name === selected), "data-full-name": r.full_name, title: r.description || null,
+      onclick: () => (r.indexed ? onOpen(r) : choose(r.full_name)),
+      ondblclick: () => { if (!r.indexed) { choose(r.full_name); onAdd(); } },
+    },
+    el("span", { class: "repo-option-name" },
+      el("span", { class: "owner", text: `${owner}/` }), el("b", { text: name }),
+      r.private ? el("span", { class: "private-badge", text: "Private" }) : null),
+    el("span", { class: "repo-option-meta" }, meta,
+      INDEXED_GITHUB_LANGUAGES.has(r.language) ? null : el("span", { class: "py-hint", text: "few/no source files" })),
+    el("span", { class: "repo-option-action", text: r.indexed ? "Open" : "Add" }));
+  }
+
+  function render() {
+    if (!repos) return;
+    const q = search.value.trim().toLowerCase();
+    shown = repos.filter((r) => (filter === "all" || (filter === "private") === Boolean(r.private))
+                                && (!q || r.full_name.toLowerCase().includes(q)));
+    if (!shown.some((r) => r.full_name === selected)) selected = null;
+    list.replaceChildren(...shown.map(option));
+    const total = `${repos.length.toLocaleString()} ${repos.length === 1 ? "repository" : "repositories"}`;
+    if (!repos.length) setStatus("No repositories on your GitHub account yet. Paste a URL below to add someone else's.");
+    else if (!shown.length) setStatus(q ? `No repositories match “${search.value.trim()}”.` : `No ${filter} repositories.`);
+    else setStatus(shown.length === repos.length ? total : `${shown.length.toLocaleString()} of ${total}`);
+    sync();
+  }
+
+  function showProblem(...children) {
+    repos = null;
+    shown = [];
+    list.removeAttribute("aria-busy");
+    list.replaceChildren();
+    setStatus(...children);
+    sync();
+  }
+
+  async function load() {
+    const mine = ++request;
+    repos = null;
+    shown = [];
+    selected = null;
+    list.setAttribute("aria-busy", "true");
+    list.replaceChildren(...Array.from({ length: 5 }, () =>
+      el("li", { class: "repo-option skeleton", "aria-hidden": "true" }, el("span"), el("span"))));
+    setStatus("Loading your repositories…");
+    sync();
+    try {
+      const response = await fetch("/api/github/repos", { headers: { Accept: "application/json" } });
+      const body = await response.json().catch(() => ({}));
+      if (mine !== request) return;
+      if (response.status === 401) {
+        // the token was revoked or expired (or the session ended): sign in with GitHub again
+        showProblem(el("span", { text: "GitHub needs you to sign in again to list your repositories." }),
+          el("button", { type: "button", class: "ghost", text: "Reconnect GitHub",
+                         onclick: () => signIn(window.location.pathname + window.location.search) }));
+        return;
+      }
+      if (!response.ok || !Array.isArray(body)) throw new Error(body.error || `error ${response.status}`);
+      repos = body;
+    } catch {
+      if (mine !== request) return;
+      showProblem(el("span", { text: "Couldn't load your repositories. You can still paste a URL below." }),
+        el("button", { type: "button", class: "link-button", text: "Try again", onclick: load }));
+      return;
+    }
+    list.removeAttribute("aria-busy");
+    render();
+  }
+
+  function setFilter(value, focus = false) {
+    filter = value;
+    for (const b of filters) {
+      const on = b.dataset.filter === value;
+      b.setAttribute("aria-checked", String(on));
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
+    }
+    render();
+  }
+
+  filters.forEach((b, i) => {
+    b.addEventListener("click", () => setFilter(b.dataset.filter));
+    b.addEventListener("keydown", (e) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      setFilter(filters[(i + step + filters.length) % filters.length].dataset.filter, true);
+    });
+  });
+
+  search.addEventListener("input", render);
+  const onKey = (e) => {
+    if (e.key === "Enter") e.preventDefault();          // never submit an empty pick from the search box
+    if (!shown.length) return;
+    const i = shown.findIndex((r) => r.full_name === selected);
+    const inSearch = e.target === search;
+    const to = { ArrowDown: i + 1, ArrowUp: i < 0 ? shown.length - 1 : i - 1,
+                 Home: inSearch ? undefined : 0, End: inSearch ? undefined : shown.length - 1 }[e.key];
+    if (to !== undefined) {
+      e.preventDefault();
+      choose(shown[Math.max(0, Math.min(shown.length - 1, to))].full_name);
+    } else if (e.key === "Enter" && i >= 0) {
+      if (shown[i].indexed) onOpen(shown[i]);
+      else onAdd();
+    }
+  };
+  search.addEventListener("keydown", onKey);
+  list.addEventListener("keydown", onKey);
+
+  const api = {
+    active: false,
+    selected: () => repos?.find((r) => r.full_name === selected) || null,
+    clearSelection() { if (selected) { selected = null; sync(); } },
+    show(on) {
+      api.active = on;
+      box.hidden = !on;
+      if (!on) return;
+      search.value = "";
+      load();
+      setFilter("all");
+    },
+  };
+  return api;
+}
+
 function setupAddRepo() {
   const dialog = $("#add-repo");
+  const form = $("#add-repo-form");
   const error = $("#add-repo-error");
   const input = $("#repo-url");
+  const submit = $("#add-repo-submit");
   const showError = (message) => {
     error.textContent = message || "";
     error.hidden = !message;
     if (message) input.setAttribute("aria-invalid", "true");
     else input.removeAttribute("aria-invalid");
   };
-  input.addEventListener("input", () => showError(""));
+  const syncSubmit = () => {
+    submit.disabled = picker.active && !input.value.trim() && !picker.selected();
+  };
+  const openRepo = (repo) => {
+    dialog.close();
+    rememberUserRepo(repo.repo_id, repo.full_name);
+    selectRepo(repo.repo_id);
+  };
+  const picker = setupRepoPicker({
+    onChange: () => {
+      if (picker.selected()) { input.value = ""; showError(""); }     // one choice at a time: the row or the URL
+      syncSubmit();
+    },
+    onAdd: () => form.requestSubmit(),
+    onOpen: openRepo,
+  });
+  input.addEventListener("input", () => {
+    showError("");
+    if (input.value.trim()) picker.clearSelection();
+    syncSubmit();
+  });
   const open = (url = "") => {
     input.value = url;
     showError("");
     const limits = state.health?.indexing;
     $("#index-limits").textContent = limits
-      ? `Limits: ${limits.max_py_files.toLocaleString()} Python files / ${limits.max_py_mb} MB; `
+      ? `Limits: ${limits.max_py_files.toLocaleString()} source files / ${limits.max_py_mb} MB; `
         + `${limits.skipped_dirs.join(", ")} folders are skipped.` : "";
+    // signed in: pick from your GitHub repositories, or paste any URL below
+    const signedIn = Boolean(currentUser());
+    picker.show(signedIn);
+    input.required = !signedIn;
+    $("#repo-url-label").textContent = signedIn ? "Or paste a URL" : "Repository";
+    syncSubmit();
     dialog.showModal();
+    (signedIn && !url ? $("#repo-search") : input).focus();
   };
   // adding a repository needs an account (it costs the server an index); the demos don't
   $("#add-repo-button").addEventListener("click", () => (currentUser() ? open() : toSignIn()));
   $("#add-repo-cancel").addEventListener("click", () => dialog.close());
-  $("#add-repo-form").addEventListener("submit", async (e) => {
+  form.addEventListener("submit", async (e) => {
     e.preventDefault();
-    const submit = $("#add-repo-submit");
+    const chosen = input.value.trim() ? null : picker.selected();
+    if (chosen?.indexed) { openRepo(chosen); return; }
+    const url = input.value.trim() || (chosen ? `https://github.com/${chosen.full_name}` : "");
+    if (!url) { showError("Pick one of your repositories, or paste a GitHub URL."); return; }
     submit.disabled = true;
     showError("");
     try {
       const response = await fetch("/api/repos", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: input.value.trim() }),
+        body: JSON.stringify({ url }),
       });
       const job = await response.json().catch(() => ({}));
       if (!response.ok) {
@@ -285,9 +522,9 @@ function setupAddRepo() {
       trackJob(job);
     } catch (err) {
       showError(err.message);
-      input.focus();
+      (chosen ? $("#repo-search") : input).focus();
     } finally {
-      submit.disabled = false;
+      syncSubmit();
     }
   });
   return open;
@@ -346,6 +583,10 @@ function renderRepoCard(demo) {
       c ? stat(c.functions, "function", "functions") : null,
       c ? stat(c.classes, "class", "classes") : null,
       demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null,
+      Object.keys(demo.languages || {}).length ? el("span", { class: "lang-counts" },
+        Object.entries(demo.languages).map(([label, n]) => el("span", {
+          class: "lang-count", title: `${n.toLocaleString()} ${label} ${n === 1 ? "file" : "files"}` },
+        el("b", { text: n.toLocaleString() }), ` ${label}`))) : null,
       el("button", { type: "button", class: "link-button clear-chat", text: "Clear chat", hidden: true,
         title: "Remove this repository's questions and answers (saved answers are kept)",
         onclick: clearChat })),
@@ -618,15 +859,20 @@ function renderSources(sources, { graph = true } = {}) {
       "data-file": s.file, "data-start": s.start_line, "data-end": s.end_line },
       el("summary", {},
         // the " " text nodes keep screen-reader names apart; grid layout ignores them
-        el("span", { class: "sid", text: `S${s.id}` }), " ",
+        el("span", { class: "sid", "data-relation": relationOf(s), title: relationWord(s), text: `S${s.id}` }), " ",
         el("span", { class: "what" },
           el("span", { class: "name", text: s.name }), " ",
+          languageTag(s.language), " ",
           el("span", { class: "where", title: formatLocation(s),
             text: `${middleTruncate(s.file)}${s.start_line ? `:${s.start_line}-${s.end_line}` : ""}` }),
           // debug mode: how it was retrieved, visible without expanding the row
           s.debug ? el("span", { class: "debug", text: debugLine(s.debug) }) : null), " ",
         // a direct match is the default and says nothing; a graph source names its path
-        viaLabel(s) ? el("span", { class: "hop", title: `${viaLabel(s)}. ${hopHelp(s.hop)}` }, viaLabel(s)) : null),
+        relationLabel(s) ? el("span", { class: "hop", "data-relation": relationOf(s), "data-confidence": s.confidence || null,
+          "data-bridge": s.bridge?.mechanism || null,
+          title: s.bridge ? bridgeEvidence(s.bridge)
+            : `${viaLabel(s)}. ${hopHelp(s.hop)}${s.confidence === "name_match" ? " Linked by name only, not resolved." : ""}` },
+        relationLabel(s)) : null),
       s.code ? codeBlock(s) : null,
       el("div", { class: "source-actions" },
         graph ? el("button", { type: "button", class: "link-button", text: "Show in file",
@@ -655,6 +901,45 @@ function renderSources(sources, { graph = true } = {}) {
 function hopHelp(hop) {
   return hop === 0 ? "Found by searching the code for the question"
     : `Reached by following calls from a direct match, ${hop} ${hop === 1 ? "step" : "steps"} away`;
+}
+
+// ── relations: how a source relates to the step that reached it (the server's `relation`) ──
+const RELATIONS = ["match", "callee", "caller", "parent", "child", "method"];
+const RELATION_WORDS = { match: "Direct match", callee: "Called", caller: "Caller", parent: "Base class", child: "Subclass", method: "Member" };
+
+function relationOf(s) {
+  return RELATIONS.includes(s?.relation) ? s.relation : s?.hop ? "callee" : "match";
+}
+
+/** The relation as a word, for titles, the node card and screen readers. */
+function relationWord(s) {
+  return RELATION_WORDS[relationOf(s)];
+}
+
+/** "called by main", "calls Session.send", "base class of Bat", "class of Zoo.run": the previous step named. */
+// bridge edges (v10): code reached across a language or process boundary
+const BRIDGE_LABELS = { http: "HTTP", jni: "JNI", ctypes_cffi: "ctypes/cffi" };
+
+/** "HTTP POST /api/repos (exact)" plus the matched strings and both locations: a bridge's evidence. */
+function bridgeEvidence(b) {
+  const e = b.evidence || {};
+  const matched = (e.matched || []).join("  →  ");
+  return [`${b.label} (${b.confidence === "exact" ? "exact match" : "pattern match"})`, matched,
+    e.src && e.dst ? `${e.src}  →  ${e.dst}` : ""].filter(Boolean).join("\n");
+}
+
+function relationLabel(s) {
+  if (!s.hop) return "";
+  if (s.bridge) return `via ${s.bridge.label}`;          // "via HTTP POST /api/repos"
+  const prev = s.via?.length ? s.via[s.via.length - 1] : "";
+  if (!prev) return viaLabel(s);
+  return { callee: `called by ${prev}`, caller: `calls ${prev}`, parent: `base class of ${prev}`, child: `subclass of ${prev}`,
+    method: s.kind === "class" ? `class of ${prev}` : `method of ${prev}` }[relationOf(s)] || viaLabel(s);
+}
+
+function relationOfNode(id) {
+  const s = state.sources.find((x) => x.chunk_id === id);
+  return s ? relationOf(s) : null;
 }
 
 /** Source code with its real line numbers (drawn by CSS, so copying skips them). */
@@ -718,8 +1003,9 @@ function storeSaved(list) {
 }
 
 function slimSource(s, keepCode) {   // what a saved answer keeps of a source: code only if cited
-  const { id, name, kind, file, start_line, end_line, hop, url, code } = s;
-  return { id, name, kind, file, start_line, end_line, hop, url, code: keepCode ? code : undefined };
+  const { id, name, kind, file, start_line, end_line, hop, via, relation, url, code, language, bridge } = s;
+  return { id, name, kind, file, start_line, end_line, hop, via, relation, url, language, bridge,
+           code: keepCode ? code : undefined };
 }
 
 function saveButton(record) {
@@ -891,7 +1177,47 @@ function syncLegend() {
   $("#legend-retrieved").hidden = !n || n - cited === 0;
   $("#legend-neighbour").hidden = !n;
   $("#legend-inherits").hidden = !(state.graph?.links || []).some((l) => l.type === "inherits");
+  nameMatchLegend().hidden = !(state.graph?.links || []).some((l) => l.confidence === "name_match");
+  const mechanisms = [...new Set((state.graph?.links || []).filter((l) => l.type === "bridge").map((l) => l.mechanism))];
+  const bridges = bridgeLegend();
+  bridges.hidden = !mechanisms.length;
+  bridges.querySelector("span").textContent = `Crosses language: ${mechanisms.map((m) => BRIDGE_LABELS[m] || m).join(" / ")}`;
   $("#legend-trail").hidden = !n || !state.sources.some((s) => s.via_ids?.length);
+  // relation keys: only the relations this answer has, each a toggle for its nodes
+  const present = new Set(state.sources.map(relationOf));
+  document.querySelectorAll(".legend-relation").forEach((li) => { li.hidden = !n || !present.has(li.dataset.relation); });
+}
+
+/** The legend key for calls linked by name only (other languages, older indexes), added once. */
+function nameMatchLegend() {
+  let item = $("#legend-name-match");
+  if (!item) {
+    item = el("li", { id: "legend-name-match", title: "Calls linked by matching names, without resolving imports or scope" },
+      el("i", { class: "key-line key-line--name-match", "aria-hidden": "true" }), "Matched by name");
+    $("#legend-inherits").after(item);
+  }
+  return item;
+}
+
+/** The legend key for bridge edges ("Crosses language: HTTP / JNI"), added once. */
+function bridgeLegend() {
+  let item = $("#legend-bridge");
+  if (!item) {
+    item = el("li", { id: "legend-bridge", title: "Edges across a language or process boundary: an HTTP call to its route, "
+      + "a JNI declaration to its C function, a ctypes/cffi call to its C function. Point at one to see its evidence." },
+    el("i", { class: "key-line key-line--bridge", "aria-hidden": "true" }), el("span"));
+    nameMatchLegend().after(item);
+  }
+  return item;
+}
+
+/** Relations the visitor hid from the legend (kept across answers). */
+const hiddenRelations = new Set();
+function applyRelationToggles() {
+  document.querySelectorAll(".legend-relation button").forEach((b) => {
+    b.setAttribute("aria-pressed", String(!hiddenRelations.has(b.closest("li").dataset.relation)));
+  });
+  graphView?.node.classed("off", (n) => hiddenRelations.has(relationOfNode(n.id)));
 }
 
 function nodeClass(n) {
@@ -904,7 +1230,9 @@ function nodeStatus(n) {
   const hop = state.retrieved.get(n.id);
   if (hop === undefined) return state.retrieved.size ? "Neighbour, not sent to the model" : "";
   const use = state.cited?.has(n.id) ? "Cited" : state.cited ? "Retrieved, not cited" : "Retrieved";
-  return `${use}, ${hopLabel(hop).toLowerCase()}`;
+  const s = state.sources.find((x) => x.chunk_id === n.id);
+  const how = s && s.hop ? relationLabel(s) : hopLabel(hop).toLowerCase();
+  return `${use}, ${how}`;
 }
 
 function nodeName(n) {
@@ -1150,8 +1478,21 @@ function drawGraph() {
 
   const keyOf = (l) => pairKey(nodeId(l.source), nodeId(l.target));
   const onTrail = (l) => trails.has(keyOf(l));
+  // confidence comes from the full graph: a link matched by name (not resolved) is drawn dashed
+  const confidence = new Map(graph.links.map((l) => [`${nodeId(l.source)}>${nodeId(l.target)}:${l.type}`, l.confidence]));
+  const nameMatched = (l) => (l.confidence || confidence.get(`${nodeId(l.source)}>${nodeId(l.target)}:${l.type}`)) === "name_match";
+  const bridgeOf = new Map(graph.links.filter((l) => l.type === "bridge")
+    .map((l) => [`${nodeId(l.source)}>${nodeId(l.target)}`, l]));
   const link = linkLayer.selectAll("path").data(links).join("path")
-    .attr("class", (l) => `link ${l.type}${onTrail(l) ? " trail" : ""}`);
+    .attr("class", (l) => `link ${l.type}${onTrail(l) ? " trail" : ""}${nameMatched(l) ? " name-match" : ""}`)
+    .attr("data-mechanism", (l) => (l.type === "bridge" ? l.mechanism || bridgeOf.get(`${nodeId(l.source)}>${nodeId(l.target)}`)?.mechanism : null))
+    // a path edge takes the relation of the source it leads to
+    .attr("data-relation", (l) => (onTrail(l) ? relationOfNode(trails.get(keyOf(l)).to) : null));
+  // pointing at a bridge shows its evidence: the matched strings and both file:line locations
+  link.filter((l) => l.type === "bridge").append("title").text((l) => {
+    const b = l.evidence ? l : bridgeOf.get(`${nodeId(l.source)}>${nodeId(l.target)}`);
+    return b ? bridgeEvidence(b) : "Crosses a language boundary";
+  });
   const trailLinks = links.filter(onTrail);
   const flow = trailLayer.selectAll("path").data(trailLinks).join("path").attr("class", "trail-flow")
     // the dots travel the way retrieval walked, whichever way the call points
@@ -1163,6 +1504,9 @@ function drawGraph() {
   let timer = null;
   const node = nodeLayer.selectAll("g").data(nodes).join("g")
     .attr("class", nodeClass)
+    .attr("data-relation", (n) => relationOfNode(n.id))
+    .attr("data-language", (n) => n.language || null)
+    .classed("off", (n) => hiddenRelations.has(relationOfNode(n.id)))
     .attr("role", "button")
     .attr("aria-label", nodeName)
     .attr("tabindex", (n) => (n === order[0] ? 0 : -1))
@@ -1189,7 +1533,7 @@ function drawGraph() {
     });
   node.append("circle").attr("class", "ring").attr("r", (n) => radius(n) + 4);
   node.append("circle").attr("class", "dot").attr("r", radius);
-  node.append("title").text((n) => `${n.name}\n${formatLocation(n)}`);
+  node.append("title").text((n) => `${n.name}\n${formatLocation(n)}${n.language ? ` · ${LANGUAGE_LABELS[n.language] || n.language}` : ""}`);
   const label = node.filter(labelled).append("text").attr("class", "label").attr("text-anchor", "middle")
     .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4);
   label.filter((n) => state.sids.has(n.id)).append("tspan").attr("class", "label-sid").text(sidText);
@@ -1497,13 +1841,14 @@ function showNodeCard(n) {
   const status = nodeStatus(n);
   card.replaceChildren(
     el("div", { class: "node-head" },
-      sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", text: `S${sid}` }) : null,
+      sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", "data-relation": relationOfNode(n.id), title: RELATION_WORDS[relationOfNode(n.id)], text: `S${sid}` }) : null,
       el("h2", { text: n.name }),
       el("button", { type: "button", class: "icon-button", "aria-label": "Close", title: "Close (Esc)", onclick: () => {
         hideNodeCard();
         graphView?.node.filter(function focused() { return this.tabIndex === 0; }).node()?.focus();
       } }, svgIcon("M7 7l10 10M17 7L7 17"))),
-    el("p", {}, `${n.kind[0].toUpperCase()}${n.kind.slice(1)} in `, el("code", { text: formatLocation(n) })),
+    el("p", {}, `${n.kind[0].toUpperCase()}${n.kind.slice(1)} in `, el("code", { text: formatLocation(n) }),
+      languageTag(n.language) ? " " : null, languageTag(n.language)),
     status ? el("p", { class: "node-status", text: status }) : null,
     el("div", { class: "row" },
       sid && state.answerTurn ? el("button", { type: "button", class: "link-button", text: `Show S${sid} in the answer`,
@@ -1545,9 +1890,10 @@ function loadFile(repoId, path) {
 }
 
 /** Highlighted HTML per line; spans that cross a line break are closed and reopened. */
-function highlightLines(text) {
-  if (!window.hljs) return text.split("\n").map(escapeHtml);
-  const html = window.hljs.highlight(text, { language: "python", ignoreIllegals: true }).value;
+function highlightLines(text, path = "") {
+  const language = languageOfPath(path) || "python";
+  if (!window.hljs || !window.hljs.getLanguage(language)) return text.split("\n").map(escapeHtml);
+  const html = window.hljs.highlight(text, { language, ignoreIllegals: true }).value;
   const lines = [];
   const open = [];
   let line = "";
@@ -1623,7 +1969,7 @@ async function showCode(path, { start = null, end = null, first = false, reveal 
     if (token !== code.token) return;                    // another file was asked for meanwhile
     // hljs output is escaped text in spans; .lines is as wide as the longest line,
     // so tinted ranges stay full width when the view scrolls sideways
-    view.innerHTML = `<div class="lines">${highlightLines(file.text)
+    view.innerHTML = `<div class="lines">${highlightLines(file.text, path)
       .map((html, i) => `<span class="line" data-n="${i + 1}">${html || " "}</span>`).join("")}</div>`;
     code.rendered = true;
     code.url = file.url;
@@ -1717,13 +2063,26 @@ function setupAccount() {
   $("#sign-in-link").href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   if (!user) return;
   $("#user-initials").textContent = initials(user.name);
+  showAvatar($("#user-button"), $("#user-initials"), avatarSrc(user));
   $("#user-button").title = `Signed in as ${user.name}`;
   $("#user-name").textContent = user.name;
-  $("#user-provider").textContent = user.provider === "github" ? "GitHub" : "demo sign-in";
-  $("#sign-out").addEventListener("click", () => {
-    signOut();
+  $("#user-provider").textContent = user.login ? `@${user.login} on GitHub` : "GitHub";
+  $("#sign-out").addEventListener("click", async () => {
+    await signOut();                  // the session cookie is gone before the next page asks
     window.location.href = "/";
   });
+}
+
+/** The GitHub picture over the initials; the initials stay if it can't load. */
+function showAvatar(button, label, src) {
+  if (!src) return;
+  const img = document.createElement("img");
+  img.alt = "";
+  img.referrerPolicy = "no-referrer";
+  img.addEventListener("load", () => { label.hidden = true; });
+  img.addEventListener("error", () => img.remove());
+  img.src = src;
+  button.append(img);
 }
 
 /** To sign-in, coming back to this exact view afterwards. */
@@ -1736,7 +2095,7 @@ async function start() {
   setupSettings();
   setupSaved();
   const openAddRepo = setupAddRepo();
-  state.userRepos = currentUser() ? loadUserRepos() : [];   // your added repositories need you signed in
+  state.userRepos = currentUser() ? await loadUserRepos() : [];   // your repositories need you signed in
   showPanel("chat");
   document.querySelectorAll(".panel-tabs button").forEach((b) => b.addEventListener("click", () => showPanel(b.dataset.panel)));
   // Code | Call graph: a tablist, so the arrow keys move between the two tabs
@@ -1761,6 +2120,11 @@ async function start() {
   $("#zoom-in").addEventListener("click", () => graphView?.zoomBy(1.5));
   $("#zoom-out").addEventListener("click", () => graphView?.zoomBy(1 / 1.5));
   $("#zoom-fit").addEventListener("click", () => graphView?.fit(true));
+  document.querySelectorAll(".legend-relation button").forEach((b) => b.addEventListener("click", () => {
+    const relation = b.closest("li").dataset.relation;
+    if (hiddenRelations.has(relation)) hiddenRelations.delete(relation); else hiddenRelations.add(relation);
+    applyRelationToggles();
+  }));
   $("#graph-toggle").addEventListener("click", () => {
     state.graphMode = state.graphMode === "full" ? "focus" : "full";
     drawGraph();

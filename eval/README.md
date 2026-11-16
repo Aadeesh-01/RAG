@@ -6,7 +6,7 @@ hand-labelled gold symbols.
 
 ```bash
 python eval/fetch_repos.py                 # clone the pinned real repos into eval/.repos/
-python eval/run_eval.py                    # every question set, v0-v6
+python eval/run_eval.py                    # every question set, every version
 python eval/run_eval.py --by-type          # break down by question type
 python eval/run_eval.py --versions v5 "v5+chunk_methods=True+max_file_chars=1000000"
 python eval/run_eval.py --csv eval/results/run.csv
@@ -22,9 +22,12 @@ field.
 | `sample_repo` | bundled toy repo | n/a | 19 |
 | `requests` | psf/requests (`src/requests`) | `3c7baaa0` | 22 |
 | `click` | pallets/click (`src/click`) | `2247b35e` | 21 |
+| `commander` | tj/commander.js v14.0.3 (`lib`), **JavaScript** | `b7d43804` | 12 |
+| `coderag` | this repository (frontend JS + web API Python), **cross-language** | working tree | 5 |
 
 Each question has a type (`locate`, `callers`, `callees`, `inheritance`, `flow`) and gold symbols
-written as `path::Class.method`. Call relationships in the gold labels were checked against the
+written as `path::Class.method`. Gold symbols in `.py` files are located with `ast`; in other
+languages, with the tree-sitter chunker the index uses. Call relationships in the gold labels were checked against the
 source at the pinned SHA. Overloaded names resolve to the last definition (the implementation, not
 the `@overload` stub).
 
@@ -151,6 +154,91 @@ the retrieval debug view (`?debug=1` on the site, `stream(debug=True)` in Python
 | requests | v7 | 0.83 | 0.82 | 0.55 | 0.56 |
 | requests | v7 + skip overload stubs only | 0.77 | 0.73 | 0.52 | 0.55 |
 | requests | **v8** | **0.83** | **0.82** | 0.54 | **0.57** |
+
+## v9: other languages (reported separately)
+
+v9 is v8 plus tree-sitter chunking for JavaScript, TypeScript, Java, Kotlin, C, C++, Go and Rust
+([coderag/languages.py](../coderag/languages.py)). Python keeps its `ast` chunker and scope-aware
+resolver. Calls in the other languages are linked by name within the same language (`name_match`
+edges), never across languages.
+
+**Python sets: unchanged.** v9 gives exactly v8's numbers on all three Python sets (same chunks, same
+context), so the Python results above stay valid.
+
+| Set | Version | R@ctx | Sig | Body | MRR |
+|---|---|---|---|---|---|
+| sample_repo | v8 = v9 | 1.00 | 1.00 | 0.88 | 0.79 |
+| requests | v8 = v9 | 0.83 | 0.82 | 0.54 | 0.57 |
+| click | v8 = v9 | 0.94 | 0.80 | 0.56 | 0.64 |
+
+**JavaScript: commander.js.** 12 hand-labelled questions, 17 gold symbols, written from the source
+before any retrieval was run. v1–v8 index Python only and find nothing here; v0's baseline reads
+`.js` as plain text windows, so it is shown for reference. Per-question rows are in
+[results/v9-commander.csv](results/v9-commander.csv).
+
+```bash
+python eval/run_eval.py eval/questions/commander.yaml --versions v9 --by-type
+```
+
+| Set | Version | n | R@ctx | Sig | Body | Hit@1 | Hit@3 | MRR | Chunks | Chars |
+|---|---|---|---|---|---|---|---|---|---|---|
+| commander | v0 (fixed 1000-char windows over all text files) | 12 | 0.62 | 0.58 | 0.62 | 0.50 | 0.58 | 0.54 | 5.0 | 4996 |
+| commander | **v9** | 12 | **0.83** | **0.71** | 0.60 | 0.42 | 0.50 | 0.53 | 10.9 | 8377 |
+
+| Type | n | R@ctx | Sig | MRR |
+|---|---|---|---|---|
+| locate | 8 | 0.88 | 0.75 | 0.61 |
+| callers | 2 | 0.50 | 0.50 | 0.10 |
+| callees | 1 | 1.00 | 0.50 | 1.00 |
+| inheritance | 1 | 1.00 | 1.00 | 0.25 |
+
+- Recall is in the same range as the Python sets (requests 0.83, click 0.94), with name matching
+  instead of a resolver, and well above the v0 baseline (0.62). With 12 questions, one question moves R@ctx by about 0.08.
+- **Both misses involve `suggestSimilar`**: "how does commander suggest a similar name" and "which
+  functions call suggestSimilar". The graph is right (`unknownOption` and `unknownCommand` call it,
+  and it calls `editDistance`), but vector search never ranks the function in the top 4, so
+  expansion never reaches it. It is an embedding miss, not a chunking or linking one. The questions
+  were not changed after the fact.
+- The inheritance question (`InvalidArgumentError extends CommanderError`) is answered through a
+  `name_match` inherits edge: the subclass is a vector hit and its base comes in at hop 1.
+
+## v10: bridge edges across languages
+
+v10 is v9 plus *bridge* edges ([coderag/bridges/](../coderag/bridges/)): an HTTP client call to the
+route that serves it (fetch/axios, requests/httpx, OkHttp/Retrofit -> FastAPI/Flask, Express, Spring,
+Go net/http), a Kotlin/Java `external`/`native` method to its JNI C function, and a ctypes/cffi call to
+its C function. Only literal URLs (or literals joined with `+`) are matched; a URL built from a
+variable or a template with values is skipped. Graph expansion follows a bridge as one hop.
+
+**Question set: coderag itself.** 5 hand-labelled questions where the answer spans the browser code
+and the Python route behind it, so each has 2 gold symbols: the JavaScript caller and the route
+handler. v10 finds 10 HTTP bridges in this repo (6 exact, 4 pattern: through the `fetchJSON` wrapper or a
+path parameter). The 7 calls whose URL is a template with values (`/api/repos/${id}/ask` ...) are
+skipped on purpose. Per-question rows:
+[results/v10-coderag.csv](results/v10-coderag.csv).
+
+```bash
+python eval/run_eval.py eval/questions/coderag.yaml --versions v9 v10
+```
+
+| Set | Version | n | R@ctx | Sig | Body | Hit@1 | Hit@3 | MRR | Chunks | Chars |
+|---|---|---|---|---|---|---|---|---|---|---|
+| coderag | v9 | 5 | 0.50 | 0.40 | 0.30 | 0.40 | 0.80 | 0.62 | 10.4 | 7313 |
+| coderag | **v10** | 5 | **0.90** | 0.40 | 0.32 | 0.40 | 0.80 | 0.62 | 12.0 | 8476 |
+
+- **Recall 0.50 -> 0.90.** v9 finds one side of every question: the JavaScript caller in 4 of 5,
+  since the questions talk about the UI. v10 crosses to the route in 4 of 5. Ranks (Hit@k, MRR) don't
+  change, since bridges only add expansions after the vector hits.
+- **The remaining miss** ("how does the page find out who is signed in?") is on the client side.
+  `fetchMe` is only called from module-level code in `auth.js` (`let user = await fetchMe()`), which
+  no chunk holds, and vector search doesn't rank it. v10 still reaches the route `/api/auth/me` via
+  `signOut`'s bridge to the same `Auth.router`.
+- **Sig doesn't move (0.40).** coderag's routes are nested functions inside `create_app` and
+  `Auth.router`, so a bridge lands on that whole enclosing chunk. It counts as covering the route,
+  but with the hop-1 character budget the context shows the top of `create_app`, not the route's
+  `def` line. Splitting nested route handlers into their own chunks would fix that. It is not done
+  here, because it would change Python chunking for v1-v9.
+- Small set: one question is 0.1 of R@ctx. It follows the working tree, so it has no pinned SHA.
 
 ## Answer quality
 

@@ -8,6 +8,8 @@ copy of the whole pipeline.
 
 from dataclasses import dataclass, fields, replace
 
+from .languages import extensions_for, registered
+
 # Directories never worth indexing (pruned in-place during os.walk)
 SKIP_DIRS = frozenset({
     "venv", ".venv", "env", ".env",
@@ -85,6 +87,10 @@ class RAGConfig:
     # ── Loading / chunking ──────────────────────────────────────────────────
     chunker: str = "ast"                    # "fixed" (character windows) | "ast"
     extensions: tuple = (".py",)
+    languages: tuple = registered()         # other languages, via tree-sitter (languages.py);
+                                            # v0-v8 set () and index Python only
+    bridges: tuple = ()                     # cross-language edges (coderag/bridges/): jni,
+                                            # ctypes_cffi, http; needs scoped call resolution
     prune_dirs: bool = True                 # skip SKIP_DIRS and dot-directories
     ignore_dirs: tuple = ()                 # more directory names to skip (e.g. tests, docs)
     chunk_size: int = 1000                  # fixed chunker only
@@ -142,8 +148,13 @@ class RAGConfig:
     def from_dict(cls, data):
         """Inverse of dataclasses.asdict after a JSON round trip (lists back to tuples)."""
         known = {f.name for f in fields(cls)}
+        data = {"languages": (), "bridges": (), **data}   # older indexes: Python only, no bridges
         return cls(**{k: tuple(v) if isinstance(v, list) else v
                       for k, v in data.items() if k in known})
+
+    def source_extensions(self):
+        """Extensions of every indexed file: `extensions` plus those of `languages`."""
+        return tuple(dict.fromkeys(tuple(self.extensions) + extensions_for(self.languages)))
 
     def index_mismatch(self, other):
         """INDEX_FIELDS on which `other` differs, i.e. would need a different index."""
@@ -153,7 +164,7 @@ class RAGConfig:
 # Fields that shape the saved index (chunks, embeddings, call graph). Everything
 # else (retrieval depth, context budget, LLM) can change on an existing index.
 INDEX_FIELDS = (
-    "chunker", "extensions", "prune_dirs", "ignore_dirs", "chunk_size", "chunk_overlap",
+    "chunker", "extensions", "languages", "bridges", "prune_dirs", "ignore_dirs", "chunk_size", "chunk_overlap",
     "max_file_chars", "min_segment_chars", "min_chunk_chars", "chunk_methods", "skip_overloads",
     "dedup_content", "structural", "call_resolution", "max_ambiguous", "ignore_assert_calls",
     "embed_model",
@@ -163,6 +174,7 @@ INDEX_FIELDS = (
 _V1 = RAGConfig(
     name="v1",
     description="AST chunking (one chunk per top-level class/function) + Qwen2.5-Coder",
+    languages=(),                       # v1-v8: Python only
 )
 
 _V2 = replace(
@@ -226,10 +238,24 @@ _V8 = replace(
     ignore_assert_calls=True,           # no metric change; removes type-guard hubs (is_prepared)
 )
 
+_V9 = replace(
+    _V8, name="v9",
+    description="v8 + other languages: JavaScript, TypeScript, Java, Kotlin, C, C++, Go and Rust "
+                "chunked with tree-sitter, their calls linked by name within the language",
+    languages=registered(),
+)
+
+_V10 = replace(
+    _V9, name="v10",
+    description="v9 + bridge edges across languages and processes: JNI, ctypes/cffi, "
+                "HTTP client calls to server routes",
+    bridges=("jni", "ctypes_cffi", "http"),
+)
+
 _V0 = RAGConfig(
     name="v0",
     description="Baseline: concatenate all files, fixed 1000-char chunks, flan-t5-base",
-    chunker="fixed", extensions=BASELINE_EXTENSIONS, prune_dirs=False,
+    chunker="fixed", extensions=BASELINE_EXTENSIONS, prune_dirs=False, languages=(),
     min_chunk_chars=0,
     top_k=5, dedup_prefix=False,
     header="none", chars_per_chunk=None,
@@ -237,7 +263,7 @@ _V0 = RAGConfig(
     max_input_tokens=1024, max_new_tokens=100,
 )
 
-VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8)}
+VERSIONS = {c.name: c for c in (_V0, _V1, _V2, _V3, _V4, _V5, _V6, _V7, _V8, _V9, _V10)}
 DEFAULT_VERSION = "v8"
 
 

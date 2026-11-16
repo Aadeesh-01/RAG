@@ -122,11 +122,13 @@ test("a chip stays on the line of the word before it", () => {
   assert.match(html, /<span class="cite-run">Then <a[^>]*>S1<\/a> <a[^>]*>S3<\/a><\/span>/);
 });
 
-import { initials, safeNext } from "../auth.js";
+import { safeNext } from "../auth.js";
+import { avatarSrc, initials } from "../lib.js";
 
 test("after sign-in, only paths on this site are followed", () => {
   assert.equal(safeNext("/app?repo=sample&q=x"), "/app?repo=sample&q=x");
-  for (const bad of ["https://evil.example", "//evil.example/app", "/\\evil.example", "javascript:alert(1)", "", null]) {
+  for (const bad of ["https://evil.example", "//evil.example/app", "/\\evil.example", "/\t/evil.example",
+                     "/\n/evil.example", "javascript:alert(1)", "evil.example", "", null]) {
     assert.equal(safeNext(bad), "/app", String(bad));
   }
 });
@@ -135,4 +137,13 @@ test("avatar initials", () => {
   assert.equal(initials("Ada Lovelace"), "AL");
   assert.equal(initials("ada@example.com"), "AD");
   assert.equal(initials("x"), "X");
+});
+
+test("avatar picture: GitHub's https URL at the asked size, nothing otherwise", () => {
+  assert.equal(avatarSrc({ avatar_url: "https://avatars.githubusercontent.com/u/42?v=4" }, 64),
+               "https://avatars.githubusercontent.com/u/42?v=4&s=64");
+  for (const user of [null, {}, { avatar_url: "" }, { avatar_url: "http://x.example/a.png" },
+                      { avatar_url: "javascript:alert(1)" }, { avatar_url: "not a url" }]) {
+    assert.equal(avatarSrc(user), null, JSON.stringify(user));
+  }
 });

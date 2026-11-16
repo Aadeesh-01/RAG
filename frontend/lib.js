@@ -220,3 +220,20 @@ export function suggestedQuestions(overview) {
   }
   return questions.slice(0, 3);
 }
+
+/** Two letters for the avatar: "Ada Lovelace" -> "AL", "ada@x.io" -> "AD". */
+export function initials(name) {
+  const words = name.replace(/@.*/, "").split(/[\s._-]+/).filter(Boolean);
+  const letters = words.length > 1 ? words[0][0] + words[1][0] : (words[0] || "?").slice(0, 2);
+  return letters.toUpperCase();
+}
+
+/** The user's GitHub picture at `size` px, or null (no picture, or not https). */
+export function avatarSrc(user, size = 64) {
+  if (!user || typeof user.avatar_url !== "string" || !user.avatar_url) return null;
+  let url;
+  try { url = new URL(user.avatar_url); } catch { return null; }
+  if (url.protocol !== "https:") return null;
+  url.searchParams.set("s", String(size));
+  return url.href;
+}
