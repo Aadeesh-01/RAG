@@ -1,7 +1,7 @@
 import {
   bridgeCounts, citedSources, createSSEParser, errorMessage, focusSubgraph, formatDate, formatLocation, hopLabel, middleTruncate,
   middleTruncateName, moduleGraph, normalizeCitations, plural, questionsPerDay, renderAnswer, repoOverview, repoStatus, suggestedQuestions,
-  viaLabel, initials, avatarSrc,
+  viaLabel, initials, avatarSrc, safeHref,
 } from "./lib.js";
 import { currentUser, signIn, signOut } from "./auth.js";
 
@@ -61,7 +61,10 @@ function el(tag, attrs = {}, ...children) {
     if (key === "class") node.className = value;
     else if (key === "text") node.textContent = value;
     else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
-    else node.setAttribute(key, value === true ? "" : value);
+    else if (key === "href") {                 // http(s) and relative links only (repo facts are owner-set)
+      const href = safeHref(value);
+      if (href !== null) node.setAttribute("href", href);
+    } else node.setAttribute(key, value === true ? "" : value);
   }
   for (const child of children.flat()) {
     if (child === null || child === undefined || child === false) continue;
@@ -885,8 +888,13 @@ async function repoInfo(id) {
   if (demo) return demo;
   const known = state.userRepos.find((r) => r.id === id || r.name === id);
   try {
-    return await fetchJSON(`/api/repos/${encodeURIComponent(known ? known.id : id)}`);
-  } catch {
+    return await loadRepo(known ? known.id : id);
+  } catch (err) {
+    if (err.status === 409 || err.status === 503 || err.status === "rebuild") {
+      // being rebuilt, or the rebuild needs a fresh sign-in: keep it in the list
+      if (err.status !== "rebuild") banner(err.message, "error");
+      return null;
+    }
     if (known) {
       removeUserRepo(known.id);
       banner(`${known.name} is no longer indexed on the server. Add it again to ask about it.`);
@@ -894,6 +902,38 @@ async function repoInfo(id) {
     return null;
   }
 }
+
+/**
+ * GET /api/repos/<id>. While the server rebuilds an index whose files were lost
+ * (202 {rebuilding, job}), show "Rebuilding index…" with the job's progress and
+ * ask again every 2 s; a failed rebuild throws with its error.
+ */
+async function loadRepo(id) {
+  for (;;) {
+    const response = await fetch(`/api/repos/${encodeURIComponent(id)}`);
+    if (response.status !== 202) {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw Object.assign(new Error(body.error || `${response.status} /api/repos/${id}`), { status: response.status });
+      }
+      if (rebuildingBanner) { banner(""); rebuildingBanner = false; }
+      return response.json();
+    }
+    const info = await response.json();
+    const job = info.job || {};
+    if (job.status === "failed") {
+      rebuildingBanner = false;
+      banner(`Rebuilding the index of ${info.name || id} failed: ${job.error || "unknown error"}`, "error");
+      throw Object.assign(new Error(job.error || "rebuild failed"), { status: "rebuild" });
+    }
+    const percent = Math.round((job.progress || 0) * 100);
+    const stage = (job.message || "").replace(/^Rebuilding index…\s*/, "");
+    banner(`Rebuilding index… ${info.name || id}: ${percent}%${stage ? ` · ${stage}` : ""}`);
+    rebuildingBanner = true;
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+  }
+}
+let rebuildingBanner = false;
 
 async function selectRepo(id) {
   const demo = (id && await repoInfo(id)) || state.demos[0];

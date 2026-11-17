@@ -1,5 +1,5 @@
 // The read-only shared answer page (/a/<slug>): GET /api/shares/<slug>, works signed out.
-import { citedSources, formatDate, renderAnswer } from "./lib.js";
+import { citedSources, formatDate, renderAnswer, safeHref } from "./lib.js";
 
 const $ = (s) => document.querySelector(s);
 
@@ -9,7 +9,10 @@ function el(tag, attrs = {}, ...children) {
     if (v === undefined || v === null || v === false) continue;
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
-    else node.setAttribute(k, v === true ? "" : v);
+    else if (k === "href") {                   // http(s) and relative links only
+      const href = safeHref(v);
+      if (href !== null) node.setAttribute("href", href);
+    } else node.setAttribute(k, v === true ? "" : v);
   }
   for (const child of children.flat(Infinity)) {
     if (child === null || child === undefined || child === false) continue;

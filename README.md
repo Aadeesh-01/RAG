@@ -98,9 +98,13 @@ A FastAPI server answers questions about pre-indexed demo repositories
 
 ```bash
 pip install -e ".[web]"
-python scripts/build_demos.py                     # fetch + index the demos into data/ (~30 s)
-uvicorn coderag.web.app:app --port 7860           # site at http://127.0.0.1:7860, API docs at /docs
+python scripts/build_demos.py                     # fetch + index the demos into data/demos (~30 s)
+uvicorn coderag.web.app:app --port 7860 --workers 1   # site at http://127.0.0.1:7860
 ```
+
+Run **one worker** (`--workers 1`): the indexing queue, rate limits, the answer cache and the
+concurrent-answer limit live in memory. `CODERAG_DOCS=1` turns on the API docs (`/docs`, `/redoc`,
+`/openapi.json`; off by default).
 
 The site ([frontend/](frontend/)) is plain HTML, CSS and JavaScript served by the same server, with no
 build step. Pick a repo, ask a question or click an example, and the answer streams in with numbered
@@ -114,6 +118,7 @@ frontend/tests/lib.test.mjs` (also run by `pytest`).
 | Endpoint | |
 |---|---|
 | `GET /api/health`, `GET /api/demos`, `GET /api/repos/{id}` | status, demo list, demo info and example questions |
+| `GET /api/ready` | 200 when the database answers and every demo loaded, else 503 (for a platform health check) |
 | `GET /api/repos/{id}/graph` | call/inheritance graph; node ids match `chunk_id` in sources |
 | `POST /api/repos/{id}/retrieve` | retrieved sources with GitHub links, no LLM |
 | `POST /api/repos/{id}/ask` | Server-Sent Events: `sources`, then `token`s, then `done` (or `error`) |
@@ -126,10 +131,36 @@ curl -N -X POST http://127.0.0.1:7860/api/repos/requests/ask \
 Answers use the server's key (`GROQ_API_KEY`) unless the request brings its own
 (`"llm": {"provider": "groq", "api_key": "..."}`). A visitor's key is used for that request only and
 is never logged, cached or returned. Limits are per IP and per hour, with a daily cap on the server
-key. Popular questions are cached. If no LLM is available, the retrieved sources are still returned.
-Configuration uses `CODERAG_*` environment variables (see
-[coderag/web/settings.py](coderag/web/settings.py)). Behind a reverse proxy, set
-`CODERAG_TRUSTED_PROXY_HOPS=1` so rate limits use the real client address.
+key (`CODERAG_SERVER_DAILY_CAP`, counted from the stored answers, so it survives restarts).
+Popular questions are cached. At most `CODERAG_MAX_CONCURRENT_ASKS` (8) answers stream at once (more
+get 503), and a stream stops after `CODERAG_ASK_TIMEOUT` (90) seconds. If no LLM is available, the
+retrieved sources are still returned. Configuration uses `CODERAG_*` environment variables (see
+[coderag/web/settings.py](coderag/web/settings.py)).
+
+### Production settings
+
+The server checks its settings at start and refuses to run, with one line per problem, when:
+
+- a GitHub setting is set but another is missing, or `CODERAG_SESSION_SECRET` or `CODERAG_TOKEN_KEY` is
+  shorter than 32 characters (or they are equal);
+- `CODERAG_PUBLIC_URL` isn't `https://` and its host isn't `localhost` or `127.0.0.1`;
+- `CODERAG_PUBLIC_URL` is `https://` but `CODERAG_TRUSTED_PROXY_HOPS` is 0. Behind a TLS proxy (Hugging
+  Face Spaces, Render) set it to 1, so rate limits use the real client address. If TLS really ends at
+  this server, `CODERAG_ALLOW_NO_PROXY=1` starts it anyway, with a warning.
+
+| Setting | |
+|---|---|
+| `CODERAG_DATA_DIR` | visitor indexes, clones and the SQLite database: a persistent disk |
+| `CODERAG_DEMOS_DIR` | the demo indexes (default `<data_dir>/demos`); keep demos baked into an image outside a mounted data volume |
+| `CODERAG_MAX_STORED_REPOS`, `CODERAG_MAX_STORED_MB` | disk limits for visitor repos (100 repos; MB off by default). Past them, the least recently used repos that nobody has in their list are deleted |
+| `CODERAG_INDEX_PER_USER_PER_HOUR`, `CODERAG_SUBMIT_PER_USER_PER_HOUR` | per-user limits, next to the per-IP ones |
+| `CODERAG_INDEX_TIMEOUT` | seconds an indexing job may take in all (600) |
+
+Every response carries a Content-Security-Policy (the inline scripts' hashes are computed from the
+HTML at start), `X-Content-Type-Options: nosniff`, `Referrer-Policy`, `X-Frame-Options: DENY` and,
+with an https `PUBLIC_URL`, HSTS. Request bodies over 64 KB get 413. When `PUBLIC_URL` is set,
+POST/PUT/PATCH/DELETE requests whose `Origin` (or `Referer`) is another site get 403. Logs have
+timestamps, and the access log leaves out query strings.
 
 ## Layout
 
@@ -171,21 +202,29 @@ contexts exactly.
 
 ## Indexing any GitHub repository
 
-On the site, **+ Add repo** takes a public GitHub URL (`https://github.com/owner/repo`, `owner/repo`, or
+On the site, **+ Add repo** takes a GitHub URL (`https://github.com/owner/repo`, `owner/repo`, or
 `…/tree/<branch-or-tag>`). The API equivalent is `POST /api/repos {"url": ...}`, then poll
-`GET /api/jobs/{job_id}`.
+`GET /api/jobs/{job_id}` (only the user who started a job can see it).
 
 - The branch is resolved to a commit with `git ls-remote`. A commit that was already indexed is
   served immediately and doesn't count against limits.
-- Only `*.py` files are downloaded (blob-less partial fetch and sparse checkout), so data and media in
-  the repo are never transferred. Code is only parsed with `ast`, never run. Symlinks are not followed,
-  and the clone is deleted after indexing.
+- Only source files are downloaded (blob-less partial fetch and sparse checkout): Python, the
+  tree-sitter languages, templates and a few project files such as the README and CI workflows,
+  never `.env`. Data and media in the repo are never transferred. Code is only parsed, never run.
+  Symlinks are not followed, git runs with a minimal environment (no server secrets), and the clone
+  is deleted after indexing. Clones left by a stopped server are deleted on the next start.
 - `tests/`, `test/`, `docs/`, `examples/` and `benchmarks/` are skipped. A repo may have up to 2,000
-  Python files / 25 MB. Each IP can index 3 new repos per hour. One job runs at a time, with a queue of
-  10. Progress is reported by stage: fetching → parsing → embedding → ready.
-- Indexes are saved under `data/repos/<owner>__<repo>__<sha12>/` (the 100 most recent are kept) and
-  loaded on demand (at most 6 in memory). All limits are `CODERAG_*` settings
+  source files / 25 MB. Each IP and each user can index 3 new repos per hour, and a user has one job
+  at a time. One job runs at a time, with a queue of 10, and a job stops after 10 minutes. Progress
+  is reported by stage: fetching → parsing → embedding → ready.
+- Indexes are saved under `data/repos/<owner>__<repo>__<sha12>/` and loaded on demand (at most 6 in
+  memory). Past 100 stored repos (or `CODERAG_MAX_STORED_MB`), the least recently used repos that
+  nobody has in their list are deleted. All limits are `CODERAG_*` settings
   ([coderag/web/settings.py](coderag/web/settings.py)).
+- If a repo's index files are gone but its database row isn't (a disk that was reset), opening it
+  rebuilds the index at the same commit: the site shows "Rebuilding index…" with progress, and
+  submitting the URL again queues the rebuild too. A private repo is rebuilt with the token of the
+  user who opens it.
 
 Typical times on a laptop CPU: pallets/itsdangerous 9 s, pallets/flask 33 s (362 chunks).
 django/django is rejected after about 20 s (2,939 Python files).
@@ -195,8 +234,8 @@ django/django is rejected after about 20 s (2,939 Python files).
 Demos are open to everyone. Adding a repository needs a GitHub sign-in. Once signed in, you can also
 index private repositories you have access to. They are visible only to the people who added them.
 Your repository tabs belong to your GitHub account, not the browser: `GET /api/repos/mine` lists them,
-`PUT /api/repos/mine/{id}` adds an indexed repo you can open, and `DELETE /api/repos/mine/{id}`
-removes one from the list (the index stays on the server).
+`PUT /api/repos/mine/{id}` adds an indexed repo you can open, and `DELETE /api/repos/{id}/mine`
+removes one from the list. The index is deleted when nobody else has the repo in their list.
 
 1. On GitHub, go to **Settings → Developer settings → OAuth Apps → New OAuth App**.
 2. Set **Homepage URL** to your site, e.g. `https://coderag.example.com`, and **Authorization
@@ -208,15 +247,20 @@ removes one from the list (the index stays on the server).
 ```bash
 export CODERAG_GITHUB_CLIENT_ID=Ov23li...
 export CODERAG_GITHUB_CLIENT_SECRET=...
-export CODERAG_SESSION_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(32))")
+export CODERAG_SESSION_SECRET=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
+export CODERAG_TOKEN_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(48))")
 export CODERAG_PUBLIC_URL=https://coderag.example.com       # must match the callback URL's origin
+export CODERAG_TRUSTED_PROXY_HOPS=1                         # behind the platform's TLS proxy
 ```
 
 The app asks for the `read:user repo` scopes. The session is a signed, HttpOnly, SameSite=Lax cookie.
-Users are stored in `data/coderag.db` (SQLite). The GitHub token is encrypted with a key derived from
-`CODERAG_SESSION_SECRET`, is never logged or returned, and reaches git only through environment
-variables. Changing the session secret signs everyone out and makes the stored tokens unreadable, so
-private repos need a fresh sign-in. Without these settings the server still runs: everyone is
+Users are stored in the database (see [Database](#database)). The GitHub token is encrypted with a key
+derived from `CODERAG_TOKEN_KEY`, is never logged or returned, and reaches git only through
+environment variables. Tokens stored before the token key existed (encrypted with a key derived from
+`CODERAG_SESSION_SECRET`) are still read, and are re-encrypted with the token key on their next use.
+Changing the session secret signs everyone out. Changing the token key makes the stored tokens
+unreadable, so private repos need a fresh sign-in. Deleting your account (`DELETE /api/me`) also
+revokes coderag's authorization on GitHub. Without these settings the server still runs: everyone is
 signed out and demos work as usual.
 
 ## Database
@@ -237,8 +281,8 @@ uses psycopg 3. A free Neon or Supabase database is enough:
 export CODERAG_DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
 ```
 
-**Migrations** (Alembic, in `coderag/db/migrations/`) run when the server starts. To run them
-yourself:
+**Migrations** (Alembic, in `coderag/db/migrations/`) run when the server starts; on Postgres they
+take an advisory lock, so two processes starting together don't race. To run them yourself:
 
 ```bash
 python -m coderag db upgrade      # create or update the schema
@@ -248,7 +292,8 @@ python -m coderag db current      # show the current revision
 The first migration converts the database from before this change (users and their repo links
 only) in place: users keep their ids and tokens, and the repos indexed under `data/repos/` become
 rows. Indexing jobs left running when the server stopped are marked failed ("server restarted") on
-the next start.
+the next start. A question keeps the version that answered it and the text of the chunks it cites
+(at most 40 lines each), so a shared answer always shows the code as it was when it was answered.
 
 | Endpoint | |
 |---|---|
@@ -257,7 +302,7 @@ the next start.
 | `POST /api/questions/{id}/feedback` | `{"rating": "up" \| "down", "note": "..."}` |
 | `GET /api/jobs` | your indexing jobs |
 | `DELETE /api/repos/{id}/mine` | removes the repo from your list; its index is deleted when nobody else has it (demos never are) |
-| `DELETE /api/me` | deletes your account: your token, repo list, history, feedback and shared links |
+| `DELETE /api/me` | deletes your account: your token (and coderag's GitHub authorization), repo list, history, feedback, shared links and indexing jobs |
 
 Signed-out visitors' questions are not stored: their history lasts for the browser session only.
 

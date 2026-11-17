@@ -12,8 +12,11 @@ Questions, shares and feedback (the `questions`, `shares`, `feedback` tables).
   POST   /api/questions/{id}/feedback     {"rating": "up"|"down", "note": "..."}
 
 Only signed-in users' questions are stored; each user sees only their own. A
-shared answer from a private repo shows the answer and the code it cites (each
-cited chunk, at most SNIPPET_LINES lines), never a whole file or the other sources.
+question keeps the version that answered it and the text of each cited chunk (at
+most SNIPPET_LINES lines), taken when it was answered: a shared answer shows those
+stored snippets, never code read later (a re-index renumbers chunks). A shared answer
+from a private repo shows the answer and the code it cites, never a whole file or
+the other sources.
 """
 
 import secrets
@@ -37,10 +40,17 @@ def iso(value):
     return value.replace(tzinfo=timezone.utc).isoformat(timespec="seconds") if value else ""
 
 
-def stored_sources(sources, answer):
+def snippet_of(text):
+    """(first SNIPPET_LINES lines, truncated?) of a chunk's text."""
+    lines = (text or "").splitlines()
+    return "\n".join(lines[:SNIPPET_LINES]), len(lines) > SNIPPET_LINES
+
+
+def stored_sources(sources, answer, chunks=None):
     """
-    What a question keeps of its sources: their metadata (no code), which ones the
-    answer cites, and the subgraph's node ids (the sources and the call-graph paths
+    What a question keeps of its sources: their metadata, which ones the answer
+    cites (with the cited chunk's text, at most SNIPPET_LINES lines, when `chunks`
+    is given), and the subgraph's node ids (the sources and the call-graph paths
     that reached them), so the thumbnail can be redrawn from history.
     """
     cited = set(parse_citations(answer or "", len(sources))[0])
@@ -50,6 +60,9 @@ def stored_sources(sources, answer):
         if s.get("bridge"):
             item["bridge"] = {k: s["bridge"].get(k) for k in ("mechanism", "confidence", "label")}
         item["cited"] = s.get("id") in cited
+        chunk_id = s.get("chunk_id")
+        if item["cited"] and chunks is not None and isinstance(chunk_id, int) and 0 <= chunk_id < len(chunks):
+            item["snippet"], item["truncated"] = snippet_of(chunks[chunk_id])
         items.append(item)
     nodes = {s["chunk_id"] for s in sources if isinstance(s.get("chunk_id"), int) and s["chunk_id"] >= 0}
     nodes |= {i for s in sources for i in (s.get("via_ids") or [])}
@@ -57,12 +70,14 @@ def stored_sources(sources, answer):
             "hops": {str(s["chunk_id"]): s.get("hop", 0) for s in sources if isinstance(s.get("chunk_id"), int)}}
 
 
-def record(db, repo_id, user_id, question, answer, sources, model, latency_ms, cached):
-    """Store a signed-in user's answered question; returns its id."""
+def record(db, repo_id, user_id, question, answer, sources, model, latency_ms, cached, version="",
+           chunks=None, server_key=False):
+    """Store a signed-in user's answered question (with the cited snippets from `chunks`); returns its id."""
     with db.session() as s:
         row = Question(repo_id=repo_id, user_id=user_id, question=question, answer=answer or "",
-                       sources=stored_sources(sources, answer), model=model or "",
-                       latency_ms=int(latency_ms or 0), cached=bool(cached), created_at=utcnow())
+                       sources=stored_sources(sources, answer, chunks), model=model or "",
+                       latency_ms=int(latency_ms or 0), cached=bool(cached), version=version or "",
+                       server_key=bool(server_key), created_at=utcnow())
         s.add(row)
         s.flush()
         return row.id
@@ -73,8 +88,8 @@ def question_view(row, rating=None, share=None):
     return {"id": row.id, "repo_id": row.repo_id, "question": row.question, "answer": row.answer,
             "sources": sources.get("items", []), "subgraph": sources.get("subgraph", []),
             "hops": sources.get("hops", {}), "model": row.model, "latency_ms": row.latency_ms,
-            "cached": row.cached, "created_at": iso(row.created_at), "rating": rating,
-            "share": share}
+            "cached": row.cached, "version": row.version or "", "created_at": iso(row.created_at),
+            "rating": rating, "share": share}
 
 
 class ShareRequest(BaseModel):
@@ -168,18 +183,16 @@ def add_routes(app, db, auth, repos, can_open, limit, frontend_dir=None):
             view = question_view(row)
             created = iso(sh.created_at)
         private = bool(repo and repo.private)
-        demo = repos.get(row.repo_id)
-        agent = demo.agents[demo.versions[-1]] if demo is not None and demo.agents else None
         sources = []
         for src in view["sources"]:
             if private and not src.get("cited"):
                 continue                                  # private: only what the answer cites
             item = {k: src.get(k) for k in ("id", "name", "kind", "file", "start_line", "end_line", "cited",
                                             "language")}
-            if src.get("cited") and agent is not None and 0 <= src.get("chunk_id", -1) < len(agent.chunks):
-                lines = agent.chunks[src["chunk_id"]].splitlines()
-                item["snippet"] = "\n".join(lines[:SNIPPET_LINES])
-                item["truncated"] = len(lines) > SNIPPET_LINES
+            if src.get("cited") and isinstance(src.get("snippet"), str):
+                # the text stored when it was answered (never read again: a re-index renumbers chunks)
+                item["snippet"], item["truncated"] = snippet_of(src["snippet"])
+                item["truncated"] = item["truncated"] or bool(src.get("truncated"))
             if not private:
                 item["url"] = src.get("url")
             sources.append(item)

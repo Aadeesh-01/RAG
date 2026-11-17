@@ -11,7 +11,9 @@ Visitor repos are rows in the database (`repos`), their index on disk at
 import json
 import os
 import re
+import logging
 import threading
+import time
 from collections import OrderedDict
 from dataclasses import dataclass, field, fields
 from datetime import datetime, timezone
@@ -22,6 +24,8 @@ from ..agent import RAGCodebaseAgent
 from ..config import VERSIONS, get_config
 from ..gitfetch import fetch_commit, rmtree
 from ..languages import label_of, language_of
+
+log = logging.getLogger("coderag.web.registry")
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -127,7 +131,9 @@ def repo_stats(agent):
 # =============================================================================
 # BUILD (offline, scripts/build_demos.py)
 # =============================================================================
-def build_demos(spec_path, data_dir, only=None, keep_clones=False, embedder=None, log=print):
+def build_demos(spec_path, data_dir, only=None, keep_clones=False, embedder=None, log=print, demos_dir=None):
+    """Index the demos in `spec_path` into `demos_dir` (default <data_dir>/demos)."""
+    demos_dir = demos_dir or os.path.join(data_dir, "demos")
     with open(spec_path, encoding="utf-8") as f:
         spec = yaml.safe_load(f)
     versions = spec.get("versions", ["v7"])
@@ -142,7 +148,7 @@ def build_demos(spec_path, data_dir, only=None, keep_clones=False, embedder=None
             checkout = os.path.join(PROJECT_ROOT, entry["repo"])
         repo = os.path.join(checkout, entry.get("root", ""))
 
-        out = os.path.join(data_dir, "demos", entry["id"])
+        out = os.path.join(demos_dir, entry["id"])
         stats = {}
         for version in versions:
             index = None
@@ -185,10 +191,10 @@ def load_repo_dir(directory, embedder=None):
     return demo
 
 
-def load_demos(data_dir, embedder=None):
-    """{demo_id: Demo} for every built demo in `data_dir`, indexes loaded."""
+def load_demos(demos_dir, embedder=None):
+    """{demo_id: Demo} for every built demo in `demos_dir` (CODERAG_DEMOS_DIR), indexes loaded."""
     demos = {}
-    root = os.path.join(data_dir, "demos")
+    root = demos_dir
     if not os.path.isdir(root):
         return demos
     for demo_id in sorted(os.listdir(root)):
@@ -199,23 +205,31 @@ def load_demos(data_dir, embedder=None):
 
 class Repos:
     """
-    Curated demos (always loaded, from <data_dir>/demos, built offline) plus
+    Curated demos (always loaded, from CODERAG_DEMOS_DIR, built offline) plus
     repos indexed by visitors: a row each in the `repos` table (coderag/db),
     with the FAISS index on disk at its index_path (<data_dir>/repos/<id>/<preset>).
     Visitor repos are loaded on demand; at most `max_loaded` stay in memory (least
-    recently used are unloaded) and at most `max_stored` are kept (oldest removed).
+    recently used are unloaded). On disk at most `max_stored` repos and `max_stored_mb`
+    MB are kept: past either, the least recently used repos that nobody has in their
+    list are deleted (demos never are).
+    A row whose index files are gone (a disk that was reset while the database
+    survived) is "missing files": missing() says so and the indexer rebuilds it.
     Demos get a row too (kind "demo") so questions about them can reference it.
     """
 
-    def __init__(self, data_dir, demos, embedder=None, max_loaded=6, max_stored=100, db=None):
+    TOUCH_EVERY = 300                 # seconds between last_used_at writes per repo
+
+    def __init__(self, data_dir, demos, embedder=None, max_loaded=6, max_stored=100, db=None, max_stored_mb=0):
         self.data_dir = data_dir
         self.root = os.path.join(data_dir, "repos")
         self.demos = demos
         self.embedder = embedder
         self.max_loaded = max_loaded
         self.max_stored = max_stored
+        self.max_stored_mb = max_stored_mb
         self.loaded = OrderedDict()
         self.lock = threading.RLock()
+        self._touched = {}
         if db is None:
             from ..db import Database, default_url
             db = Database(default_url(data_dir))
@@ -235,7 +249,27 @@ class Repos:
             return row if row is not None and row.kind == "user" else None
 
     def exists(self, repo_id):
+        """A demo, or a visitor repo with a row (its files may be missing: see missing())."""
         return repo_id in self.demos or self._row(repo_id) is not None
+
+    def missing(self, repo_id):
+        """True for a visitor repo whose row exists but whose index files don't (rebuild it)."""
+        if repo_id in self.demos or repo_id in self.loaded:
+            return False
+        row = self._row(repo_id)
+        return row is not None and not has_index(row.index_path)
+
+    def touch(self, repo_id, now=None):
+        """Record a use of a visitor repo (last_used_at, at most every TOUCH_EVERY seconds)."""
+        from ..db.models import Repo, utcnow
+        clock = time.monotonic() if now is None else now
+        if repo_id in self.demos or clock - self._touched.get(repo_id, -1e18) < self.TOUCH_EVERY:
+            return
+        self._touched[repo_id] = clock
+        with self.db.session() as s:
+            row = s.get(Repo, repo_id)
+            if row is not None:
+                row.last_used_at = utcnow()
 
     def summary(self, repo_id):
         """info()-like dict without loading the index, or None."""
@@ -270,13 +304,16 @@ class Repos:
         with self.lock:
             if repo_id in self.loaded:
                 self.loaded.move_to_end(repo_id)
-                return self.loaded[repo_id]
-            row = self._row(repo_id)
-            if row is None or not os.path.isfile(os.path.join(row.index_path, "meta.json")):
-                return None
-            agent = RAGCodebaseAgent.load(row.index_path, load_llm=False, verbose=False, embedder=self.embedder)
-            self._keep(repo_id, demo_of(row, agent))
-            return self.loaded[repo_id]
+                demo = self.loaded[repo_id]
+            else:
+                row = self._row(repo_id)
+                if row is None or not has_index(row.index_path):
+                    return None
+                agent = RAGCodebaseAgent.load(row.index_path, load_llm=False, verbose=False, embedder=self.embedder)
+                self._keep(repo_id, demo_of(row, agent))
+                demo = self.loaded[repo_id]
+        self.touch(repo_id)
+        return demo
 
     def add(self, demo, index_path):
         """Record a freshly indexed visitor repo (insert or replace its row) and enforce the limit."""
@@ -296,13 +333,45 @@ class Repos:
                 row.index_path = index_path
                 row.owner_id = demo.owner_id if row.owner_id is None else row.owner_id
                 row.built_at = parse_time(demo.built) or utcnow()
+                row.last_used_at = utcnow()
+                row.disk_bytes = dir_bytes(self.directory(demo.id))
                 s.add(row)
             self._keep(demo.id, demo)
-            with self.db.session() as s:
-                stored = [r.id for r in s.query(Repo).filter_by(kind="user").order_by(Repo.created_at.asc())]
-            for old in stored[:max(len(stored) - self.max_stored, 0)]:
-                if old != demo.id:
-                    self.remove(old)
+        self.evict(keep=demo.id)
+
+    def evict(self, keep=None):
+        """
+        Delete least recently used visitor repos until at most max_stored repos and
+        max_stored_mb MB are on disk. Only repos nobody has in their list, never a
+        demo or `keep`. Returns the removed ids (a warning is logged if the limits
+        can't be met because every remaining repo is in someone's list).
+        """
+        from sqlalchemy import func
+        from ..db.models import Repo, UserRepo
+        limit_bytes = self.max_stored_mb * 1024 * 1024 if self.max_stored_mb else None
+        with self.db.session() as s:
+            rows = (s.query(Repo).filter_by(kind="user")
+                    .order_by(func.coalesce(Repo.last_used_at, Repo.created_at).asc()).all())
+            linked = {r.repo_id for r in s.query(UserRepo.repo_id).distinct()}
+            sizes = {}
+            for row in rows:
+                if not row.disk_bytes and os.path.isdir(self.directory(row.id)):
+                    row.disk_bytes = dir_bytes(self.directory(row.id))      # rows from before the size column
+                sizes[row.id] = row.disk_bytes or 0
+        count, total = len(sizes), sum(sizes.values())
+        removed = []
+        for repo_id in list(sizes):
+            if count <= self.max_stored and (limit_bytes is None or total <= limit_bytes):
+                break
+            if repo_id == keep or repo_id in self.demos or repo_id in linked:
+                continue
+            self.remove(repo_id)
+            removed.append(repo_id)
+            count, total = count - 1, total - sizes[repo_id]
+        if count > self.max_stored or (limit_bytes is not None and total > limit_bytes):
+            log.warning("stored repos (%d, %.0f MB) are over the limits, but the rest are in users' lists",
+                        count, total / 2**20)
+        return removed
 
     def remove(self, repo_id):
         """Delete a visitor repo: its row (questions and shares go with it), user links and index files."""
@@ -351,6 +420,22 @@ class Repos:
         self.loaded.move_to_end(repo_id)
         while len(self.loaded) > self.max_loaded:
             self.loaded.popitem(last=False)
+
+
+def has_index(index_path):
+    return bool(index_path) and os.path.isfile(os.path.join(index_path, "meta.json"))
+
+
+def dir_bytes(path):
+    """Total size of the files under `path` (0 if it doesn't exist)."""
+    total = 0
+    for root, _, files in os.walk(path):
+        for name in files:
+            try:
+                total += os.path.getsize(os.path.join(root, name))
+            except OSError:
+                pass
+    return total
 
 
 def _iso(value):

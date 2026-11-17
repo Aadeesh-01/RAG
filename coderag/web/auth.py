@@ -10,8 +10,10 @@ GitHub sign-in: the OAuth web flow, users in SQLite, sessions in a signed cookie
 The session cookie is signed (itsdangerous), HttpOnly and SameSite=Lax, and holds
 only the user's id. The GitHub token is kept so private repositories can be
 indexed; it is stored encrypted (Fernet, key derived from SESSION_SECRET) and is
-never logged or returned. Without the GitHub settings nobody can sign in, and
-the rest of the site works as before.
+never logged or returned. It is encrypted with CODERAG_TOKEN_KEY; tokens stored
+before that key existed (encrypted with a key derived from SESSION_SECRET) are still
+read, and re-encrypted with the token key on their next use. Without the GitHub
+settings nobody can sign in, and the rest of the site works as before.
 """
 
 import base64
@@ -44,6 +46,7 @@ AUTHORIZE_URL = "https://github.com/login/oauth/authorize"
 TOKEN_URL = "https://github.com/login/oauth/access_token"
 USER_URL = "https://api.github.com/user"
 REPOS_URL = "https://api.github.com/user/repos"
+GRANT_URL = "https://api.github.com/applications/{client_id}/grant"
 MAX_REPOS = 300
 REPOS_TTL = 60
 REPO_FIELDS = ("full_name", "private", "language", "pushed_at", "description", "default_branch")
@@ -113,6 +116,15 @@ class GitHubOAuth:
             raise GitHubError("/user returned no id")
         return body
 
+    def revoke(self, token):
+        """Revoke this app's grant for `token` (the user's authorization of coderag). Raises on failure."""
+        with self._client() as client:
+            r = client.request("DELETE", GRANT_URL.format(client_id=self.client_id),
+                               auth=(self.client_id, self.client_secret), json={"access_token": token},
+                               headers={"Accept": "application/vnd.github+json"})
+        if r.status_code not in (204, 404, 422):              # 404/422: already revoked or unknown
+            raise GitHubError(f"grant revocation returned HTTP {r.status_code}")
+
     def list_repos(self, token, limit=MAX_REPOS):
         """
         Repos the user owns, collaborates on or reaches through an org, most
@@ -155,10 +167,13 @@ class User:
         return {"name": self.name or self.login, "login": self.login, "avatar_url": self.avatar_url}
 
 
-def _fernet(secret):
-    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None,
-               info=b"coderag github token").derive(secret.encode())
+def _fernet(secret, info=b"coderag github token"):
+    """Fernet keyed by HKDF(secret). The default `info` is the one used with SESSION_SECRET before CODERAG_TOKEN_KEY."""
+    key = HKDF(algorithm=hashes.SHA256(), length=32, salt=None, info=info).derive(secret.encode())
     return Fernet(base64.urlsafe_b64encode(key))
+
+
+TOKEN_KEY_INFO = b"coderag github token key"
 
 
 def _now():
@@ -169,15 +184,18 @@ def _now():
 class Users:
     """
     The users table (coderag/db/models.py) and who added which repo. The GitHub
-    token is stored Fernet-encrypted with a key derived from SESSION_SECRET;
-    it is never logged, returned or kept in clear.
+    token is stored Fernet-encrypted with a key derived from `token_key`
+    (CODERAG_TOKEN_KEY); it is never logged, returned or kept in clear.
+    `secret` (SESSION_SECRET) only decrypts tokens stored before the token key:
+    they are re-encrypted with it on first use. Without `token_key`, `secret` is the key.
     """
 
     SEEN_EVERY = 300                              # seconds between last_seen_at writes
 
-    def __init__(self, db, secret):
+    def __init__(self, db, secret, token_key=None):
         self.db = db
-        self.fernet = _fernet(secret)
+        self.legacy = _fernet(secret) if secret else None
+        self.fernet = _fernet(token_key, TOKEN_KEY_INFO) if token_key else self.legacy
 
     @staticmethod
     def _user(row):
@@ -215,7 +233,7 @@ class Users:
                 row.last_seen_at = now
 
     def token(self, user_id):
-        """The user's GitHub token, or None (unknown user, or SESSION_SECRET changed)."""
+        """The user's GitHub token, or None (unknown user, or the keys changed)."""
         from ..db.models import User as Row
         with self.db.session() as s:
             row = s.get(Row, user_id)
@@ -225,7 +243,18 @@ class Users:
         try:
             return self.fernet.decrypt(encrypted.encode()).decode()
         except InvalidToken:
+            pass
+        if self.legacy is None or self.legacy is self.fernet:
             return None
+        try:
+            token = self.legacy.decrypt(encrypted.encode()).decode()
+        except InvalidToken:
+            return None                               # neither key: SESSION_SECRET changed, sign in again
+        with self.db.session() as s:                  # stored before CODERAG_TOKEN_KEY: move it to that key
+            row = s.get(Row, user_id)
+            if row is not None and row.token_encrypted == encrypted:
+                row.token_encrypted = self.fernet.encrypt(token.encode()).decode()
+        return token
 
     def add_repo(self, user_id, repo_id):
         from ..db.models import UserRepo
@@ -259,13 +288,14 @@ class Users:
     def delete(self, user_id):
         """
         Delete the account: the user row with its token, repo links, questions
-        (with their shares and feedback). Jobs and repos they indexed stay,
-        without the user. Returns the repo ids they had in their list.
+        (with their shares and feedback) and indexing jobs. Repos they indexed
+        stay for the other users who have them. Returns the repo ids they had in their list.
         """
-        from ..db.models import Question, User as Row, UserRepo
+        from ..db.models import Job, Question, User as Row, UserRepo
         with self.db.session() as s:
             repo_ids = [r.repo_id for r in s.query(UserRepo).filter_by(user_id=user_id)]
             s.query(UserRepo).filter_by(user_id=user_id).delete()
+            s.query(Job).filter_by(user_id=user_id).delete()
             for q in s.query(Question).filter_by(user_id=user_id):
                 s.delete(q)                           # shares go with it (cascade)
             row = s.get(Row, user_id)
@@ -293,7 +323,8 @@ class Auth:
             from ..db import Database, default_url
             db = Database(settings.database_url or default_url(settings.data_dir))
             db.upgrade()
-        self.users = Users(db, settings.session_secret) if self.enabled else None
+        self.users = (Users(db, settings.session_secret, token_key=getattr(settings, "token_key", "") or None)
+                      if self.enabled else None)
         secret = settings.session_secret or "unused"
         self._sessions = URLSafeTimedSerializer(secret, salt="coderag.session")
         self._states = URLSafeTimedSerializer(secret, salt="coderag.oauth-state")
@@ -324,6 +355,24 @@ class Auth:
 
     def token(self, user):
         return self.users.token(user.id) if user and self.users else None
+
+    def revoke_grant(self, user):
+        """Best effort: revoke the user's GitHub authorization of this app (failures are ignored)."""
+        token = self.token(user)
+        revoke = getattr(self.github, "revoke", None)
+        if not token or revoke is None:
+            return False
+        try:
+            revoke(token)
+            return True
+        except Exception as e:                       # noqa: BLE001 (never block account deletion)
+            log.warning("revoking the GitHub grant failed: %s", e if isinstance(e, GitHubError) else type(e).__name__)
+            return False
+
+    def forget(self, user_id):
+        """Drop what is cached in memory for a user (their GitHub repo list)."""
+        with self._repo_lock:
+            self._repo_cache.pop(user_id, None)
 
     def github_repos(self, user, now=None):
         """

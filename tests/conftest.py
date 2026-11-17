@@ -67,8 +67,10 @@ def zoo_repo(tmp_path):
 
 
 # ── GitHub sign-in (coderag/web/auth.py) ────────────────────────────────────
+# secrets of at least 32 characters (Settings.validate refuses shorter ones with GitHub sign-in)
 AUTH_SETTINGS = {"github_client_id": "test-client-id", "github_client_secret": "test-client-secret",
-                 "session_secret": "test-session-secret"}
+                 "session_secret": "test-session-secret-0123456789abcdef",
+                 "token_key": "test-token-key-0123456789abcdef-xyz"}
 
 
 def sign_in(client, app, github_id=1, login="ada", token="gho_test"):
@@ -84,3 +86,17 @@ def repo_row(app, repo_id):
     from coderag.db.models import Repo
     with app.state.db.session() as s:
         return s.get(Repo, repo_id)
+
+
+# ── no network: DELETE /api/me revokes the GitHub grant; tests never reach GitHub ──
+try:
+    from coderag.web.auth import GitHubOAuth
+    REAL_REVOKE = GitHubOAuth.revoke
+except ImportError:                                  # the web extra isn't installed
+    GitHubOAuth = REAL_REVOKE = None
+
+
+@pytest.fixture(autouse=True)
+def _no_github_grant_revocation(monkeypatch):
+    if GitHubOAuth is not None:
+        monkeypatch.setattr(GitHubOAuth, "revoke", lambda self, token: None)

@@ -4,6 +4,7 @@ Build the indexes for the demo repositories listed in demos.yaml.
     python scripts/build_demos.py                    # all demos -> data/demos/
     python scripts/build_demos.py --only requests    # one demo
     python scripts/build_demos.py --data-dir /srv/data --keep-clones
+    python scripts/build_demos.py --demos-dir /app/demos   # e.g. baked into an image (CODERAG_DEMOS_DIR)
 
 Remote demos are shallow-fetched at their pinned commit, indexed, and the
 clone is deleted afterwards (the server only needs the saved index).
@@ -25,12 +26,15 @@ def main(argv=None):
     parser.add_argument("--spec", default=os.path.join(ROOT, "demos.yaml"))
     parser.add_argument("--data-dir", default=os.environ.get("CODERAG_DATA_DIR",
                                                              os.path.join(ROOT, "data")))
+    parser.add_argument("--demos-dir", default=os.environ.get("CODERAG_DEMOS_DIR") or None,
+                        help="where the demo indexes go (default: <data-dir>/demos)")
     parser.add_argument("--only", nargs="+", help="demo ids to build")
     parser.add_argument("--keep-clones", action="store_true")
     args = parser.parse_args(argv)
 
-    build_demos(args.spec, args.data_dir, only=args.only, keep_clones=args.keep_clones)
-    print(f"Demos built in {os.path.join(args.data_dir, 'demos')}")
+    demos_dir = args.demos_dir or os.path.join(args.data_dir, "demos")
+    build_demos(args.spec, args.data_dir, only=args.only, keep_clones=args.keep_clones, demos_dir=demos_dir)
+    print(f"Demos built in {demos_dir}")
     return 0
 
 

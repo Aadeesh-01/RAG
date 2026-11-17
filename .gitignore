@@ -29,3 +29,7 @@ data/
 
 #
 .env
+
+# Design-tool output (not part of the app)
+.hallmark/
+.impeccable/

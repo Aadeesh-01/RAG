@@ -2,13 +2,15 @@
 FastAPI server for the pre-indexed demo repositories.
 
     GET  /  /app  /login                     home page, the app, sign-in (frontend/)
-    GET  /api/health
+    GET  /api/health                         liveness (no I/O)
+    GET  /api/ready                          readiness: the database answers, the demos loaded
     GET  /api/demos
     GET  /api/auth/github, /api/auth/github/callback, /api/auth/me; POST /api/auth/logout  (auth.py)
     POST /api/repos                         index a GitHub repo (signed in) with CODERAG_DEFAULT_VERSION
     POST /api/repos/{repo_id}/reindex       rebuild it with the default version (signed in)
     DELETE /api/repos/{repo_id}/mine        take it off the user's list (its index goes when nobody has it)
     GET  /api/jobs                          the signed-in user's indexing jobs, newest first
+    GET  /api/jobs/{job_id}                 one of them (its owner only)
     GET  /api/repos/{id}/history, POST/DELETE /api/questions/{id}/share, GET /api/shares/{slug},
     POST /api/questions/{id}/feedback, GET /a/{slug}           (history.py)
     DELETE /api/me                          delete the account: tokens, history, shares
@@ -26,8 +28,17 @@ limits stay in memory, behind interfaces (limits.py).
     POST /api/repos/{repo_id}/retrieve      JSON: sources (+ context), no LLM
     POST /api/repos/{repo_id}/ask           Server-Sent Events: sources, token*, done | error
 
-Run:  uvicorn coderag.web.app:app --port 7860
+Run:  uvicorn coderag.web.app:app --port 7860 --workers 1
       (build the demos first: python scripts/build_demos.py)
+
+One process only (--workers 1): the indexing queue, rate limits, the answer cache
+and the concurrent-answer limit live in memory. Settings are checked at start
+(Settings.validate): unsafe or half-done ones stop the server with a message.
+
+A visitor repo whose index files are gone (a reset disk; the database kept its
+row) is rebuilt at the same commit when it is opened or submitted again:
+GET /api/repos/{id} answers 202 {"rebuilding": true, "job": ...} meanwhile, and the
+other repo endpoints 409 with the same job.
 
 Visitors may send their own provider key with a question (llm.api_key). It is
 used for that request only and never logged, cached or returned.
@@ -39,6 +50,7 @@ opened only by the users who added it (anyone else gets 404).
 import json
 import logging
 import os
+import time
 from typing import Literal
 
 import httpx
@@ -46,6 +58,7 @@ import httpx
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
+from starlette.background import BackgroundTask
 from starlette.datastructures import MutableHeaders
 
 from ..config import get_config
@@ -55,9 +68,10 @@ from ..visualize import graph_data
 from ..db import Database, default_url, safe_url
 from . import history
 from .auth import SESSION_COOKIE, Auth, GitHubError, GitHubReauth
-from .jobs import Indexer, NotAllowed, QueueFull
-from .limits import AnswerCache, RateLimiter, client_ip
+from .jobs import Indexer, NeedsToken, NotAllowed, QueueFull
+from .limits import LRU, AnswerCache, DailyUsage, Gate, RateLimiter, client_ip
 from .live import LiveChecker, candidate_urls
+from .middleware import BodyLimit, OriginCheck, SecurityHeaders, configure_logging
 from .registry import Repos, is_older, load_demos, repo_name_of
 from .settings import Settings
 from .sources import SourceUnavailable, fetch_url, read_source
@@ -172,6 +186,14 @@ class RevalidateFrontend:
         await self.app(scope, receive, send_revalidating)
 
 
+class Rebuilding(Exception):
+    """The repo's index files are missing and are being rebuilt (job: IndexJob)."""
+
+    def __init__(self, job, position=0):
+        super().__init__(job.repo_id)
+        self.job, self.position = job, position
+
+
 def _sse(event):
     data = {k: v for k, v in event.items() if k != "type"}
     return f"event: {event['type']}\ndata: {json.dumps(data)}\n\n"
@@ -190,18 +212,22 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     live        : web.live.LiveChecker for "Check if live" (default: real HEAD requests)
     db          : coderag.db.Database (default: CODERAG_DATABASE_URL, else SQLite in data_dir)
     """
+    configure_logging()
     settings = settings or Settings.from_env()
+    for warning in settings.validate():             # ConfigError: unsafe settings stop the start here
+        log.warning("%s", warning)
     if embedder is None:
         from ..index import SharedEncoder, _load_model
         embedder = SharedEncoder(_load_model(get_config().embed_model))
     if demos is None:
-        demos = load_demos(settings.data_dir, embedder=embedder)
+        demos = load_demos(settings.demos_path, embedder=embedder)
+        log.info("demos: %s from %s", ", ".join(demos) or "none", settings.demos_path)
     if db is None:
         db = Database(settings.database_url or default_url(settings.data_dir))
     db.upgrade()                                   # migrations on start (the old auth DB included)
     log.info("database: %s", safe_url(db.url))
     repos = Repos(settings.data_dir, demos, embedder, settings.max_loaded_repos,
-                  settings.max_stored_repos, db=db)
+                  settings.max_stored_repos, db=db, max_stored_mb=settings.max_stored_mb)
     repos.register_demos()
     repos.import_legacy()
     indexer = indexer or Indexer(settings, repos, embedder, db=db)
@@ -213,12 +239,22 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     auth = Auth(settings, github, db=db)
     live = live or LiveChecker()
     cache = AnswerCache(settings.answer_cache_size)
-    graphs = {}
+    graphs = LRU(settings.max_loaded_repos + len(demos))      # graph JSON per (repo, version, index)
+    usage = DailyUsage(db)                                    # the server key's answers today
+    asking = Gate(settings.max_concurrent_asks)
 
+    docs = settings.docs
     app = FastAPI(title="coderag", version="0.1.0",
-                  description="Ask questions about a codebase, with cited sources.")
+                  description="Ask questions about a codebase, with cited sources.",
+                  docs_url="/docs" if docs else None, redoc_url="/redoc" if docs else None,
+                  openapi_url="/openapi.json" if docs else None)
     app.state.repos, app.state.indexer, app.state.auth, app.state.db = repos, indexer, auth, db
+    app.state.cache, app.state.usage, app.state.graphs, app.state.asking = cache, usage, graphs, asking
     app.add_middleware(RevalidateFrontend)
+    app.add_middleware(SecurityHeaders, frontend_dir=FRONTEND_DIR if os.path.isdir(FRONTEND_DIR) else None,
+                       public_url=settings.public_url)
+    app.add_middleware(BodyLimit)
+    app.add_middleware(OriginCheck, public_url=settings.public_url)      # outermost: refused before anything
     app.include_router(auth.router())
 
     def can_open(repo_id, request):
@@ -228,8 +264,30 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         user = auth.current_user(request)
         return user is not None and auth.users.has_repo(user.id, repo_id)
 
+    def rebuild(repo_id, request):
+        """
+        Queue (or find) the rebuild of a repo whose index files are missing. Public
+        repos need nobody's token; a private one uses the requester's (they can open it).
+        """
+        user = auth.current_user(request)
+        token = auth.token(user) if user is not None else None
+        try:
+            job, _ = indexer.rebuild(repo_id, token=token)
+        except NeedsToken:
+            raise HTTPException(409, "This private repository's index has to be rebuilt; sign in with "
+                                     "GitHub again so it can be fetched with your access.")
+        except QueueFull as e:
+            raise HTTPException(503, str(e), headers={"Retry-After": "60"})
+        except KeyError:
+            raise HTTPException(404, f"Unknown repository {repo_id!r}")
+        return job
+
     def resolve(repo_id, version, request):
-        demo = repos.get(repo_id) if can_open(repo_id, request) else None
+        allowed = can_open(repo_id, request)
+        demo = repos.get(repo_id) if allowed else None
+        if demo is None and allowed and repos.missing(repo_id):
+            job = rebuild(repo_id, request)
+            raise Rebuilding(job, indexer.position(job))
         if demo is None:
             raise HTTPException(404, f"Unknown repository {repo_id!r}")
         version = version or demo.versions[-1]
@@ -238,12 +296,27 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                                      f"available: {', '.join(demo.versions)}")
         return demo, version, demo.agents[version]
 
-    def limit(request, bucket, per_hour):
-        allowed, retry = limiter.hit(f"{bucket}:{client_ip(request, settings.trusted_proxy_hops)}",
-                                     per_hour, HOUR)
-        if not allowed:
-            raise HTTPException(429, f"Too many requests; try again in {retry:.0f}s",
-                                headers={"Retry-After": str(int(retry))})
+    def limit(request, bucket, per_hour, user=None, user_per_hour=None):
+        """Per-IP limit on `bucket`; with `user`, also a per-user one (user_per_hour, default the same)."""
+        keys = [(f"{bucket}:{client_ip(request, settings.trusted_proxy_hops)}", per_hour)]
+        if user is not None:
+            keys.append((f"{bucket}:user:{user.id}", user_per_hour or per_hour))
+        for key, n in keys:
+            allowed, retry = limiter.hit(key, n, HOUR)
+            if not allowed:
+                raise HTTPException(429, f"Too many requests; try again in {retry:.0f}s",
+                                    headers={"Retry-After": str(int(retry))})
+
+    def allow_index(request, user):
+        """allow_new for the indexer: the per-IP and per-user hourly limits on new repos."""
+        ip = client_ip(request, settings.trusted_proxy_hops)
+
+        def allow():
+            by_ip = limiter.hit(f"index:{ip}", settings.index_per_ip_per_hour, HOUR)
+            if not by_ip[0]:
+                return by_ip
+            return limiter.hit(f"index:user:{user.id}", settings.index_per_user_per_hour, HOUR)
+        return allow
 
     def with_links(demo, agent, event, body):
         """Add GitHub links (and code if asked) to sources; drop the raw context unless asked."""
@@ -263,7 +336,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
 
     # ── endpoints ────────────────────────────────────────────────────────────
     @app.get("/api/health")
-    def health():
+    async def health():
         defaults = get_config()
         return {"ok": True, "demos": sorted(demos),
                 "llm": {"server": getattr(llm_factory, "server_available", True),
@@ -278,6 +351,23 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                              "default_version": settings.default_version},
                 "auth": {"github": auth.enabled}, "live_check": settings.live_check}
 
+    expected_demos = sorted(d for d in (os.listdir(settings.demos_path) if os.path.isdir(settings.demos_path) else [])
+                            if os.path.isfile(os.path.join(settings.demos_path, d, "demo.json")))
+
+    @app.get("/api/ready")
+    def ready():
+        """200 when the database answers and every demo in CODERAG_DEMOS_DIR is loaded, else 503."""
+        checks = {}
+        try:
+            db.ping()
+            checks["database"] = "ok"
+        except Exception as e:                        # noqa: BLE001
+            checks["database"] = f"unavailable ({type(e).__name__})"
+        not_loaded = [d for d in expected_demos if d not in demos]
+        checks["demos"] = "ok" if not not_loaded else f"not loaded: {', '.join(not_loaded)}"
+        ok = all(v == "ok" for v in checks.values())
+        return JSONResponse({"ready": ok, "checks": checks, "demos": sorted(demos)}, status_code=200 if ok else 503)
+
     @app.get("/api/demos")
     def list_demos():
         return [d.info() for d in demos.values()]
@@ -288,13 +378,10 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         user = auth.current_user(request)
         if user is None:
             raise HTTPException(401, "Sign in with GitHub to add a repository.")
-        limit(request, "submit", settings.submit_per_ip_per_hour)
-        ip = client_ip(request, settings.trusted_proxy_hops)
+        limit(request, "submit", settings.submit_per_ip_per_hour, user, settings.submit_per_user_per_hour)
         try:
-            job, queued = indexer.submit(
-                body.url, allow_new=lambda: limiter.hit(f"index:{ip}",
-                                                        settings.index_per_ip_per_hour, HOUR),
-                token=auth.token(user), owner_id=user.id)
+            job, queued = indexer.submit(body.url, allow_new=allow_index(request, user),
+                                         token=auth.token(user), owner_id=user.id)
         except FetchError as e:
             raise HTTPException(400, str(e))
         except NotAllowed as e:
@@ -385,23 +472,37 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     def delete_me(request: Request):
         """Delete the account: the user, their encrypted token, links, history, feedback and shares."""
         user = signed_in(request)
-        for repo_id in auth.users.delete(user.id):
+        auth.revoke_grant(user)                       # best effort, before the token is deleted
+        had = auth.users.delete(user.id)              # user, token, links, questions, shares, feedback, jobs
+        for repo_id in had:
             if repo_id not in repos.demos and auth.users.users_of(repo_id) == 0 and repos.exists(repo_id):
                 repos.remove(repo_id)
+        gone = set(had)
+        cache.drop(lambda key: key[0] in gone)        # cached answers about their repos
+        auth.forget(user.id)
+        for job in list(indexer.jobs.values()):       # in-memory copies of their jobs
+            if job.owner_id == user.id and job.status in ("ready", "failed"):
+                indexer.jobs.pop(job.id, None)
         response = Response(status_code=204)
         response.delete_cookie(SESSION_COOKIE, path="/")
         return response
 
     @app.get("/api/jobs/{job_id}")
-    def job_status(job_id: str):
+    def job_status(job_id: str, request: Request):
+        """One indexing job, for the user who started it (anyone else: 404)."""
+        user = auth.current_user(request)
         job = indexer.get(job_id)
-        if job is None:
+        if job is None or user is None or job.owner_id != user.id:
             raise HTTPException(404, "Unknown job")
         return job.public(indexer.position(job))
 
     @app.get("/api/repos/{repo_id}")
     def repo_info(repo_id: str, request: Request):
-        demo, _, _ = resolve(repo_id, None, request)
+        try:
+            demo, _, _ = resolve(repo_id, None, request)
+        except Rebuilding as e:                       # files missing: 202 while the rebuild runs
+            info = repos.summary(repo_id) or {"id": repo_id}
+            return JSONResponse({**info, "rebuilding": True, "job": e.job.public(e.position)}, status_code=202)
         info = demo.info()
         if demo.kind == "user" and is_older(demo.built_with(), settings.default_version):
             info["reindex_to"] = settings.default_version         # the UI offers "Re-index with v10"
@@ -426,15 +527,17 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     def reindex_repo(repo_id: str, request: Request):
         """Rebuild a visitor repo with the default version (202 + job)."""
         user = signed_in(request)
-        demo, _, _ = resolve(repo_id, None, request)
+        try:
+            demo, _, _ = resolve(repo_id, None, request)
+        except Rebuilding as e:                       # files missing: the rebuild is the re-index
+            auth.users.add_repo(user.id, repo_id)
+            return JSONResponse(e.job.public(e.position), status_code=202)
         if demo.kind != "user":
             raise HTTPException(404, f"Unknown repository {repo_id!r}")
-        limit(request, "submit", settings.submit_per_ip_per_hour)
-        ip = client_ip(request, settings.trusted_proxy_hops)
+        limit(request, "submit", settings.submit_per_ip_per_hour, user, settings.submit_per_user_per_hour)
         try:
-            job, queued = indexer.reindex(
-                repo_id, allow_new=lambda: limiter.hit(f"index:{ip}", settings.index_per_ip_per_hour, HOUR),
-                token=auth.token(user), owner_id=user.id)
+            job, queued = indexer.reindex(repo_id, allow_new=allow_index(request, user),
+                                          token=auth.token(user), owner_id=user.id)
         except KeyError:
             raise HTTPException(404, f"Unknown repository {repo_id!r}")
         except NotAllowed as e:
@@ -447,10 +550,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     @app.get("/api/repos/{repo_id}/graph")
     def graph(repo_id: str, request: Request, version: str | None = None):
         demo, version, agent = resolve(repo_id, version, request)
-        key = (repo_id, version, id(agent))               # a re-index brings a new agent
-        if key not in graphs:
-            graphs[key] = graph_data(agent)
-        return graphs[key]
+        return graphs.get((repo_id, version, id(agent)), lambda: graph_data(agent))   # LRU; a re-index: new key
 
     @app.get("/api/repos/{repo_id}/file")
     def source_file(repo_id: str, path: str, request: Request, version: str | None = None):
@@ -459,7 +559,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         if len(path) > 500:
             raise HTTPException(404, "Not an indexed file")
         base = (repos.directory(repo_id) if demo.kind == "user"
-                else os.path.join(settings.data_dir, "demos", repo_id))
+                else os.path.join(settings.demos_path, repo_id))
         try:
             text, origin = read_source(demo, agent, path, os.path.join(base, "sources"),
                                        fetch=fetch_source)
@@ -492,15 +592,31 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
 
         overrides = {**body.overrides(), "prompt_style": body.prompt_style}
         user = auth.current_user(request)                 # signed in: the question is kept (history)
+        release = asking.try_enter()
+        if release is None:
+            raise HTTPException(503, "Many answers are being written right now; try again in a few seconds.",
+                                headers={"Retry-After": "5"})
 
-        def keep(sources_event, answer, done):
+        def keep(sources_event, answer, done, server_key=False):
             """Store the answered question for its (signed-in) user; returns its id."""
-            if user is None or done is None:
+            if done is None:
+                return None
+            if user is None:
+                if server_key:
+                    usage.add_anonymous()              # not stored, but it counts against the daily cap
                 return None
             linked = with_links(demo, agent, sources_event, body)
             latency = (sources_event.get("retrieve_ms") or 0) + (done.get("llm_ms") or 0)
             return history.record(db, repo_id, user.id, body.question, answer, linked["sources"],
-                                  done.get("backend", ""), latency, done.get("cached", False))
+                                  done.get("backend", ""), latency, done.get("cached", False),
+                                  version=version, chunks=agent.chunks, server_key=server_key)
+
+        def guarded(events):
+            """The stream, releasing the concurrent-answer slot however it ends."""
+            try:
+                yield from events
+            finally:
+                release()
         cache_key = (repo_id, version, " ".join(body.question.lower().split()),
                      tuple(sorted(overrides.items())), body.llm.provider,
                      body.llm.model or "", body.debug)          # never the key itself
@@ -515,19 +631,32 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                 yield _sse(with_links(demo, agent, event, body))
 
         if cached is not None:
-            return StreamingResponse(replay(), media_type="text/event-stream",
-                                     headers={"Cache-Control": "no-cache"})
+            return StreamingResponse(guarded(replay()), media_type="text/event-stream",
+                                     headers={"Cache-Control": "no-cache"}, background=BackgroundTask(release))
 
-        llm = llm_factory(body.llm)
-        quota_hit = False
-        if llm is not None and not own_key:
-            quota_hit = not limiter.hit("server-daily", settings.server_daily_cap, DAY)[0]
-            if quota_hit:
-                llm = None
+        try:
+            llm = llm_factory(body.llm)
+            quota_hit = False
+            if llm is not None and not own_key:
+                quota_hit = not usage.allowed(settings.server_daily_cap)
+                if quota_hit:
+                    llm = None
+        except BaseException:
+            release()
+            raise
+        server_key = llm is not None and not own_key
+        deadline = time.monotonic() + settings.ask_timeout
 
         def events():
             collected, text = [], []
-            for event in agent.stream(body.question, llm=llm, debug=body.debug, **overrides):
+            stream = agent.stream(body.question, llm=llm, debug=body.debug, **overrides)
+            for event in stream:
+                if event["type"] not in ("sources", "done") and time.monotonic() > deadline:
+                    stream.close()                    # stops the provider's stream too
+                    yield _sse({"type": "error", "code": "timeout",
+                                "message": f"The answer took longer than {settings.ask_timeout} s and was "
+                                           "stopped. Try a narrower question, or read the sources."})
+                    return
                 if event["type"] == "error" and event["code"] == "no_llm" and quota_hit:
                     event = {"type": "error", "code": "server_quota",
                              "message": "Today's free answers are used up. Add your own API "
@@ -539,7 +668,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                 if event["type"] == "token":
                     text.append(event["text"])
                 if event["type"] == "done":
-                    qid = keep(collected[0], "".join(text), event)
+                    qid = keep(collected[0], "".join(text), event, server_key=server_key)
                     event = {**event, "question_id": qid} if qid else event
                 yield _sse(with_links(demo, agent, event, body))
             if collected and collected[-1]["type"] == "done":
@@ -547,9 +676,9 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                 cache.put(cache_key, [collected[0], {"type": "token", "text": "".join(text)},
                                       {**collected[-1], "cached": True}])
 
-        return StreamingResponse(events(), media_type="text/event-stream",
-                                 headers={"Cache-Control": "no-cache",
-                                          "X-Accel-Buffering": "no"})
+        return StreamingResponse(guarded(events()), media_type="text/event-stream",
+                                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                                 background=BackgroundTask(release))
 
     history.add_routes(app, db, auth, repos, can_open, limit,
                        FRONTEND_DIR if os.path.isdir(FRONTEND_DIR) else None)
@@ -558,6 +687,12 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     def http_error(request, exc):
         return JSONResponse({"error": exc.detail}, status_code=exc.status_code,
                             headers=getattr(exc, "headers", None))
+
+    @app.exception_handler(Rebuilding)
+    def rebuilding(request, exc):
+        return JSONResponse({"error": "Rebuilding index…", "rebuilding": True,
+                             "job": exc.job.public(exc.position)}, status_code=409,
+                            headers={"Retry-After": "5"})
 
     if os.path.isdir(FRONTEND_DIR):
         from fastapi.responses import FileResponse

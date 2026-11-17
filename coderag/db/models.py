@@ -61,6 +61,8 @@ class Repo(Base):
                                                  index=True)           # who indexed it
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     built_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # eviction: least recently used
+    disk_bytes: Mapped[int] = mapped_column(BigInteger, default=0)                   # index + sources on disk
 
 
 class UserRepo(Base):
@@ -110,12 +112,15 @@ class Question(Base):
     model: Mapped[str] = mapped_column(String(100), default="")
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     cached: Mapped[bool] = mapped_column(Boolean, default=False)
+    version: Mapped[str] = mapped_column(String(20), default="")        # the preset that answered (v10 ...)
+    server_key: Mapped[bool] = mapped_column(Boolean, default=False)    # answered with the server's LLM key
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
 
     shares = relationship("Share", cascade="all, delete-orphan", passive_deletes=True)
 
     __table_args__ = (Index("ix_questions_repo_created", "repo_id", "created_at"),
-                      Index("ix_questions_user_repo_created", "user_id", "repo_id", "created_at"))
+                      Index("ix_questions_user_repo_created", "user_id", "repo_id", "created_at"),
+                      Index("ix_questions_server_key_created", "server_key", "created_at"))
 
 
 class Share(Base):

@@ -201,3 +201,58 @@ test("a large graph collapses to one node per file, links counted between files"
     [["m:a.py", "m:b/c.py", "calls", 2], ["m:web.js", "m:b/c.py", "bridge", 1]]);
   assert.equal(m.links[1].label, "HTTP POST /x");
 });
+
+// ── answer rendering never rewrites sanitized HTML (DEPLOY_AUDIT.md #8) ─────────
+import { safeHref } from "../lib.js";
+
+// the crafted answers from the audit: citations inside attributes and code
+const CRAFTED = [
+  '<img src=x onerror="window.pwned=1">',
+  'See <img src="x" alt="a b[S1]<img src=y onerror=window.pwned=2>"> here.',
+  '<a href="#" title="x y[S1]&quot; onmouseover=window.pwned=3 z">t</a>',
+  "`a [S1] <b>`",
+];
+
+test("the sanitizer is the last step: its output is returned untouched", () => {
+  for (const answer of CRAFTED) {
+    const seen = [];
+    const sanitize = (s) => { seen.push(s); return `«sanitized ${seen.length}»`; };
+    const html = renderAnswer(answer, 3, { marked: (s) => s, sanitize });
+    assert.equal(seen.length, 1, answer);
+    assert.equal(html, "«sanitized 1»", answer);                 // nothing added or rewritten afterwards
+  }
+});
+
+test("the chip markup is built before sanitizing", () => {
+  const seen = [];
+  renderAnswer("calls it [S1] and [S9]", 2, { marked: (s) => s, sanitize: (s) => { seen.push(s); return s; } });
+  assert.match(seen[0], /<a href="#" class="cite" data-source="1">S1<\/a>/);
+  assert.match(seen[0], /<span class="cite invalid" title="No such source">S9<\/span>/);
+  assert.match(seen[0], /<span class="cite-run">it <a /);
+});
+
+test("crafted answers come out without handlers when the sanitizer strips them", () => {
+  // a stand-in for DOMPurify's job (event handlers and their values go); the point is that
+  // whatever it returns is final, so a citation inside an attribute can't revive one
+  const strip = (s) => s.replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
+  for (const answer of CRAFTED) {
+    const html = renderAnswer(answer, 3, { marked: (s) => s, sanitize: strip });
+    assert.doesNotMatch(html, /\son\w+\s*=/i, answer);
+  }
+});
+
+// ── links: http(s) and relative only (DEPLOY_AUDIT.md #9) ─────────────────────
+test("safeHref keeps http(s) and relative links", () => {
+  for (const ok of ["https://github.com/o/r", "http://example.com", "/app?repo=x", "#S2", "?q=1", "a/b.html",
+                    "//cdn.example.com/x"]) {
+    assert.equal(safeHref(ok), ok, ok);
+  }
+});
+
+test("safeHref drops script and data URLs in every spelling", () => {
+  for (const bad of ["javascript:alert(1)", "JavaScript:alert(1)", " javascript:alert(1)", "java\tscript:alert(1)",
+                     "java\nscript:alert(1)", "\u0001javascript:x", "data:text/html,<b>x", "vbscript:x",
+                     "file:///etc/passwd", "\\\\evil.example\\x", "", null, undefined]) {
+    assert.equal(safeHref(bad), null, String(bad));
+  }
+});

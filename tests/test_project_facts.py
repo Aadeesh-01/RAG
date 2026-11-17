@@ -106,7 +106,7 @@ def test_indexer_stores_facts_with_the_index(tmp_path):
     app.state.indexer.facts = lambda owner, repo, token=None: calls.append((owner, repo, token)) or {
         "homepage": "https://pkg.example.com", "deployments": []}
     job = wait(client, client.post("/api/repos", json={"url": "someone/pkg"}).json()["job_id"])
-    assert calls == [("someone", "pkg", None)]                      # public repo: no token
+    assert calls == [("someone", "pkg", "gho_test")]                # public repo: the user's token, for the API limits
     info = client.get(f"/api/repos/{job['repo_id']}").json()
     assert info["facts"]["homepage"] == "https://pkg.example.com" and info["facts"]["platforms"] == []
     from conftest import repo_row

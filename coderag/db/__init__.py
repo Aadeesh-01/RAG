@@ -10,10 +10,11 @@ Migrations run on server start and with `python -m coderag db upgrade`.
 import os
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine, event
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.orm import sessionmaker
 
 MIGRATIONS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
+MIGRATION_LOCK = 7_316_524_901            # pg_advisory_xact_lock key: one migrator at a time
 
 
 def normalize_url(url):
@@ -80,10 +81,16 @@ class Database:
         return config
 
     def upgrade(self, revision="head"):
-        """Apply migrations up to `revision` (the old auth-only database is converted in place)."""
+        """
+        Apply migrations up to `revision` (the old auth-only database is converted in place).
+        On Postgres the migration runs under a transaction-scoped advisory lock, so two
+        processes starting together don't race; the second waits, then finds nothing to do.
+        """
         from alembic import command
         config = self.alembic_config()
         with self.engine.begin() as connection:
+            if not self.sqlite:
+                connection.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": MIGRATION_LOCK})
             config.attributes["connection"] = connection
             command.upgrade(config, revision)
 
@@ -91,6 +98,11 @@ class Database:
         from alembic.runtime.migration import MigrationContext
         with self.engine.connect() as connection:
             return MigrationContext.configure(connection).get_current_revision()
+
+    def ping(self):
+        """SELECT 1 (readiness)."""
+        with self.engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
 
     def dispose(self):
         self.engine.dispose()

@@ -180,6 +180,19 @@ DEPLOYMENT_RULE = (
 # =============================================================================
 # GITHUB
 # =============================================================================
+def web_url(value):
+    """`value` if it is an http(s) URL with a host, else "" (repo owners set these fields: no javascript: etc.)."""
+    from urllib.parse import urlsplit
+    if not isinstance(value, str) or len(value) > 2000:
+        return ""
+    value = value.strip()
+    try:
+        parts = urlsplit(value)
+    except ValueError:
+        return ""
+    return value if parts.scheme in ("http", "https") and parts.hostname else ""
+
+
 def fetch_github_facts(owner, repo, token=None, transport=None, timeout=5):
     """
     {homepage, has_pages, pages_url, deployments: [{environment, state, created_at,
@@ -203,22 +216,23 @@ def fetch_github_facts(owner, repo, token=None, transport=None, timeout=5):
 
         info = get("")
         if isinstance(info, dict):
-            facts["homepage"] = info.get("homepage") or ""
+            facts["homepage"] = web_url(info.get("homepage"))
             facts["has_pages"] = bool(info.get("has_pages"))
         if facts.get("has_pages"):
             pages = get("/pages")
             if isinstance(pages, dict) and pages.get("html_url"):
-                facts["pages_url"] = pages["html_url"]
+                facts["pages_url"] = web_url(pages["html_url"])
         deployments = get("/deployments?per_page=5")
         if isinstance(deployments, list):
             facts["deployments"] = []
             for d in deployments[:5]:
-                statuses = get(d["statuses_url"]) if d.get("statuses_url") else None
+                url = d.get("statuses_url")
+                statuses = get(url) if isinstance(url, str) and url.startswith(base + "/") else None   # token: GitHub only
                 latest = statuses[0] if isinstance(statuses, list) and statuses else {}
                 facts["deployments"].append({
                     "environment": d.get("environment"), "state": latest.get("state"),
                     "created_at": d.get("created_at"),
-                    "environment_url": latest.get("environment_url") or latest.get("target_url") or ""})
+                    "environment_url": web_url(latest.get("environment_url") or latest.get("target_url"))})
         environments = get("/environments")
         if isinstance(environments, dict):
             facts["environments"] = [e.get("name") for e in environments.get("environments", []) if e.get("name")]

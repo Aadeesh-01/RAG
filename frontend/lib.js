@@ -40,22 +40,39 @@ const MARK = /⟦S(\d+)⟧/g;                // ⟦S2⟧ placeholder survives ma
 /**
  * Markdown answer -> sanitized HTML with citations as clickable chips.
  * `marked` and `sanitize` are injected (DOMPurify in the browser). LLM output
- * is untrusted: everything goes through the sanitizer; the only HTML added
- * afterwards is our own chip markup around plain numbers.
+ * is untrusted, so the sanitizer is the LAST step: the chip markup is built
+ * first, and nothing ever rewrites the sanitized HTML (a regex over sanitized
+ * HTML can split a tag and bring attribute text back to life).
  */
 export function renderAnswer(text, nSources, { marked, sanitize }) {
   const marked_ = normalizeCitations(text).replace(CITATION, (_, group) =>
     group.split(/[,;]/).map((ref) => `⟦${ref.trim()}⟧`).join(" "));
-  const html = sanitize(marked(marked_))
+  const html = marked(marked_)
     // keep chips with the word before them (and the punctuation after), so a chip
-    // never starts a line on its own; the text here is already sanitized, no tags
-    .replace(/([^\s<>]+)\s*((?:⟦S\d+⟧\s*)*⟦S\d+⟧)([.,;:!?)]*)/g, '<span class="cite-run">$1 $2$3</span>');
-  return html.replace(MARK, (_, n) => {
-    const valid = Number(n) >= 1 && Number(n) <= nSources;
-    return valid
-      ? `<a href="#" class="cite" data-source="${Number(n)}">S${Number(n)}</a>`
-      : `<span class="cite invalid" title="No such source">S${Number(n)}</span>`;
-  });
+    // never starts a line on its own
+    .replace(/([^\s<>]+)\s*((?:⟦S\d+⟧\s*)*⟦S\d+⟧)([.,;:!?)]*)/g, '<span class="cite-run">$1 $2$3</span>')
+    .replace(MARK, (_, n) => {
+      const valid = Number(n) >= 1 && Number(n) <= nSources;
+      return valid
+        ? `<a href="#" class="cite" data-source="${Number(n)}">S${Number(n)}</a>`
+        : `<span class="cite invalid" title="No such source">S${Number(n)}</span>`;
+    });
+  return sanitize(html);
+}
+
+/**
+ * `value` if it is safe as a link: a relative URL ("/app", "#S2", "?q=") or an
+ * http(s) one; otherwise null (javascript:, data:, vbscript: ... including the
+ * "java\tscript:" spellings browsers read as the same thing).
+ */
+export function safeHref(value) {
+  if (value === null || value === undefined) return null;
+  const text = String(value).trim();
+  if (!text) return null;
+  const probe = text.replace(/[\u0000-\u0020\u007f]/g, "");      // browsers drop tabs, newlines ...
+  const scheme = /^([a-z][a-z0-9+.-]*):/i.exec(probe);
+  if (scheme) return /^https?$/i.test(scheme[1]) ? text : null;
+  return /^[\\]/.test(probe) ? null : text;                       // "\\host" is read as //host on some
 }
 
 /** Valid cited source numbers in an answer, sorted. */

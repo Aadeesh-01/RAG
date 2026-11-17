@@ -92,7 +92,7 @@ def test_start_sends_to_github_with_a_signed_state_cookie(tmp_path):
 
 
 def test_public_url_sets_the_callback_and_secure_cookies(tmp_path):
-    client, _, _ = make(tmp_path, public_url="https://coderag.example.com/")
+    client, _, _ = make(tmp_path, public_url="https://coderag.example.com/", trusted_proxy_hops=1)
     r = client.get("/api/auth/github", follow_redirects=False)
     query = parse_qs(urlparse(r.headers["location"]).query)
     assert query["redirect_uri"] == ["https://coderag.example.com/api/auth/github/callback"]

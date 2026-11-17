@@ -1,6 +1,6 @@
 import { currentUser } from "./auth.js";
 import { mountHeroGraph } from "./hero-graph.js";
-import { avatarSrc, initials } from "./lib.js";
+import { avatarSrc, initials, safeHref } from "./lib.js";
 
 const $ = (s) => document.querySelector(s);
 
@@ -11,7 +11,10 @@ function el(tag, attrs = {}, ...children) {
     if (k === "class") node.className = v;
     else if (k === "text") node.textContent = v;
     else if (k.startsWith("on")) node.addEventListener(k.slice(2), v);
-    else node.setAttribute(k, v);
+    else if (k === "href") {                   // http(s) and relative links only
+      const href = safeHref(v);
+      if (href !== null) node.setAttribute("href", href);
+    } else node.setAttribute(k, v);
   }
   node.append(...children.filter((c) => c !== null && c !== undefined && c !== false));
   return node;

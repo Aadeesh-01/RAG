@@ -3,6 +3,7 @@
 import json
 import os
 import sqlite3
+from datetime import timedelta
 
 import pytest
 
@@ -88,7 +89,7 @@ def test_migrating_the_old_auth_database_keeps_every_row(tmp_path):
     legacy_layout(tmp_path)
     db = Database(default_url(str(tmp_path)))
     db.upgrade()
-    assert db.current() == "0001"
+    assert db.current() == "0002"
     with db.session() as s:
         [user] = s.query(User).all()
         assert (user.id, user.github_id, user.login, user.name) == (7, 4242, "ada", "Ada")
@@ -101,7 +102,7 @@ def test_migrating_the_old_auth_database_keeps_every_row(tmp_path):
     # the encrypted token still decrypts with the same session secret
     assert Users(db, AUTH_SETTINGS["session_secret"]).token(7) == "gho_legacy"
     db.upgrade()                                                       # idempotent
-    assert db.current() == "0001"
+    assert db.current() == "0002"
 
 
 def test_the_server_starts_on_an_old_data_folder(tmp_path):
@@ -128,14 +129,15 @@ def test_jobs_left_running_by_a_restart_are_marked_failed(tmp_path):
     db.upgrade()
     with db.session() as s:
         for job_id, status in (("a" * 32, "running"), ("b" * 32, "queued"), ("c" * 32, "done")):
-            s.add(Job(id=job_id, repo_id="x__y__" + "0" * 12, repo_name="x/y", status=status,
-                      stage={"running": "embedding"}.get(status, status), progress=40, created_at=utcnow()))
+            s.add(Job(id=job_id, repo_id="x__y__" + "0" * 12, repo_name="x/y", status=status, user_id=None,
+                      stage={"running": "embedding"}.get(status, status), progress=40,
+                      created_at=utcnow() - timedelta(minutes=5)))
     app = make(tmp_path, db=db)
-    client = TestClient(app)
-    running = client.get(f"/api/jobs/{'a' * 32}").json()
+    indexer = app.state.indexer                       # /api/jobs/{id} is for a job's owner only (#25)
+    running = indexer.get("a" * 32).public()
     assert running["status"] == "failed" and running["error"] == "server restarted"
-    assert client.get(f"/api/jobs/{'b' * 32}").json()["error"] == "server restarted"
-    assert client.get(f"/api/jobs/{'c' * 32}").json()["status"] == "ready"
+    assert indexer.get("b" * 32).error == "server restarted"
+    assert indexer.get("c" * 32).status == "ready"
     with db.session() as s:
         assert s.get(Job, "a" * 32).finished_at is not None
 

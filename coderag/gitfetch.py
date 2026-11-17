@@ -56,12 +56,27 @@ def _auth_env(token):
             "GIT_CONFIG_VALUE_0": f"Authorization: Basic {basic}"}
 
 
+# what git needs from the server's environment; nothing else is passed on (API keys,
+# CODERAG_* secrets and database URLs never reach the git processes)
+GIT_ENV_KEYS = ("PATH", "HOME", "USERPROFILE", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT",
+                "TEMP", "TMP", "TMPDIR", "LANG", "LC_ALL", "LANGUAGE",
+                "HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "no_proxy",
+                "SSL_CERT_FILE", "SSL_CERT_DIR", "GIT_SSL_CAINFO", "GIT_EXEC_PATH")
+
+
+def base_env():
+    """A minimal environment for git: the keys above that are set, plus no prompts."""
+    env = {k: os.environ[k] for k in GIT_ENV_KEYS if k in os.environ}
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    return env
+
+
 def _scrub(text, token):
     return text.replace(token, "***") if token else text
 
 
 def _env(dest, token=None):
-    return {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1",
+    return {**base_env(), "GIT_LFS_SKIP_SMUDGE": "1",
             "GIT_CEILING_DIRECTORIES": os.path.dirname(os.path.abspath(dest)), **_auth_env(token)}
 
 
@@ -181,7 +196,7 @@ def resolve_sha(owner, repo, ref=None, timeout=30, token=None):
     try:
         result = subprocess.run(["git", "ls-remote", "--", url, *( [ref] if ref else ["HEAD"] )],
                                 capture_output=True, text=True, timeout=timeout,
-                                env={**os.environ, "GIT_TERMINAL_PROMPT": "0", **_auth_env(token)})
+                                env={**base_env(), **_auth_env(token)})
     except subprocess.TimeoutExpired:
         raise FetchError("GitHub did not respond in time")
     if result.returncode != 0:
