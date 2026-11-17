@@ -77,3 +77,10 @@ def sign_in(client, app, github_id=1, login="ada", token="gho_test"):
     user = auth.users.upsert({"id": github_id, "login": login, "name": login.title(), "avatar_url": ""}, token)
     client.cookies.set("coderag_session", auth.session_cookie(user.id))
     return user
+
+
+def repo_row(app, repo_id):
+    """A visitor repo's row in the database (the registry; demo.json is no longer written)."""
+    from coderag.db.models import Repo
+    with app.state.db.session() as s:
+        return s.get(Repo, repo_id)

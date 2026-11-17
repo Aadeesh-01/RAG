@@ -7,7 +7,8 @@ import { currentUser, signIn, signOut } from "./auth.js";
 
 const $ = (selector) => document.querySelector(selector);
 const SETTINGS_KEY = "coderag.settings";
-const ASKED_KEY = "coderag.asked";
+// kept in localStorage before the database; removed on start (history is on the server now)
+const OLD_LOCAL_KEYS = ["coderag.asked", "coderag.saved"];
 const FULL_GRAPH_LIMIT = 120;          // draw the whole graph up front only for small repos
 const HISTORY_LIMIT = 4;               // thumbnails of the last answers' subgraphs
 
@@ -25,11 +26,15 @@ const state = {
   graphLayout: "free",                 // answer graph: "free" | "rings" (by call distance)
   trailsShown: null,                   // the answer turn whose paths have already flowed
   overviews: new Map(),                // repo id -> repoOverview(graph)
-  history: new Map(),                  // repo id -> [{turn, evidence, thumb}] the last answers' subgraphs
+  history: new Map(),                  // repo id -> [{turn, evidence, thumb, qid}] this page's answers' subgraphs
+  historyMeta: new Map(),              // repo id -> {items, next, total, per_day}: GET /api/repos/{id}/history
+  sessionAsked: [],                    // signed out: [{t, repo}] asked in this session (memory only)
+  sessionHistory: [],                  // signed out: answered questions in this session (memory only)
+  jobCards: new Map(),                 // job id -> its progress card (jobs started on this page)
   busy: false, turn: 0, controller: null,
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
   userRepos: [],                       // the signed-in user's repositories (server summaries)
-  jobs: new Map(),                     // repo id -> latest indexing job seen
+  jobs: new Map(),                     // repo id -> its latest indexing job (GET /api/jobs)
   chats: new Map(),                    // repo id -> {turns, evidence} while another repo is open
   reposFilter: "all",
 };
@@ -207,7 +212,7 @@ function setView(name, { focus = false } = {}) {
   const repos = name === "repos";
   $("#view-work").hidden = repos;
   $("#view-repos").hidden = !repos;
-  if (repos) renderRepos();
+  if (repos) { renderRepos(); syncJobs(); }
   else if (name === "graph") requestAnimationFrame(() => drawGraph());
   if (focus && name === "ask") $("#question").focus();
   if (focus && name === "overview") window.scrollTo({ top: 0 });
@@ -615,48 +620,75 @@ function setupAddRepo() {
   return open;
 }
 
+const ACTIVE = new Set(["queued", "fetching", "parsing", "embedding", "saving", "running"]);
+const isActive = (j) => Boolean(j) && ACTIVE.has(j.status);
+let jobsTimer = null;
+
+/** A job as the Repos page reads it: queued, running (with its stage), ready or failed. */
+function jobView(j) {
+  return { ...j, stage: j.status, status: ACTIVE.has(j.status) && j.status !== "queued" ? "running" : j.status };
+}
+
+function renderJobCard(j) {
+  const card = state.jobCards.get(j.job_id);
+  if (!card) return;
+  card.className = `job ${j.status}`;
+  const waiting = j.status === "queued" && j.queue_position > 1 ? ` (${j.queue_position} in queue)` : "";
+  card.replaceChildren(
+    el("div", { class: "row" },
+      el("span", {}, j.status === "ready" ? "Indexed " : j.status === "failed" ? "Could not index " : "Indexing ",
+         el("b", { text: j.name })),
+      j.status === "failed" || j.status === "ready"
+        ? el("button", { type: "button", class: "link-button", text: "Dismiss", onclick: () => { card.remove(); state.jobCards.delete(j.job_id); } }) : null),
+    el("div", { class: "msg", text: (j.status === "failed" ? j.error : j.message) + waiting }),
+    j.status === "failed" ? null : el("div", { class: "progress" }, el("i", { style: `--progress:${j.progress}` })));
+}
+
+function jobFinished(j) {
+  for (const cache of [state.graphs, state.overviews, state.positions, state.history]) cache?.delete?.(j.repo_id);
+  rememberUserRepo(j.repo_id, j.name);
+  const card = state.jobCards.get(j.job_id);
+  if (card) {                                   // started on this page: open it
+    selectRepo(j.repo_id);
+    setTimeout(() => { card.remove(); state.jobCards.delete(j.job_id); }, 4000);
+  }
+}
+
+/** The signed-in user's jobs from the server; polls every 2 s while any is running, then stops. */
+async function syncJobs() {
+  clearTimeout(jobsTimer);
+  jobsTimer = null;
+  if (!currentUser()) return;
+  let jobs;
+  try {
+    jobs = await fetchJSON("/api/jobs");
+  } catch {
+    if ([...state.jobs.values()].some(isActive)) jobsTimer = setTimeout(syncJobs, 4000);
+    return;
+  }
+  const latest = new Map();
+  for (const j of jobs) if (!latest.has(j.repo_id)) latest.set(j.repo_id, j);       // newest first
+  const finished = [...latest.values()].filter((j) => j.status === "ready" && isActive(state.jobs.get(j.repo_id)?.raw));
+  state.jobs = new Map([...latest].map(([id, j]) => [id, { ...jobView(j), raw: j }]));
+  jobs.forEach(renderJobCard);
+  finished.forEach(jobFinished);
+  for (const [id, card] of state.jobCards) {      // a job this page started that the list no longer has
+    if (!jobs.some((j) => j.job_id === id) && !card.classList.contains("ready")) renderJobCard({ job_id: id, status: "failed", name: "", error: "Lost track of this job." });
+  }
+  if (state.view === "repos") renderRepos();
+  if ([...latest.values()].some(isActive)) jobsTimer = setTimeout(syncJobs, 2000);
+}
+
+/** A job this page started: a progress card, kept up to date by syncJobs. */
 function trackJob(job) {
   const card = el("div", { class: "job", "data-job": job.job_id });
   $("#jobs").append(card);
-  const note = (j) => {
-    state.jobs.set(j.repo_id, j);
-    if (!state.userRepos.some((r) => r.id === j.repo_id)) rememberUserRepo(j.repo_id, j.name);
-    if (state.view === "repos") renderRepos();
-  };
-  const render = (j) => {
-    card.className = `job ${j.status}`;
-    const waiting = j.status === "queued" && j.queue_position > 1 ? ` (${j.queue_position} in queue)` : "";
-    card.replaceChildren(
-      el("div", { class: "row" },
-        el("span", {}, j.status === "ready" ? "Indexed " : j.status === "failed" ? "Could not index " : "Indexing ",
-           el("b", { text: j.name })),
-        j.status === "failed" || j.status === "ready"
-          ? el("button", { type: "button", class: "link-button", text: "Dismiss", onclick: () => card.remove() }) : null),
-      el("div", { class: "msg", text: (j.status === "failed" ? j.error : j.message) + waiting }),
-      j.status === "failed" ? null : el("div", { class: "progress" }, el("i", { style: `--progress:${j.progress}` })));
-    note(j);
-  };
-  const finish = (j) => {
-    render(j);
-    for (const cache of [state.graphs, state.overviews, state.positions, state.history]) cache?.delete?.(j.repo_id);
-    state.jobs.delete(j.repo_id);
-    rememberUserRepo(j.repo_id, j.name);
-    selectRepo(j.repo_id);
-    setTimeout(() => card.remove(), 4000);
-  };
-  render(job);
-  if (job.status === "ready") { finish(job); return; }
-  const poll = setInterval(async () => {
-    try {
-      const j = await fetchJSON(`/api/jobs/${job.job_id}`);
-      if (j.status === "ready") { clearInterval(poll); finish(j); }
-      else if (j.status === "failed") { clearInterval(poll); render(j); }
-      else render(j);
-    } catch {
-      clearInterval(poll);
-      render({ ...job, status: "failed", error: "Lost track of this job (the server may have restarted)." });
-    }
-  }, 1000);
+  state.jobCards.set(job.job_id, card);
+  renderJobCard(job);
+  state.jobs.set(job.repo_id, { ...jobView(job), raw: job });
+  if (job.status === "ready") { jobFinished(job); return; }
+  if (state.view === "repos") renderRepos();
+  syncJobs();
 }
 
 /** Rebuild a visitor repo with the server's default version; the job card shows progress. */
@@ -739,15 +771,36 @@ function renderRepoHead(demo) {
 }
 
 // ── the stat tiles ──────────────────────────────────────────────────────────
-function loadAsked() {
-  try { return JSON.parse(localStorage.getItem(ASKED_KEY) || "[]"); } catch { return []; }
+// Signed in: the counts come from the server's history (all your questions about the repo);
+// signed out: this session's questions, kept in memory only.
+function askedMeta(repoId) {
+  if (currentUser()) {
+    const h = state.historyMeta.get(repoId);
+    return h ? { total: h.total, perDay: h.per_day } : null;
+  }
+  const asked = state.sessionAsked.filter((x) => x.repo === repoId);
+  return { total: asked.length, perDay: questionsPerDay(asked, 7) };
 }
 
 function logAsked(repoId) {
-  const cutoff = Date.now() - 30 * 86400000;
-  const list = loadAsked().filter((x) => Date.parse(x.t) > cutoff);
-  list.push({ t: new Date().toISOString(), repo: repoId });
-  try { localStorage.setItem(ASKED_KEY, JSON.stringify(list)); } catch { /* not persisted */ }
+  if (!currentUser()) {
+    state.sessionAsked.push({ t: new Date().toISOString(), repo: repoId });
+    return;
+  }
+  const h = state.historyMeta.get(repoId);
+  if (h) { h.total += 1; h.per_day[h.per_day.length - 1] += 1; }    // until the server's count arrives
+}
+
+/** The signed-in user's questions about a repo (newest first), a page at a time. */
+async function loadHistory(repoId, { more = false } = {}) {
+  if (!currentUser() || !repoId) return null;
+  const known = state.historyMeta.get(repoId);
+  const before = more && known?.next ? `&before=${known.next}` : "";
+  try {
+    const page = await fetchJSON(`/api/repos/${encodeURIComponent(repoId)}/history?limit=20${before}`);
+    state.historyMeta.set(repoId, { ...page, items: more && known ? [...known.items, ...page.items] : page.items });
+  } catch { /* offline or signed out meanwhile: keep what we had */ }
+  return state.historyMeta.get(repoId) || null;
 }
 
 /** A mini bar chart: one series, the current bar in the accent, each bar named on hover. */
@@ -792,12 +845,14 @@ function renderTiles(demo) {
   const bridges = tile("Bridges", graph ? b.total : null, bridgeNote,
     bars(mechanisms.map(([m, n]) => ({ value: n, title: `${BRIDGE_NAMES[m] || m}: ${plural(n, "bridge")}` })), { empty: !b.total, cat: "var(--cat-bridge)" }));
 
-  const asked = loadAsked().filter((x) => x.repo === demo.id);
-  const perDay = questionsPerDay(asked, 7);
+  const asked = askedMeta(demo.id);
+  const perDay = asked?.perDay || [0, 0, 0, 0, 0, 0, 0];
   const today = perDay[perDay.length - 1];
   const dayName = (back) => { const d = new Date(); d.setDate(d.getDate() - back); return d.toLocaleDateString(undefined, { weekday: "short" }); };
-  const questions = tile("Questions asked", asked.length, today ? el("b", { class: "up", text: `+${today} today` }) : asked.length ? "none today" : "in this browser",
-    bars(perDay.map((n, i) => ({ value: n, title: `${dayName(6 - i)}: ${plural(n, "question")}` })), { current: 6, empty: !asked.length }));
+  const questions = tile("Questions asked", asked ? asked.total : null,
+    !asked ? "counting…" : today ? el("b", { class: "up", text: `+${today} today` })
+      : asked.total ? "none today" : currentUser() ? "none yet" : "this session",
+    bars(perDay.map((n, i) => ({ value: n, title: `${dayName(6 - i)}: ${plural(n, "question")}` })), { current: 6, empty: !asked?.total }));
   box.replaceChildren(files, functions, bridges, questions);
 }
 
@@ -861,6 +916,10 @@ async function selectRepo(id) {
   renderTiles(demo);
   renderRepoCard(demo);
   renderThumbs();
+  updateSavedCount();
+  loadHistory(demo.id).then(() => {           // the tile's count and the thumbnails come from history
+    if (state.demo === demo) { renderTiles(demo); renderThumbs(); updateSavedCount(); }
+  });
   conversation.replaceChildren($("#repo-card"), ...(chat?.turns || []));
   syncRepoCard();
   syncLegend();
@@ -1037,17 +1096,20 @@ async function ask(question) {
           const seconds = (data.llm_ms / 1000).toFixed(1);
           const copy = el("button", { type: "button", class: "link-button", text: "Copy answer",
             onclick: () => copyText(normalizeCitations(text), copy) });
-          const save = saveButton({
-            repoId: repo.id, repoName: repo.name, question, answer: normalizeCitations(text),
-            backend: data.backend, sources: sources.map((s) => slimSource(s, cited.includes(s.id))),
-          });
+          if (data.question_id) turn.dataset.question = data.question_id;
+          else state.sessionHistory.unshift({ repoId: repo.id, repoName: repo.name, question, answer: normalizeCitations(text),
+            backend: data.backend, at: new Date().toISOString(), sources: sources.map((s) => slimSource(s, cited.includes(s.id))) });
           answer.insertBefore(el("div", { class: "meta" },
             el("span", { class: "by" }, "Answered by", el("span", { class: "measured", text: data.backend }),
               data.cached ? "from the cache" : el("span", { class: "measured", text: `${seconds} s` })),
-            el("span", { class: "actions" }, copy, save)), answer.querySelector(".sources"));
+            el("span", { class: "actions" }, copy,
+              data.question_id ? shareControls(data.question_id, repo) : null,
+              data.question_id ? feedbackButtons(data.question_id) : null)), answer.querySelector(".sources"));
+          if (data.question_id) loadHistory(repo.id).then(() => { if (state.demo?.id === repo.id) { renderTiles(repo); renderThumbs(); updateSavedCount(); } });
+          else updateSavedCount();
           announce(cited.length ? `Answer ready. It cites ${sourceList(cited)}.`
             : sources.length ? `Answer ready. It cites none of the ${sources.length} sources.` : "Answer ready.");
-          if (sources.length) rememberAnswer(repo.id, turn);
+          if (sources.length) rememberAnswer(repo.id, turn, data.question_id);
         } else if (event.type === "error") {
           notice(errorMessage(data.code, data.message));
         }
@@ -1199,60 +1261,89 @@ async function copyText(text, button) {
   }
 }
 
-// ── saved answers (kept in this browser across reloads) ─────────────────────
-const SAVED_KEY = "coderag.saved";
-
-function loadSaved() {
-  try { return JSON.parse(localStorage.getItem(SAVED_KEY) || "[]"); } catch { return []; }
+// ── history: your questions, from the server (signed in) or this session (signed out) ──
+function slimSource(s, keepCode) {   // what a session answer keeps of a source: code only if cited
+  const { id, chunk_id, name, kind, file, start_line, end_line, hop, via, relation, url, code, language, bridge } = s;
+  return { id, chunk_id, name, kind, file, start_line, end_line, hop, via, relation, url, language, bridge,
+           cited: keepCode, code: keepCode ? code : undefined };
 }
 
-function storeSaved(list) {
-  try { localStorage.setItem(SAVED_KEY, JSON.stringify(list)); return true; } catch { return false; }
+const THUMB_UP = "M7 11v10M7 11l4-8a2 2 0 0 1 3.5 1.6L13.5 9H19a2 2 0 0 1 2 2.3l-1.4 8A2 2 0 0 1 17.6 21H7";
+const THUMB_DOWN = "M17 13V3M17 13l-4 8a2 2 0 0 1-3.5-1.6l1-4.4H5a2 2 0 0 1-2-2.3l1.4-8A2 2 0 0 1 6.4 3H17";
+
+/** Thumbs up/down on an answer, stored on the server (POST /api/questions/{id}/feedback). */
+function feedbackButtons(questionId, rating = null) {
+  const group = el("span", { class: "feedback", role: "group", "aria-label": "Was this answer useful?" });
+  const sync = (value) => group.querySelectorAll("button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.rating === value)));
+  const button = (value, label, d) => el("button", { type: "button", class: "icon-button", "data-rating": value,
+    "aria-label": label, title: label, "aria-pressed": String(rating === value),
+    onclick: async () => {
+      sync(value);
+      const r = await fetch(`/api/questions/${questionId}/feedback`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ rating: value }) }).catch(() => null);
+      if (!r?.ok) { sync(rating); announce("Your feedback could not be saved."); return; }
+      rating = value;
+      announce(value === "up" ? "Marked as helpful." : "Marked as not helpful.");
+    } }, svgIcon(d));
+  group.append(button("up", "Helpful", THUMB_UP), button("down", "Not helpful", THUMB_DOWN));
+  return group;
 }
 
-function slimSource(s, keepCode) {   // what a saved answer keeps of a source: code only if cited
-  const { id, name, kind, file, start_line, end_line, hop, via, relation, url, code, language, bridge } = s;
-  return { id, name, kind, file, start_line, end_line, hop, via, relation, url, language, bridge,
-           code: keepCode ? code : undefined };
-}
-
-function saveButton(record) {
-  let savedId = null;
-  const button = el("button", { type: "button", class: "link-button save",
-    title: "Keep this answer in this browser. Unsaved chats are cleared when the page is closed or reloaded." });
-  const sync = () => {
-    button.textContent = savedId ? "Saved" : "Save";
-    button.setAttribute("aria-pressed", String(Boolean(savedId)));
-  };
-  button.addEventListener("click", () => {
-    const list = loadSaved();
-    if (savedId) {
-      storeSaved(list.filter((r) => r.id !== savedId));
-      savedId = null;
-    } else {
-      const entry = { ...record, id: `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`,
-                      savedAt: new Date().toISOString() };
-      if (!storeSaved([entry, ...list])) {
-        button.textContent = "Couldn't save (browser storage is full or blocked)";
-        return;
-      }
-      savedId = entry.id;
+/** Share: a public read-only link to this answer (/a/<slug>); private repos ask first. */
+function shareControls(questionId, repo, existing = null) {
+  let slug = existing;
+  const wrap = el("span", { class: "share" });
+  const status = el("span", { class: "share-status", role: "status" });
+  const link = () => `${window.location.origin}/a/${slug}`;
+  const share = el("button", { type: "button", class: "link-button", text: slug ? "Copy link" : "Share" });
+  const revoke = el("button", { type: "button", class: "link-button danger", text: "Revoke link", hidden: !slug });
+  const create = async (confirm) => {
+    status.replaceChildren();
+    share.disabled = true;
+    try {
+      const r = await fetch(`/api/questions/${questionId}/share`, { method: "POST",
+        headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm_private: confirm }) });
+      const body = await r.json().catch(() => ({}));
+      if (r.status === 409) { askConfirm(); return; }
+      if (!r.ok) throw new Error(body.error || `Couldn't share it (error ${r.status}).`);
+      slug = body.slug;
+      share.textContent = "Copy link";
+      revoke.hidden = false;
+      await copyText(link(), share);
+      status.textContent = "Anyone with the link can read this answer.";
+    } catch (err) {
+      status.textContent = err.message;
+    } finally {
+      share.disabled = false;
     }
-    sync();
-    updateSavedCount();
+  };
+  const askConfirm = () => status.replaceChildren(
+    "This repository is private: the link shows this answer and the code it cites. ",
+    el("button", { type: "button", class: "link-button", text: "Share anyway", onclick: () => create(true) }), " ",
+    el("button", { type: "button", class: "link-button", text: "Cancel", onclick: () => status.replaceChildren() }));
+  share.addEventListener("click", () => (slug ? copyText(link(), share) : repo?.private ? askConfirm() : create(false)));
+  revoke.addEventListener("click", async () => {
+    const r = await fetch(`/api/questions/${questionId}/share`, { method: "DELETE" }).catch(() => null);
+    if (!r?.ok) { status.textContent = "Couldn't revoke the link."; return; }
+    slug = null;
+    share.textContent = "Share";
+    revoke.hidden = true;
+    status.textContent = "Link revoked.";
   });
-  sync();
-  return button;
+  wrap.append(share, revoke, status);
+  return wrap;
 }
 
 function updateSavedCount() {
-  const n = loadSaved().length;
+  const id = state.demo?.id;
+  const n = currentUser() ? state.historyMeta.get(id)?.total || 0 : state.sessionHistory.filter((r) => r.repoId === id).length;
   const badge = $("#saved-count");
   badge.textContent = n ? String(n) : "";
   badge.hidden = !n;
 }
 
 function setupSaved() {
+  try { OLD_LOCAL_KEYS.forEach((k) => localStorage.removeItem(k)); } catch { /* storage blocked */ }
   const dialog = $("#saved");
   $("#saved-button").addEventListener("click", () => { renderSaved(); dialog.showModal(); });
   $("#saved-close").addEventListener("click", () => dialog.close());
@@ -1271,37 +1362,51 @@ function setupSaved() {
   updateSavedCount();
 }
 
-function renderSaved() {
-  const list = loadSaved();
+function historyItemView(r) {
+  const body = el("div", { class: "body" });
+  body.innerHTML = renderAnswer(r.answer, r.sources.length, renderers);
+  const copy = el("button", { type: "button", class: "link-button", text: "Copy answer",
+    onclick: () => copyText(r.answer, copy) });
+  const sources = renderSources(r.sources, { graph: false });
+  groupSources(sources, citedSources(r.answer, r.sources.length));
+  const at = r.created_at || r.at;
+  return el("details", { class: "saved-item" },
+    el("summary", {},
+      el("span", { class: "q", text: r.question }),
+      el("span", { class: "where" }, el("span", { text: r.repoName || state.demo?.name || "" }),
+        el("time", { datetime: at, text: `Asked ${formatDate(at) || "earlier"}` }))),
+    el("div", { class: "answer" },
+      body,
+      el("div", { class: "meta" },
+        el("span", { class: "by" }, "Answered by", el("span", { class: "measured", text: r.model || r.backend || "" })),
+        el("span", { class: "actions" },
+          r.id ? el("button", { type: "button", class: "link-button", text: "Show here",
+            onclick: () => { $("#saved").close(); restoreHistory(r); } })
+            : el("button", { type: "button", class: "link-button", text: "Open repo", onclick: () => openSavedRepo(r) }),
+          copy,
+          r.id ? shareControls(r.id, state.demo, r.share) : null,
+          r.id ? feedbackButtons(r.id, r.rating) : null)),
+      sources));
+}
+
+async function renderSaved() {
   const box = $("#saved-list");
-  if (!list.length) {
-    box.replaceChildren(el("p", { class: "note",
-      text: "No saved answers yet. Use Save under an answer to keep it after the page is closed." }));
+  const note = $("#saved .note");
+  if (!currentUser()) {
+    note.textContent = "Kept for this session only. Sign in with GitHub to keep your questions.";
+    const list = state.sessionHistory;
+    box.replaceChildren(...(list.length ? list.map(historyItemView)
+      : [el("p", { class: "note", text: "No answers yet in this session." })]));
     return;
   }
-  box.replaceChildren(...list.map((r) => {
-    const body = el("div", { class: "body" });
-    body.innerHTML = renderAnswer(r.answer, r.sources.length, renderers);
-    const copy = el("button", { type: "button", class: "link-button", text: "Copy answer",
-      onclick: () => copyText(r.answer, copy) });
-    const sources = renderSources(r.sources, { graph: false });
-    groupSources(sources, citedSources(r.answer, r.sources.length));
-    return el("details", { class: "saved-item" },
-      el("summary", {},
-        el("span", { class: "q", text: r.question }),
-        el("span", { class: "where" }, el("span", { text: r.repoName }),
-          el("time", { datetime: r.savedAt, text: `Saved ${formatDate(r.savedAt) || "earlier"}` }))),
-      el("div", { class: "answer" },
-        body,
-        el("div", { class: "meta" },
-          el("span", { class: "by" }, "Answered by", el("span", { class: "measured", text: r.backend })),
-          el("span", { class: "actions" },
-            el("button", { type: "button", class: "link-button", text: "Open repo",
-              onclick: () => openSavedRepo(r) }), copy,
-            el("button", { type: "button", class: "link-button danger", text: "Delete",
-              onclick: () => { storeSaved(loadSaved().filter((x) => x.id !== r.id)); updateSavedCount(); renderSaved(); } }))),
-        sources));
-  }));
+  note.textContent = `Your questions about ${state.demo?.name || "this repository"}, kept on your account.`;
+  box.replaceChildren(el("p", { class: "note", text: "Loading…" }));
+  const h = await loadHistory(state.demo?.id);
+  const items = h?.items || [];
+  const more = h?.next ? el("button", { type: "button", class: "secondary small", text: "Load more",
+    onclick: async () => { await loadHistory(state.demo.id, { more: true }); renderSaved(); } }) : null;
+  box.replaceChildren(...(items.length ? items.map(historyItemView)
+    : [el("p", { class: "note", text: "No questions yet. Ask one and it will be kept here." })]), ...(more ? [more] : []));
 }
 
 async function openSavedRepo(record) {
@@ -2131,9 +2236,9 @@ function pulseNode(chunkId) {
 }
 
 // ── the last answers' subgraphs: thumbnails down the graph's left edge ───────
-function rememberAnswer(repoId, turn) {
+function rememberAnswer(repoId, turn, questionId = null) {
   const list = state.history.get(repoId) || state.history.set(repoId, []).get(repoId);
-  const entry = { turn, evidence: evidence(), thumb: snapshotGraph(), n: turn.dataset.turn };
+  const entry = { turn, evidence: evidence(), thumb: snapshotGraph(), n: turn.dataset.turn, qid: questionId };
   list.unshift(entry);
   if (list.length > HISTORY_LIMIT) list.length = HISTORY_LIMIT;
   renderThumbs();
@@ -2172,13 +2277,80 @@ function snapshotGraph() {
 }
 
 function renderThumbs() {
-  const list = state.history.get(state.demo?.id) || [];
-  $("#thumbs").replaceChildren(...list.map((h) => {
+  const live = state.history.get(state.demo?.id) || [];
+  const seen = new Set(live.map((h) => h.qid).filter(Boolean));
+  // signed in: earlier answers from the server's history, redrawn from their stored subgraph
+  const stored = (state.historyMeta.get(state.demo?.id)?.items || []).filter((q) => !seen.has(q.id))
+    .slice(0, Math.max(0, HISTORY_LIMIT - live.length));
+  $("#thumbs").replaceChildren(...live.map((h) => {
     const q = h.turn.querySelector(".question")?.textContent || "";
     return el("button", { type: "button", class: "thumb", "aria-pressed": String(h.evidence.answerTurn === state.answerTurn && state.graphMode !== "full"),
       title: `Show this answer's graph again: ${middleTruncateName(q, 60)}`, "aria-label": `Answer ${h.n}: ${q}`,
       onclick: () => restoreAnswer(h) }, h.thumb.cloneNode(true), el("span", { class: "n", text: `#${h.n}` }));
+  }), ...stored.map((item) => {
+    const turn = $(`#conversation .turn[data-question="${item.id}"]`);
+    return el("button", { type: "button", class: "thumb", "aria-pressed": String(Boolean(turn) && turn === state.answerTurn && state.graphMode !== "full"),
+      title: `Show this earlier answer and its graph: ${middleTruncateName(item.question, 60)}`,
+      "aria-label": `Earlier answer: ${item.question}`, onclick: () => restoreHistory(item) },
+    thumbFromIds(item.subgraph || [], item.hops || {}), el("span", { class: "n", text: "earlier" }));
   }));
+}
+
+/** A thumbnail of a stored answer: its subgraph's nodes where the graph has them now, else in rings by hop. */
+function thumbFromIds(ids, hops) {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  const W = 64, H = 48, pad = 6;
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const placed = new Map((graphView?.nodes || []).filter((n) => Number.isFinite(n.x)).map((n) => [n.id, n]));
+  let pts = ids.map((id) => placed.get(id)).filter(Boolean);
+  if (pts.length < Math.min(2, ids.length)) {
+    pts = ids.map((id, i) => { const r = 4 + 8 * (hops[id] ?? 1); return { id, x: Math.cos(i * 2.4) * r, y: Math.sin(i * 2.4) * r }; });
+  }
+  if (!pts.length) return svg;
+  const xs = pts.map((n) => n.x), ys = pts.map((n) => n.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const sx = (x) => pad + ((x - x0) / Math.max(1, x1 - x0)) * (W - 2 * pad);
+  const sy = (y) => pad + ((y - y0) / Math.max(1, y1 - y0)) * (H - 2 * pad);
+  const at = new Map(pts.map((n) => [n.id, n]));
+  for (const l of state.graph?.links || []) {
+    const a = at.get(typeof l.source === "object" ? l.source.id : l.source), b = at.get(typeof l.target === "object" ? l.target.id : l.target);
+    if (!a || !b) continue;
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", sx(a.x).toFixed(1)); line.setAttribute("y1", sy(a.y).toFixed(1));
+    line.setAttribute("x2", sx(b.x).toFixed(1)); line.setAttribute("y2", sy(b.y).toFixed(1));
+    svg.append(line);
+  }
+  for (const n of pts) {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", sx(n.x).toFixed(1)); c.setAttribute("cy", sy(n.y).toFixed(1));
+    const hop = hops[n.id];
+    c.setAttribute("r", hop === undefined ? "1.6" : "2.6");
+    if (hop !== undefined) c.setAttribute("data-hop", Math.min(hop, 3));
+    svg.append(c);
+  }
+  return svg;
+}
+
+/** The evidence (graph highlight) of a stored answer. */
+function evidenceOf(item, turn) {
+  const sources = item.sources || [];
+  return { retrieved: new Map(sources.map((s) => [s.chunk_id, s.hop])), sids: new Map(sources.map((s) => [s.chunk_id, s.id])),
+           cited: new Set(sources.filter((s) => s.cited).map((s) => s.chunk_id)), answerTurn: turn, sources };
+}
+
+/** Show an earlier answer: in the conversation (added if it isn't there) and on the graph. */
+function restoreHistory(item) {
+  let turn = $(`#conversation .turn[data-question="${item.id}"]`);
+  if (!turn) {
+    const view = historyItemView(item);
+    const answer = view.querySelector(".answer");
+    turn = el("article", { class: "turn earlier", "data-turn": `h${item.id}`, "data-question": item.id },
+      el("div", { class: "question", text: item.question }), answer);
+    $("#conversation").append(turn);
+    syncRepoCard();
+  }
+  restoreAnswer({ turn, evidence: evidenceOf(item, turn) });
 }
 
 function restoreAnswer(h) {
@@ -2571,7 +2743,10 @@ function renderRepos() {
   const q = $("#repos-search").value.trim().toLowerCase();
   const match = (r) => !q || r.name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q);
   const byStatus = (r) => state.reposFilter === "all" || repoStatus(r, state.jobs.get(r.id)).key === state.reposFilter;
-  const mine = state.userRepos.filter(match).filter(byStatus);
+  // a repo being indexed for the first time has no row yet: show it from its job
+  const pending = [...state.jobs.values()].filter((j) => isActive(j.raw) && !state.userRepos.some((r) => r.id === j.repo_id))
+    .map((j) => ({ id: j.repo_id, name: j.name, languages: {}, built: "", description: j.message }));
+  const mine = [...pending, ...state.userRepos].filter(match).filter(byStatus);
   const rows = $("#repos-rows");
   const empty = $("#repos-empty");
   rows.replaceChildren(...mine.map((r) => repoRow(r)));
@@ -2581,7 +2756,7 @@ function renderRepos() {
     : !state.userRepos.length ? "No repositories yet. Use + Add repo to index one from GitHub."
     : q ? `No repository matches “${$("#repos-search").value.trim()}”.` : `No ${state.reposFilter === "update" ? "repositories with an update available" : `${state.reposFilter} repositories`}.`;
   $("#repos-table").hidden = !mine.length;
-  $("#repos-lead").textContent = signedIn ? `${plural(state.userRepos.length, "repository", "repositories")} on your account.` : "The repositories you added, and where their indexes stand.";
+  $("#repos-lead").textContent = signedIn ? `${plural(state.userRepos.length + pending.length, "repository", "repositories")} on your account${pending.length ? `, ${pending.length} being indexed` : ""}.` : "The repositories you added, and where their indexes stand.";
   $("#demos-rows").replaceChildren(...state.demos.filter(match).map((d) => repoRow(d, { demo: true })));
 }
 
@@ -2641,6 +2816,7 @@ async function start() {
   renderTiles(null);
   renderNodePanel(null);
   state.userRepos = currentUser() ? await loadUserRepos() : [];   // your repositories need you signed in
+  syncJobs();                                                       // indexing jobs, from the server
   document.querySelectorAll(".pill-nav button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view, { focus: true })));
   $("#layout-toggle").addEventListener("click", () => {
     state.graphLayout = state.graphLayout === "rings" ? "free" : "rings";

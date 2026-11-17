@@ -1,8 +1,11 @@
 """
-Demo repositories: building their indexes (offline) and loading them (server).
+Repositories the server answers about.
 
+Curated demos are built offline and loaded from disk:
     <data_dir>/demos/<demo_id>/demo.json      name, url, sha, questions, stats
     <data_dir>/demos/<demo_id>/<version>/     saved index (see coderag/persist.py)
+Visitor repos are rows in the database (`repos`), their index on disk at
+    <data_dir>/repos/<repo_id>/<version>/
 """
 
 import json
@@ -196,13 +199,16 @@ def load_demos(data_dir, embedder=None):
 
 class Repos:
     """
-    Curated demos (always loaded) plus repos indexed by visitors, which live in
-    <data_dir>/repos/<repo_id>/ and are loaded on demand. At most `max_loaded`
-    visitor repos stay in memory (least recently used are unloaded); at most
-    `max_stored` stay on disk (oldest are deleted).
+    Curated demos (always loaded, from <data_dir>/demos, built offline) plus
+    repos indexed by visitors: a row each in the `repos` table (coderag/db),
+    with the FAISS index on disk at its index_path (<data_dir>/repos/<id>/<preset>).
+    Visitor repos are loaded on demand; at most `max_loaded` stay in memory (least
+    recently used are unloaded) and at most `max_stored` are kept (oldest removed).
+    Demos get a row too (kind "demo") so questions about them can reference it.
     """
 
-    def __init__(self, data_dir, demos, embedder=None, max_loaded=6, max_stored=100):
+    def __init__(self, data_dir, demos, embedder=None, max_loaded=6, max_stored=100, db=None):
+        self.data_dir = data_dir
         self.root = os.path.join(data_dir, "repos")
         self.demos = demos
         self.embedder = embedder
@@ -210,29 +216,45 @@ class Repos:
         self.max_stored = max_stored
         self.loaded = OrderedDict()
         self.lock = threading.RLock()
+        if db is None:
+            from ..db import Database, default_url
+            db = Database(default_url(data_dir))
+            db.upgrade()
+        self.db = db
 
     def directory(self, repo_id):
         return os.path.join(self.root, repo_id)
 
+    def _row(self, repo_id):
+        """The visitor repo's row (detached), or None."""
+        from ..db.models import Repo
+        if not _REPO_ID.match(repo_id or ""):
+            return None
+        with self.db.session() as s:
+            row = s.get(Repo, repo_id)
+            return row if row is not None and row.kind == "user" else None
+
     def exists(self, repo_id):
-        return repo_id in self.demos or os.path.exists(
-            os.path.join(self.directory(repo_id), "demo.json"))
+        return repo_id in self.demos or self._row(repo_id) is not None
 
     def summary(self, repo_id):
-        """info()-like dict from demo.json without loading the index, or None."""
+        """info()-like dict without loading the index, or None."""
         loaded = self.demos.get(repo_id) or self.loaded.get(repo_id)
         if loaded is not None:
             return loaded.info()
-        path = os.path.join(self.directory(repo_id), "demo.json")
-        if not _REPO_ID.match(repo_id) or not os.path.exists(path):
-            return None
-        with open(path, encoding="utf-8") as f:
-            meta = json.load(f)
-        keys = ("id", "name", "description", "url", "sha", "root", "questions", "stats", "built",
-                "versions", "kind", "ref", "private")
-        built_with = meta.get("indexed_with") or (meta.get("versions") or [""])[-1]
-        return {**{k: meta.get(k) for k in keys}, "languages": (meta.get("stats") or {}).get("languages", {}),
-                "indexed_with": built_with, "bridges_checked": bridges_checked(built_with)}
+        row = self._row(repo_id)
+        return row_info(row) if row is not None else None
+
+    def summaries(self, repo_ids):
+        """{repo_id: summary} for the ones that exist (one query for the rows)."""
+        from ..db.models import Repo
+        out = {i: self.summary(i) for i in repo_ids if i in self.demos or i in self.loaded}
+        rest = [i for i in repo_ids if i not in out and _REPO_ID.match(i)]
+        if rest:
+            with self.db.session() as s:
+                for row in s.query(Repo).filter(Repo.id.in_(rest), Repo.kind == "user"):
+                    out[row.id] = row_info(row)
+        return out
 
     def private(self, repo_id):
         """True if `repo_id` is a visitor repo that is private on GitHub (read without loading it)."""
@@ -249,29 +271,110 @@ class Repos:
             if repo_id in self.loaded:
                 self.loaded.move_to_end(repo_id)
                 return self.loaded[repo_id]
-            if not os.path.exists(os.path.join(self.directory(repo_id), "demo.json")):
+            row = self._row(repo_id)
+            if row is None or not os.path.isfile(os.path.join(row.index_path, "meta.json")):
                 return None
-            self._keep(repo_id, load_repo_dir(self.directory(repo_id), self.embedder))
+            agent = RAGCodebaseAgent.load(row.index_path, load_llm=False, verbose=False, embedder=self.embedder)
+            self._keep(repo_id, demo_of(row, agent))
             return self.loaded[repo_id]
 
-    def add(self, demo):
-        """Register a freshly indexed visitor repo and enforce the disk limit."""
+    def add(self, demo, index_path):
+        """Record a freshly indexed visitor repo (insert or replace its row) and enforce the limit."""
+        from ..db.models import Repo, utcnow
+        from ..db.legacy import parse_time
         with self.lock:
+            with self.db.session() as s:
+                row = s.get(Repo, demo.id) or Repo(id=demo.id, kind="user", created_at=utcnow())
+                row.kind, row.name = "user", demo.name
+                row.owner = demo.name.split("/")[0] if "/" in demo.name else ""
+                row.url, row.commit, row.ref = demo.url, demo.sha, demo.ref
+                row.description, row.private = demo.description, bool(demo.private)
+                row.indexed_with = demo.indexed_with or (demo.versions[-1] if demo.versions else "")
+                row.stats = demo.stats or {}
+                row.languages = (demo.stats or {}).get("languages", {})
+                row.facts = demo.facts or {}
+                row.index_path = index_path
+                row.owner_id = demo.owner_id if row.owner_id is None else row.owner_id
+                row.built_at = parse_time(demo.built) or utcnow()
+                s.add(row)
             self._keep(demo.id, demo)
-            os.makedirs(self.root, exist_ok=True)
-            stored = sorted((d for d in os.listdir(self.root)
-                             if os.path.exists(os.path.join(self.root, d, "demo.json"))),
-                            key=lambda d: os.path.getmtime(os.path.join(self.root, d, "demo.json")))
+            with self.db.session() as s:
+                stored = [r.id for r in s.query(Repo).filter_by(kind="user").order_by(Repo.created_at.asc())]
             for old in stored[:max(len(stored) - self.max_stored, 0)]:
                 if old != demo.id:
-                    self.loaded.pop(old, None)
-                    rmtree(os.path.join(self.root, old))
+                    self.remove(old)
+
+    def remove(self, repo_id):
+        """Delete a visitor repo: its row (questions and shares go with it), user links and index files."""
+        from ..db.models import Repo, UserRepo
+        if repo_id in self.demos or not _REPO_ID.match(repo_id or ""):
+            return False
+        with self.lock:
+            with self.db.session() as s:
+                row = s.get(Repo, repo_id)
+                if row is not None and row.kind == "user":
+                    s.delete(row)
+                s.query(UserRepo).filter_by(repo_id=repo_id).delete()
+            self.loaded.pop(repo_id, None)
+            if os.path.isdir(self.directory(repo_id)):
+                rmtree(self.directory(repo_id))
+        return True
+
+    def register_demos(self):
+        """A row per curated demo (kind "demo"), so questions about a demo can point at it."""
+        from ..db.models import Repo, utcnow
+        with self.db.session() as s:
+            for demo in self.demos.values():
+                row = s.get(Repo, demo.id) or Repo(id=demo.id, created_at=utcnow())
+                row.kind, row.name, row.url, row.commit = "demo", demo.name, demo.url, demo.sha
+                row.description = demo.description
+                row.indexed_with = demo.versions[-1] if demo.versions else ""
+                row.stats, row.languages = demo.stats or {}, demo.languages() if demo.agents else {}
+                row.facts = demo.facts or {}
+                s.add(row)
+
+    def import_legacy(self):
+        """Rows for visitor repos saved on disk before the database (idempotent)."""
+        from ..db.legacy import repo_rows
+        from ..db.models import Repo, User
+        with self.db.session() as s:
+            known = {r.id for r in s.query(Repo.id)}
+            users = {u.id for u in s.query(User.id)}
+            for data in repo_rows(self.data_dir):
+                if data["id"] not in known:
+                    if data["owner_id"] not in users:
+                        data["owner_id"] = None
+                    s.add(Repo(**data))
 
     def _keep(self, repo_id, demo):
         self.loaded[repo_id] = demo
         self.loaded.move_to_end(repo_id)
         while len(self.loaded) > self.max_loaded:
             self.loaded.popitem(last=False)
+
+
+def _iso(value):
+    return value.replace(tzinfo=timezone.utc).isoformat(timespec="seconds") if value else ""
+
+
+def row_info(row):
+    """What Demo.info() gives, from a repos row (no index loaded: no counts)."""
+    version = os.path.basename(row.index_path.rstrip("/\\")) if row.index_path else ""
+    built_with = row.indexed_with or version
+    return {"id": row.id, "name": row.name, "description": row.description, "url": row.url, "sha": row.commit,
+            "root": "", "questions": [], "stats": row.stats or {}, "built": _iso(row.built_at),
+            "versions": [version] if version else [], "kind": row.kind, "ref": row.ref, "private": row.private,
+            "languages": row.languages or {}, "indexed_with": built_with,
+            "bridges_checked": bridges_checked(built_with), "facts": row.facts or {}}
+
+
+def demo_of(row, agent):
+    """The in-memory Demo for a visitor repo row and its loaded index."""
+    version = os.path.basename(row.index_path.rstrip("/\\"))
+    return Demo(id=row.id, name=row.name, description=row.description, url=row.url, sha=row.commit,
+                stats=row.stats or {}, built=_iso(row.built_at), kind="user", ref=row.ref,
+                owner_id=row.owner_id, private=row.private, facts=row.facts or {},
+                indexed_with=row.indexed_with, agents={version: agent})
 
 
 # owner__repo__sha12, lowercase: also guards against path tricks in URLs

@@ -32,7 +32,7 @@ from ..config import get_config
 from ..gitfetch import SHA, FetchError, fetch_commit, parse_github_url, resolve_sha, rmtree
 from ..config import VERSIONS
 from ..languages import language_for
-from .registry import Demo, repo_id_for, repo_stats, write_repo_meta
+from .registry import Demo, repo_id_for, repo_stats
 from .sources import indexed_files
 
 log = logging.getLogger("coderag.web.jobs")
@@ -69,11 +69,27 @@ class IndexJob:
     private: bool = False            # only visible with that user's token
     token: str = field(default="", repr=False)      # never in public() or logs; cleared when done
     reindex: bool = False            # rebuild an indexed repo with the current default version
+    created_at: str = ""             # ISO, for the job list
 
     def public(self, queue_position=0):
         return {"job_id": self.id, "repo_id": self.repo_id, "name": self.name, "sha": self.sha,
                 "status": self.status, "progress": round(self.progress, 3),
-                "message": self.message, "error": self.error, "queue_position": queue_position}
+                "message": self.message, "error": self.error, "queue_position": queue_position,
+                "kind": "reindex" if self.reindex else "index", "created_at": self.created_at}
+
+
+# the jobs table keeps the coarse status; the stage (fetching, embedding ...) is its own column
+def _db_status(status):
+    return {"queued": "queued", "ready": "done", "failed": "failed"}.get(status, "running")
+
+
+def job_from_row(row):
+    """An IndexJob view of a jobs row (a job from before a restart, or another worker's)."""
+    status = {"queued": "queued", "done": "ready", "failed": "failed"}.get(row.status, row.stage or "fetching")
+    created = row.created_at.replace(tzinfo=timezone.utc).isoformat(timespec="seconds") if row.created_at else ""
+    return IndexJob(id=row.id, repo_id=row.repo_id, name=row.repo_name, url=row.url, sha=row.commit,
+                    ref=row.ref, status=status, progress=(row.progress or 0) / 100, message=row.message,
+                    error=row.error, owner_id=row.user_id, reindex=row.kind == "reindex", created_at=created)
 
 
 def source_language(name):
@@ -121,8 +137,10 @@ def save_sources(agent, clone, cache_dir):
 
 class Indexer:
 
-    def __init__(self, settings, repos, embedder, fetch=fetch_commit, resolve=resolve_sha, facts=None):
+    def __init__(self, settings, repos, embedder, fetch=fetch_commit, resolve=resolve_sha, facts=None,
+                 db=None):
         self.settings = settings
+        self.db = db or repos.db                 # jobs are rows in the `jobs` table
         self.repos = repos
         self.embedder = embedder
         self.fetch = fetch
@@ -167,7 +185,7 @@ class Indexer:
             if self.repos.exists(repo_id):
                 job = IndexJob(id=uuid.uuid4().hex, repo_id=repo_id, name=name,
                                url=f"https://github.com/{owner}/{repo}", sha=sha, ref=ref or "",
-                               status="ready", progress=1.0, message="Already indexed")
+                               status="ready", progress=1.0, message="Already indexed", owner_id=owner_id)
                 self._remember(job)
                 return job, False
             if repo_id in self.inflight:
@@ -218,14 +236,61 @@ class Indexer:
             return job, True
 
     def _remember(self, job):
+        """Keep a new job in memory (the worker updates it) and insert its row."""
+        from ..db.models import Job, utcnow
+        now = utcnow()
+        job.created_at = now.replace(tzinfo=timezone.utc).isoformat(timespec="seconds")
+        with self.db.session() as s:
+            s.add(Job(id=job.id, repo_id=job.repo_id, repo_name=job.name, user_id=job.owner_id,
+                      kind="reindex" if job.reindex else "index", status=_db_status(job.status),
+                      stage=job.status, progress=round(job.progress * 100), message=job.message,
+                      error=job.error, url=job.url, commit=job.sha, ref=job.ref, created_at=now,
+                      finished_at=now if job.status in ("ready", "failed") else None))
         self.jobs[job.id] = job
-        if len(self.jobs) > 500:                     # forget the oldest finished jobs
+        if len(self.jobs) > 500:                     # forget the oldest finished jobs (their rows stay)
             for old in sorted(self.jobs.values(), key=lambda j: j.created)[:100]:
                 if old.status in ("ready", "failed"):
                     self.jobs.pop(old.id, None)
 
+    def _persist(self, job, started=False, finished=False):
+        from ..db.models import Job, utcnow
+        with self.db.session() as s:
+            row = s.get(Job, job.id)
+            if row is None:
+                return
+            row.status, row.stage = _db_status(job.status), job.status
+            row.progress, row.message, row.error = round(job.progress * 100), job.message, job.error
+            if started:
+                row.started_at = utcnow()
+            if finished:
+                row.finished_at = utcnow()
+
     def get(self, job_id):
-        return self.jobs.get(job_id)
+        """The job: in memory while this process runs it, else its row (None if unknown)."""
+        if job_id in self.jobs:
+            return self.jobs[job_id]
+        from ..db.models import Job
+        with self.db.session() as s:
+            row = s.get(Job, job_id) if isinstance(job_id, str) and len(job_id) <= 32 else None
+            return job_from_row(row) if row is not None else None
+
+    def for_user(self, user_id, limit=50):
+        """The user's jobs, newest first (public dicts)."""
+        from ..db.models import Job
+        with self.db.session() as s:
+            rows = (s.query(Job).filter_by(user_id=user_id).order_by(Job.created_at.desc())
+                    .limit(limit).all())
+            jobs = [self.jobs.get(r.id) or job_from_row(r) for r in rows]
+        return [j.public(self.position(j)) for j in jobs]
+
+    def recover(self):
+        """At start-up: jobs a previous process left queued or running can't finish; mark them failed."""
+        from ..db.models import Job, utcnow
+        with self.db.session() as s:
+            stale = s.query(Job).filter(Job.status.in_(("queued", "running"))).all()
+            for row in stale:
+                row.status, row.stage, row.error, row.finished_at = "failed", "failed", "server restarted", utcnow()
+            return len(stale)
 
     def position(self, job):
         """1-based place in the queue for a queued job, else 0."""
@@ -259,7 +324,10 @@ class Indexer:
                 self.queue.task_done()
 
     def _set(self, job, status, progress, message):
+        changed = status != job.status or abs(progress - job.progress) >= 0.01
         job.status, job.progress, job.message = status, progress, message
+        if changed:                                  # embedding reports often; write at most every 1%
+            self._persist(job, started=status == "fetching")
 
     def run(self, job):
         s = self.settings
@@ -305,9 +373,8 @@ class Indexer:
                 "owner_id": job.owner_id, "private": job.private,
                 "indexed_with": default, "facts": getattr(agent, "facts", {}) or {},
             }
-            write_repo_meta(out, {**meta, "versions": [config.name]})
-            # the in-memory record matches what a reload from disk would give
-            self.repos.add(Demo(**meta, agents={config.name: agent}))
+            # the repos row (and the loaded copy) match what a reload would give
+            self.repos.add(Demo(**meta, agents={config.name: agent}), os.path.join(out, config.name))
             done = (f"Re-indexed with {default}: " if job.reindex else "Indexed ") + \
                 f"{stats['chunks']:,} chunks from {stats['files']:,} files"
         except (IndexFailure, FetchError) as e:
@@ -323,6 +390,7 @@ class Indexer:
             if job.error:
                 job.status = "failed"
             else:
-                self._set(job, "ready", 1.0, done)
+                job.status, job.progress, job.message = "ready", 1.0, done
+            self._persist(job, finished=True)
             with self.lock:
                 self.inflight.pop(job.repo_id, None)

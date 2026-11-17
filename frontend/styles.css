@@ -727,3 +727,24 @@ svg.key-line--bridge line { stroke: var(--cat-bridge); stroke-width: var(--graph
   .skeleton, .skeleton-line, .tile .value.pending, .repo-head-skeleton span, .repo-option.skeleton span, .repos-table tr.skeleton-row td span { animation: none; }
   .primary, .secondary, .filter-pill, .icon-button, .link-button, .chip, .send, .switcher, .pill-nav button, .also > summary::before, .progress i, .source, .thumb { transition: none; }
 }
+
+/* ── history, share and feedback on answers ─────────────────────────────── */
+.answer .actions .share { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs) var(--space-sm); }
+.share-status { color: var(--color-muted); font-size: var(--text-sm); }
+.share-status:empty { display: none; }
+.answer .feedback { display: inline-flex; gap: var(--space-3xs); }
+.answer .feedback .icon-button[aria-pressed="true"] { color: var(--color-ink); background: var(--color-card-2); }
+.turn.earlier .question::before { content: "Earlier · "; color: var(--color-muted); }
+
+/* ── the shared answer page (/a/<slug>) ─────────────────────────────────── */
+.shared-main { display: block; max-width: 52rem; margin: 0 auto; padding: var(--space-lg) var(--space-md); }
+.shared-card { display: grid; gap: var(--space-md); padding: var(--space-lg); }
+.shared-card .eyebrow { color: var(--color-muted); font-size: var(--text-sm); }
+.shared-card .question { justify-self: start; }
+.shared-sources h2 { font-size: var(--text-md); margin-bottom: var(--space-xs); }
+.shared-sources ol { display: grid; gap: var(--space-sm); margin: 0; padding: 0; list-style: none; }
+.shared-source .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: var(--space-xs); }
+.shared-source .where { color: var(--color-muted); font-family: var(--font-measured); font-size: var(--text-code); }
+.shared-source .snippet { margin: var(--space-xs) 0 0; overflow-x: auto; padding: var(--space-sm); border-radius: var(--radius-small);
+                          background: var(--color-code-inline); font-size: var(--text-code); }
+.private-note { padding: var(--space-xs) var(--space-sm); border-radius: var(--radius-small); background: var(--color-card-2); }

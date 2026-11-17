@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Shared answer · coderag</title>
+  <meta name="description" content="An answer about a codebase, shared from coderag. Read-only.">
+  <meta name="robots" content="noindex">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c2026'/><circle cx='11' cy='12' r='3.5' fill='%23eef1f5'/><circle cx='22' cy='9' r='2.5' fill='%23eef1f5'/><circle cx='20' cy='22' r='3.5' fill='%23eef1f5'/><path d='M11 12L22 9M11 12L20 22' stroke='%23eef1f5' stroke-width='1.6'/></svg>">
+  <script>
+    (function () {
+      var choice = "light";
+      try { choice = JSON.parse(localStorage.getItem("coderag.settings") || "{}").theme || "light"; } catch (e) {}
+      var dark = choice === "dark" || (choice === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches);
+      document.documentElement.setAttribute("data-mode", dark ? "dark" : "light");
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Host+Grotesk:wght@400;500&family=Atkinson+Hyperlegible+Mono:wght@400;500&display=swap">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+          integrity="sha384-/TQbtLCAerC3jgaim+N78RZSDYV7ryeoBCVqTuzRrFec2akfBkHS7ACQ3PQhvMVi" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+          integrity="sha384-+VfUPEb0PdtChMwmBcBmykRMDd+v6D/oFmB3rZM/puCMDYcIvF968OimRh4KQY9a" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@highlightjs/cdn-assets@11.9.0/highlight.min.js"
+          integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
+  <script type="module" src="/answer.js"></script>
+</head>
+<body class="app-body shared-answer">
+  <div class="app">
+    <header class="topbar">
+      <a class="brand" href="/" aria-label="coderag home">
+        <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><circle cx="11" cy="12" r="3.5"/><circle cx="22" cy="9" r="2.5"/><circle cx="20" cy="22" r="3.5"/><path d="M11 12L22 9M11 12L20 22"/></svg>
+        <span>coderag</span>
+      </a>
+    </header>
+    <main class="main shared-main" id="main">
+      <article id="shared" class="card shared-card" aria-busy="true">
+        <p class="note">Loading the answer…</p>
+      </article>
+    </main>
+  </div>
+</body>
+</html>

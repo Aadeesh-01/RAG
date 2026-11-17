@@ -14,7 +14,7 @@ from coderag.gitfetch import FetchError  # noqa: E402
 from coderag.web.app import create_app  # noqa: E402
 from coderag.web.limits import RateLimiter  # noqa: E402
 from coderag.web.settings import Settings  # noqa: E402
-from conftest import AUTH_SETTINGS, HashEncoder, SAMPLE_REPO, sign_in  # noqa: E402
+from conftest import AUTH_SETTINGS, HashEncoder, SAMPLE_REPO, repo_row, sign_in  # noqa: E402
 
 SHA = {"pkg": "a" * 40, "other": "b" * 40, "empty": "c" * 40, "big": "d" * 40}
 PRIVATE = {"secret": "e" * 40}              # visible only with TOKEN
@@ -98,7 +98,10 @@ def test_index_then_ask(tmp_path):
     names = [n["qname"] for n in client.get(f"/api/repos/{repo_id}/graph").json()["nodes"]]
     assert not any(q.startswith("tests/") for q in names)
     assert not os.listdir(tmp_path / ".clones")
-    assert (tmp_path / "repos" / repo_id / "demo.json").exists()
+    row = repo_row(app, repo_id)                            # the registry is the database now
+    assert row.kind == "user" and row.commit == "a" * 40 and row.indexed_with == "v10"
+    assert os.path.isfile(os.path.join(row.index_path, "meta.json"))
+    assert row.index_path == str(tmp_path / "repos" / repo_id / "v10")
 
 
 def test_same_commit_is_not_indexed_twice(tmp_path):
@@ -184,8 +187,9 @@ def test_private_repo_uses_the_token_and_is_only_for_people_who_added_it(tmp_pat
     repo_id = job["repo_id"]
     assert github.tokens[-1] == TOKEN                       # gitfetch got the user's token
     assert app.state.indexer.get(job["job_id"]).token == ""     # and the job forgot it
-    meta = open(tmp_path / "repos" / repo_id / "demo.json", encoding="utf-8").read()
-    assert TOKEN not in meta and '"private": true' in meta
+    row = repo_row(app, repo_id)
+    assert row.private is True
+    assert TOKEN not in repr((row.stats, row.facts, row.url, row.description, row.index_path))
 
     info = client.get(f"/api/repos/{repo_id}").json()
     assert info["private"] is True
@@ -221,7 +225,13 @@ def test_repo_list_follows_the_account_not_the_browser(tmp_path):
     sign_in(elsewhere, app, token=TOKEN)
     assert [r["id"] for r in elsewhere.get("/api/repos/mine").json()] == [repo_id]
 
-    # × takes it off the list; the index stays, and opening it again puts it back
+    # another user can keep a public repo too; demos and unknown ids aren't list entries
+    bob = TestClient(app)
+    sign_in(bob, app, github_id=2, login="bob", token="gho_bob")
+    assert bob.put(f"/api/repos/mine/{repo_id}").status_code == 200
+    assert bob.put("/api/repos/mine/a__nope__" + "0" * 12).status_code == 404
+
+    # × takes it off the list; while someone else has it the index stays, and opening it puts it back
     assert client.delete(f"/api/repos/mine/{repo_id}").status_code == 204
     assert elsewhere.get("/api/repos/mine").json() == []
     assert client.get(f"/api/repos/{repo_id}").status_code == 200
@@ -229,11 +239,11 @@ def test_repo_list_follows_the_account_not_the_browser(tmp_path):
     assert r.status_code == 200 and r.json()["id"] == repo_id
     assert [x["id"] for x in client.get("/api/repos/mine").json()] == [repo_id]
 
-    # another user can keep a public repo too; demos and unknown ids aren't list entries
-    bob = TestClient(app)
-    sign_in(bob, app, github_id=2, login="bob", token="gho_bob")
-    assert bob.put(f"/api/repos/mine/{repo_id}").status_code == 200
-    assert bob.put("/api/repos/mine/a__nope__" + "0" * 12).status_code == 404
+    # when the last user removes it, its index is deleted
+    assert bob.delete(f"/api/repos/{repo_id}/mine").json()["index_deleted"] is False
+    assert client.delete(f"/api/repos/{repo_id}/mine").json()["index_deleted"] is True
+    assert client.get(f"/api/repos/{repo_id}").status_code == 404
+    assert not (tmp_path / "repos" / repo_id).exists()
 
     anon = TestClient(app)
     assert anon.put(f"/api/repos/mine/{repo_id}").status_code == 401
@@ -247,8 +257,10 @@ def test_a_private_repo_cannot_be_kept_by_someone_without_access(tmp_path):
     sign_in(bob, app, github_id=2, login="bob", token="gho_bob")
     assert bob.put(f"/api/repos/mine/{repo_id}").status_code == 404
     assert bob.get("/api/repos/mine").json() == [] and bob.get(f"/api/repos/{repo_id}").status_code == 404
-    # the owner taking it off their list also ends their access, until they add it again
+    # the owner taking it off their list ends their access; nobody else has it, so the index goes,
+    # and adding it again indexes it again
     assert client.delete(f"/api/repos/mine/{repo_id}").status_code == 204
     assert client.get(f"/api/repos/{repo_id}").status_code == 404
-    assert client.post("/api/repos", json={"url": "corp/secret"}).status_code == 200
+    r = client.post("/api/repos", json={"url": "corp/secret"})
+    assert r.status_code == 202 and wait(client, r.json()["job_id"])["status"] == "ready"
     assert client.get(f"/api/repos/{repo_id}").status_code == 200

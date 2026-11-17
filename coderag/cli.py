@@ -187,6 +187,20 @@ def cmd_graph(args):
     print(f"Open {args.output} in a browser.")
 
 
+def cmd_db(args):
+    """Database migrations: upgrade (to the newest schema) or show the current revision."""
+    from .db import Database, default_url, safe_url
+    url = args.database_url or os.environ.get("CODERAG_DATABASE_URL") or default_url(
+        os.environ.get("CODERAG_DATA_DIR", "data"))
+    db = Database(url)
+    if args.action == "upgrade":
+        db.upgrade(args.revision)
+        print(f"{safe_url(db.url)}: at revision {db.current()}")
+    else:
+        print(f"{safe_url(db.url)}: at revision {db.current() or '(none: run `python -m coderag db upgrade`)'}")
+    db.dispose()
+
+
 def build_parser():
     parser = argparse.ArgumentParser(prog="coderag",
                                      description="Code-aware RAG over a Python repository")
@@ -220,6 +234,12 @@ def build_parser():
     _add_index_dir(p)
     _add_llm_options(p)
     p.set_defaults(func=cmd_demo)
+
+    p = sub.add_parser("db", help="database migrations (CODERAG_DATABASE_URL, default sqlite in data/)")
+    p.add_argument("action", choices=["upgrade", "current"])
+    p.add_argument("revision", nargs="?", default="head", help="upgrade target (default: head)")
+    p.add_argument("--database-url", help="instead of CODERAG_DATABASE_URL")
+    p.set_defaults(func=cmd_db)
 
     p = sub.add_parser("graph", help="export the interactive chunk graph HTML")
     p.add_argument("--repo", default=DEFAULT_REPO)

@@ -12,7 +12,7 @@ pytest.importorskip("tree_sitter_language_pack")
 from fastapi.testclient import TestClient  # noqa: E402
 
 from coderag.web.settings import Settings  # noqa: E402
-from conftest import ROOT, SAMPLE_REPO, sign_in  # noqa: E402
+from conftest import ROOT, SAMPLE_REPO, repo_row, sign_in  # noqa: E402
 from test_indexing import FakeGitHub, make_app, wait  # noqa: E402
 
 BRIDGES = os.path.join(ROOT, "tests", "fixtures", "bridges")
@@ -78,19 +78,18 @@ def test_older_repos_are_offered_a_reindex(tmp_path):
     info = client.get(f"/api/repos/{repo_id}").json()
     assert info["versions"] == ["v10"] and info["indexed_with"] == "v10" and "reindex_to" not in info
     assert not (tmp_path / "repos" / repo_id / "v9").exists()               # the old index is replaced
-    meta = json.loads((tmp_path / "repos" / repo_id / "demo.json").read_text())
-    assert meta["versions"] == ["v10"] and meta["indexed_with"] == "v10"
+    row = repo_row(app, repo_id)
+    assert row.indexed_with == "v10" and row.index_path.endswith("v10")
     # the graph is the new index's, not a cached one
     assert any(l["type"] == "bridge" for l in client.get(f"/api/repos/{repo_id}/graph").json()["links"])
 
 
 def test_indexes_from_before_indexed_with_count_by_their_version(tmp_path):
-    client, _, _ = make_app(tmp_path, default_version="v8")
+    client, app, _ = make_app(tmp_path, default_version="v8")
     repo_id = index(client)["repo_id"]
-    meta_path = tmp_path / "repos" / repo_id / "demo.json"
-    meta = json.loads(meta_path.read_text())
-    del meta["indexed_with"]                                             # written before this change
-    meta_path.write_text(json.dumps(meta))
+    from coderag.db.models import Repo
+    with app.state.db.session() as s:                                    # recorded before indexed_with existed
+        s.get(Repo, repo_id).indexed_with = ""
     fresh, _, _ = make_app(tmp_path)
     info = fresh.get(f"/api/repos/{repo_id}").json()
     assert info["indexed_with"] == "v8" and info["reindex_to"] == "v10"

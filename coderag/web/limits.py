@@ -1,12 +1,34 @@
-"""In-memory rate limiting and answer caching (single process, single worker)."""
+"""
+Rate limiting and answer caching, behind small interfaces (RateLimitStore,
+AnswerCacheStore) so a shared backend such as Redis can replace the in-memory
+ones when the server runs as several processes. Today: in memory, one process.
+Neither holds anything that must survive a restart; the database is for that.
+"""
 
 import threading
 import time
+from abc import ABC, abstractmethod
 from collections import OrderedDict, defaultdict, deque
 
 
-class RateLimiter:
-    """Sliding-window limiter: at most `limit` hits per `window` seconds per key."""
+class RateLimitStore(ABC):
+    @abstractmethod
+    def hit(self, key, limit, window):
+        """Record a hit on `key`. Returns (allowed, retry_after_seconds)."""
+
+
+class AnswerCacheStore(ABC):
+    @abstractmethod
+    def get(self, key):
+        """The cached events for `key`, or None."""
+
+    @abstractmethod
+    def put(self, key, events):
+        """Cache the events of a finished answer."""
+
+
+class RateLimiter(RateLimitStore):
+    """In memory: sliding window, at most `limit` hits per `window` seconds per key."""
 
     def __init__(self, clock=time.monotonic):
         self.clock = clock
@@ -26,8 +48,8 @@ class RateLimiter:
             return True, 0.0
 
 
-class AnswerCache:
-    """LRU of finished answer streams, so popular demo questions cost no LLM quota."""
+class AnswerCache(AnswerCacheStore):
+    """In memory: LRU of finished answer streams, so popular demo questions cost no LLM quota."""
 
     def __init__(self, size=500):
         self.size = size

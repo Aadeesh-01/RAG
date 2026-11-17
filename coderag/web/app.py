@@ -7,6 +7,15 @@ FastAPI server for the pre-indexed demo repositories.
     GET  /api/auth/github, /api/auth/github/callback, /api/auth/me; POST /api/auth/logout  (auth.py)
     POST /api/repos                         index a GitHub repo (signed in) with CODERAG_DEFAULT_VERSION
     POST /api/repos/{repo_id}/reindex       rebuild it with the default version (signed in)
+    DELETE /api/repos/{repo_id}/mine        take it off the user's list (its index goes when nobody has it)
+    GET  /api/jobs                          the signed-in user's indexing jobs, newest first
+    GET  /api/repos/{id}/history, POST/DELETE /api/questions/{id}/share, GET /api/shares/{slug},
+    POST /api/questions/{id}/feedback, GET /a/{slug}           (history.py)
+    DELETE /api/me                          delete the account: tokens, history, shares
+
+State lives in the database (coderag/db; CODERAG_DATABASE_URL, default SQLite in
+data_dir), migrated on start. Index files stay on disk; answer cache and rate
+limits stay in memory, behind interfaces (limits.py).
     GET  /api/repos/mine                    repos the signed-in user added (their repo tabs)
     PUT  /api/repos/mine/{repo_id}          add an indexed repo they can open to that list
     DELETE /api/repos/mine/{repo_id}        take it off the list (the index stays)
@@ -43,7 +52,9 @@ from ..config import get_config
 from ..gitfetch import FetchError
 from ..llm import DEFAULT_REMOTE_MODELS, FallbackChain, LLMUnavailable, RemoteLLM
 from ..visualize import graph_data
-from .auth import Auth, GitHubError, GitHubReauth
+from ..db import Database, default_url, safe_url
+from . import history
+from .auth import SESSION_COOKIE, Auth, GitHubError, GitHubReauth
 from .jobs import Indexer, NotAllowed, QueueFull
 from .limits import AnswerCache, RateLimiter, client_ip
 from .live import LiveChecker, candidate_urls
@@ -167,7 +178,7 @@ def _sse(event):
 
 
 def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedder=None,
-               indexer=None, fetch_source=fetch_url, github=None, live=None):
+               indexer=None, fetch_source=fetch_url, github=None, live=None, db=None):
     """
     settings    : Settings (default: from CODERAG_* env vars)
     demos       : {id: Demo} (default: loaded from settings.data_dir)
@@ -177,6 +188,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     fetch_source: callable(url) -> text, for files not saved locally (default: GitHub raw)
     github      : GitHub OAuth client (default: auth.GitHubOAuth from the settings)
     live        : web.live.LiveChecker for "Check if live" (default: real HEAD requests)
+    db          : coderag.db.Database (default: CODERAG_DATABASE_URL, else SQLite in data_dir)
     """
     settings = settings or Settings.from_env()
     if embedder is None:
@@ -184,19 +196,28 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         embedder = SharedEncoder(_load_model(get_config().embed_model))
     if demos is None:
         demos = load_demos(settings.data_dir, embedder=embedder)
+    if db is None:
+        db = Database(settings.database_url or default_url(settings.data_dir))
+    db.upgrade()                                   # migrations on start (the old auth DB included)
+    log.info("database: %s", safe_url(db.url))
     repos = Repos(settings.data_dir, demos, embedder, settings.max_loaded_repos,
-                  settings.max_stored_repos)
-    indexer = indexer or Indexer(settings, repos, embedder)
+                  settings.max_stored_repos, db=db)
+    repos.register_demos()
+    repos.import_legacy()
+    indexer = indexer or Indexer(settings, repos, embedder, db=db)
+    restarted = indexer.recover()
+    if restarted:
+        log.warning("%d indexing job(s) interrupted by a restart were marked failed", restarted)
     llm_factory = llm_factory or LLMFactory(settings)
     limiter = limiter or RateLimiter()
-    auth = Auth(settings, github)
+    auth = Auth(settings, github, db=db)
     live = live or LiveChecker()
     cache = AnswerCache(settings.answer_cache_size)
     graphs = {}
 
     app = FastAPI(title="coderag", version="0.1.0",
                   description="Ask questions about a codebase, with cited sources.")
-    app.state.repos, app.state.indexer, app.state.auth = repos, indexer, auth
+    app.state.repos, app.state.indexer, app.state.auth, app.state.db = repos, indexer, auth, db
     app.add_middleware(RevalidateFrontend)
     app.include_router(auth.router())
 
@@ -334,11 +355,42 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         auth.users.add_repo(user.id, repo_id)
         return info
 
+    def unlink(user_id, repo_id):
+        """Remove a user's link; delete the repo's index when no user has it (never a demo)."""
+        auth.users.remove_repo(user_id, repo_id)
+        if repo_id not in repos.demos and auth.users.users_of(repo_id) == 0 and repos.exists(repo_id):
+            return repos.remove(repo_id)
+        return False
+
+    @app.delete("/api/repos/{repo_id}/mine")
+    def remove_mine(repo_id: str, request: Request):
+        """Take a repo off the user's list; when nobody has it any more its index files are deleted."""
+        user = signed_in(request)
+        if repo_id in repos.demos:
+            raise HTTPException(400, "Demos aren't in anyone's list.")
+        return {"repo_id": repo_id, "index_deleted": unlink(user.id, repo_id)}
+
     @app.delete("/api/repos/mine/{repo_id}", status_code=204)
     def forget_repo(repo_id: str, request: Request):
-        """Take a repo off the user's list. A private one can then be opened again only by re-adding it."""
-        auth.users.remove_repo(signed_in(request).id, repo_id)
+        """The same as DELETE /api/repos/{repo_id}/mine (older path, kept for links in the wild)."""
+        unlink(signed_in(request).id, repo_id)
         return Response(status_code=204)
+
+    @app.get("/api/jobs")
+    def my_jobs(request: Request):
+        """The signed-in user's indexing jobs, newest first (status, progress 0-1, message)."""
+        return indexer.for_user(signed_in(request).id)
+
+    @app.delete("/api/me")
+    def delete_me(request: Request):
+        """Delete the account: the user, their encrypted token, links, history, feedback and shares."""
+        user = signed_in(request)
+        for repo_id in auth.users.delete(user.id):
+            if repo_id not in repos.demos and auth.users.users_of(repo_id) == 0 and repos.exists(repo_id):
+                repos.remove(repo_id)
+        response = Response(status_code=204)
+        response.delete_cookie(SESSION_COOKIE, path="/")
+        return response
 
     @app.get("/api/jobs/{job_id}")
     def job_status(job_id: str):
@@ -439,13 +491,27 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
             limit(request, "ask", settings.ask_per_ip_per_hour)
 
         overrides = {**body.overrides(), "prompt_style": body.prompt_style}
+        user = auth.current_user(request)                 # signed in: the question is kept (history)
+
+        def keep(sources_event, answer, done):
+            """Store the answered question for its (signed-in) user; returns its id."""
+            if user is None or done is None:
+                return None
+            linked = with_links(demo, agent, sources_event, body)
+            latency = (sources_event.get("retrieve_ms") or 0) + (done.get("llm_ms") or 0)
+            return history.record(db, repo_id, user.id, body.question, answer, linked["sources"],
+                                  done.get("backend", ""), latency, done.get("cached", False))
         cache_key = (repo_id, version, " ".join(body.question.lower().split()),
                      tuple(sorted(overrides.items())), body.llm.provider,
                      body.llm.model or "", body.debug)          # never the key itself
         cached = cache.get(cache_key) if body.llm.provider != "none" else None
 
         def replay():
+            answer = "".join(e["text"] for e in cached if e["type"] == "token")
             for event in cached:
+                if event["type"] == "done":
+                    qid = keep(cached[0], answer, event)
+                    event = {**event, "question_id": qid} if qid else event
                 yield _sse(with_links(demo, agent, event, body))
 
         if cached is not None:
@@ -472,6 +538,9 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                 collected.append(event)
                 if event["type"] == "token":
                     text.append(event["text"])
+                if event["type"] == "done":
+                    qid = keep(collected[0], "".join(text), event)
+                    event = {**event, "question_id": qid} if qid else event
                 yield _sse(with_links(demo, agent, event, body))
             if collected and collected[-1]["type"] == "done":
                 # store one token event with the whole answer; replays are instant
@@ -481,6 +550,9 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
         return StreamingResponse(events(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-cache",
                                           "X-Accel-Buffering": "no"})
+
+    history.add_routes(app, db, auth, repos, can_open, limit,
+                       FRONTEND_DIR if os.path.isdir(FRONTEND_DIR) else None)
 
     @app.exception_handler(HTTPException)
     def http_error(request, exc):

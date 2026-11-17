@@ -219,6 +219,48 @@ variables. Changing the session secret signs everyone out and makes the stored t
 private repos need a fresh sign-in. Without these settings the server still runs: everyone is
 signed out and demos work as usual.
 
+## Database
+
+The web server keeps its state in a database: users (with their GitHub token, encrypted), the
+repositories it has indexed, indexing jobs, signed-in users' questions and answers (history), shared
+answer links and feedback. Index files (FAISS, chunks) stay on disk under `data/repos/`, and the
+database stores their path. The answer cache and rate limits are in memory, behind an interface,
+so a shared store such as Redis can be added later.
+
+**Local (SQLite, the default).** Nothing to set up: the database is `data/coderag.db` (or
+`<CODERAG_DATA_DIR>/coderag.db`).
+
+**Postgres.** Set `CODERAG_DATABASE_URL`. A `postgres://` or `postgresql://` URL works as given and
+uses psycopg 3. A free Neon or Supabase database is enough:
+
+```bash
+export CODERAG_DATABASE_URL="postgresql://user:password@host/dbname?sslmode=require"
+```
+
+**Migrations** (Alembic, in `coderag/db/migrations/`) run when the server starts. To run them
+yourself:
+
+```bash
+python -m coderag db upgrade      # create or update the schema
+python -m coderag db current      # show the current revision
+```
+
+The first migration converts the database from before this change (users and their repo links
+only) in place: users keep their ids and tokens, and the repos indexed under `data/repos/` become
+rows. Indexing jobs left running when the server stopped are marked failed ("server restarted") on
+the next start.
+
+| Endpoint | |
+|---|---|
+| `GET /api/repos/{id}/history?limit=20&before=<id>` | your questions about a repo, newest first, with the total and the last 7 days' counts |
+| `POST /api/questions/{id}/share`, `DELETE` the same to revoke | a public read-only link, `/a/<slug>`. A private repo's answer needs `{"confirm_private": true}` and shows only the answer and the code it cites |
+| `POST /api/questions/{id}/feedback` | `{"rating": "up" \| "down", "note": "..."}` |
+| `GET /api/jobs` | your indexing jobs |
+| `DELETE /api/repos/{id}/mine` | removes the repo from your list; its index is deleted when nobody else has it (demos never are) |
+| `DELETE /api/me` | deletes your account: your token, repo list, history, feedback and shared links |
+
+Signed-out visitors' questions are not stored: their history lasts for the browser session only.
+
 ## Debugging retrieval
 
 Add `?debug=1` to the site's URL, or call `agent.stream(question, debug=True)` / `POST

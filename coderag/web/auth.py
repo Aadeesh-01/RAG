@@ -19,10 +19,8 @@ import hmac
 import logging
 import os
 import secrets
-import sqlite3
 import threading
 import time
-from contextlib import closing
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from urllib.parse import urlencode
@@ -143,7 +141,7 @@ class GitHubOAuth:
 
 
 # =============================================================================
-# USERS (SQLite)
+# USERS (the database: coderag/db)
 # =============================================================================
 @dataclass(frozen=True)
 class User:
@@ -163,103 +161,117 @@ def _fernet(secret):
     return Fernet(base64.urlsafe_b64encode(key))
 
 
-_SCHEMA = """
-CREATE TABLE IF NOT EXISTS users (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    github_id INTEGER NOT NULL UNIQUE,
-    login TEXT NOT NULL,
-    name TEXT NOT NULL DEFAULT '',
-    avatar_url TEXT NOT NULL DEFAULT '',
-    token_encrypted TEXT NOT NULL DEFAULT '',
-    created_at TEXT NOT NULL
-);
-CREATE TABLE IF NOT EXISTS user_repos (
-    user_id INTEGER NOT NULL REFERENCES users(id),
-    repo_id TEXT NOT NULL,
-    added_at TEXT NOT NULL,
-    PRIMARY KEY (user_id, repo_id)
-);
-"""
-
-
 def _now():
-    return datetime.now(timezone.utc).isoformat(timespec="seconds")
+    from ..db.models import utcnow
+    return utcnow()
 
 
 class Users:
-    """users(id, github_id, login, name, avatar_url, token_encrypted, created_at) + who added which repo."""
+    """
+    The users table (coderag/db/models.py) and who added which repo. The GitHub
+    token is stored Fernet-encrypted with a key derived from SESSION_SECRET;
+    it is never logged, returned or kept in clear.
+    """
 
-    def __init__(self, path, secret):
-        self.path = path
+    SEEN_EVERY = 300                              # seconds between last_seen_at writes
+
+    def __init__(self, db, secret):
+        self.db = db
         self.fernet = _fernet(secret)
-        self._ready = False
-        self._lock = threading.Lock()
-
-    def _db(self):
-        if not self._ready:                     # created on first use, not at startup
-            with self._lock:
-                if not self._ready:
-                    os.makedirs(os.path.dirname(os.path.abspath(self.path)), exist_ok=True)
-                    with closing(sqlite3.connect(self.path)) as db:
-                        db.executescript(_SCHEMA)
-                    self._ready = True
-        return closing(sqlite3.connect(self.path, timeout=10))
 
     @staticmethod
     def _user(row):
-        return User(*row) if row else None
+        return User(row.id, row.github_id, row.login, row.name, row.avatar_url) if row else None
 
     def upsert(self, github_user, token):
         """Save (or refresh) a GitHub user and their token; returns the User."""
-        values = (str(github_user["login"]), str(github_user.get("name") or ""),
-                  str(github_user.get("avatar_url") or ""),
-                  self.fernet.encrypt(token.encode()).decode())
-        with self._db() as db, db:
-            db.execute(
-                "INSERT INTO users (github_id, login, name, avatar_url, token_encrypted, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(github_id) DO UPDATE SET login=excluded.login, "
-                "name=excluded.name, avatar_url=excluded.avatar_url, "
-                "token_encrypted=excluded.token_encrypted",
-                (int(github_user["id"]), *values, _now()))
-            row = db.execute("SELECT id, github_id, login, name, avatar_url FROM users "
-                             "WHERE github_id = ?", (int(github_user["id"]),)).fetchone()
-        return self._user(row)
+        from ..db.models import User as Row
+        with self.db.session() as s:
+            row = s.query(Row).filter_by(github_id=int(github_user["id"])).one_or_none()
+            if row is None:
+                row = Row(github_id=int(github_user["id"]), created_at=_now())
+                s.add(row)
+            row.login = str(github_user["login"])
+            row.name = str(github_user.get("name") or "")
+            row.avatar_url = str(github_user.get("avatar_url") or "")
+            row.token_encrypted = self.fernet.encrypt(token.encode()).decode()
+            row.last_seen_at = _now()
+            s.flush()
+            return self._user(row)
 
     def get(self, user_id):
-        with self._db() as db:
-            return self._user(db.execute("SELECT id, github_id, login, name, avatar_url FROM users "
-                                         "WHERE id = ?", (user_id,)).fetchone())
+        from ..db.models import User as Row
+        with self.db.session() as s:
+            return self._user(s.get(Row, user_id))
+
+    def touch(self, user_id):
+        """Record that the user was seen (at most every SEEN_EVERY seconds)."""
+        from ..db.models import User as Row
+        now = _now()
+        with self.db.session() as s:
+            row = s.get(Row, user_id)
+            if row is not None and (row.last_seen_at is None
+                                    or (now - row.last_seen_at).total_seconds() > self.SEEN_EVERY):
+                row.last_seen_at = now
 
     def token(self, user_id):
         """The user's GitHub token, or None (unknown user, or SESSION_SECRET changed)."""
-        with self._db() as db:
-            row = db.execute("SELECT token_encrypted FROM users WHERE id = ?", (user_id,)).fetchone()
-        if not row or not row[0]:
+        from ..db.models import User as Row
+        with self.db.session() as s:
+            row = s.get(Row, user_id)
+            encrypted = row.token_encrypted if row else ""
+        if not encrypted:
             return None
         try:
-            return self.fernet.decrypt(row[0].encode()).decode()
+            return self.fernet.decrypt(encrypted.encode()).decode()
         except InvalidToken:
             return None
 
     def add_repo(self, user_id, repo_id):
-        with self._db() as db, db:
-            db.execute("INSERT OR IGNORE INTO user_repos (user_id, repo_id, added_at) VALUES (?, ?, ?)",
-                       (user_id, repo_id, _now()))
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            if s.get(UserRepo, (user_id, repo_id)) is None:
+                s.add(UserRepo(user_id=user_id, repo_id=repo_id, added_at=_now()))
 
     def repo_ids(self, user_id):
         """Repos the user added, newest first."""
-        with self._db() as db:
-            return [r[0] for r in db.execute("SELECT repo_id FROM user_repos WHERE user_id = ? "
-                                             "ORDER BY added_at DESC, rowid DESC", (user_id,))]
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            rows = s.query(UserRepo).filter_by(user_id=user_id).order_by(UserRepo.added_at.desc()).all()
+            return [r.repo_id for r in rows]
 
     def remove_repo(self, user_id, repo_id):
-        with self._db() as db, db:
-            db.execute("DELETE FROM user_repos WHERE user_id = ? AND repo_id = ?", (user_id, repo_id))
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            s.query(UserRepo).filter_by(user_id=user_id, repo_id=repo_id).delete()
 
     def has_repo(self, user_id, repo_id):
-        with self._db() as db:
-            return db.execute("SELECT 1 FROM user_repos WHERE user_id = ? AND repo_id = ?",
-                              (user_id, repo_id)).fetchone() is not None
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            return s.get(UserRepo, (user_id, repo_id)) is not None
+
+    def users_of(self, repo_id):
+        """How many users have `repo_id` in their list."""
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            return s.query(UserRepo).filter_by(repo_id=repo_id).count()
+
+    def delete(self, user_id):
+        """
+        Delete the account: the user row with its token, repo links, questions
+        (with their shares and feedback). Jobs and repos they indexed stay,
+        without the user. Returns the repo ids they had in their list.
+        """
+        from ..db.models import Question, User as Row, UserRepo
+        with self.db.session() as s:
+            repo_ids = [r.repo_id for r in s.query(UserRepo).filter_by(user_id=user_id)]
+            s.query(UserRepo).filter_by(user_id=user_id).delete()
+            for q in s.query(Question).filter_by(user_id=user_id):
+                s.delete(q)                           # shares go with it (cascade)
+            row = s.get(Row, user_id)
+            if row is not None:
+                s.delete(row)
+        return repo_ids
 
 
 # =============================================================================
@@ -271,14 +283,17 @@ class Auth:
     github  : GitHubOAuth-like object (default: the real one); tests pass a fake
     """
 
-    def __init__(self, settings, github=None):
+    def __init__(self, settings, github=None, db=None):
         self.settings = settings
         self.enabled = bool(settings.github_client_id and settings.github_client_secret
                             and settings.session_secret)
         self.github = github or (GitHubOAuth(settings.github_client_id, settings.github_client_secret)
                                  if self.enabled else None)
-        self.users = Users(os.path.join(settings.data_dir, "coderag.db"),
-                           settings.session_secret) if self.enabled else None
+        if self.enabled and db is None:
+            from ..db import Database, default_url
+            db = Database(settings.database_url or default_url(settings.data_dir))
+            db.upgrade()
+        self.users = Users(db, settings.session_secret) if self.enabled else None
         secret = settings.session_secret or "unused"
         self._sessions = URLSafeTimedSerializer(secret, salt="coderag.session")
         self._states = URLSafeTimedSerializer(secret, salt="coderag.oauth-state")
@@ -302,7 +317,10 @@ class Auth:
         except BadSignature:
             return None
         uid = data.get("uid") if isinstance(data, dict) else None
-        return self.users.get(uid) if isinstance(uid, int) else None
+        user = self.users.get(uid) if isinstance(uid, int) else None
+        if user is not None:
+            self.users.touch(user.id)
+        return user
 
     def token(self, user):
         return self.users.token(user.id) if user and self.users else None

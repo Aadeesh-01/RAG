@@ -7,6 +7,7 @@ from dataclasses import dataclass, field, fields
 @dataclass(frozen=True)
 class Settings:
     data_dir: str = "data"                      # built demo indexes live in <data_dir>/demos
+    database_url: str = ""                      # CODERAG_DATABASE_URL; "" = sqlite:///<data_dir>/coderag.db
     # Server-side LLM (key from the provider's env var, e.g. GROQ_API_KEY). Models are
     # tried in order; each has its own rate limit on the provider side.
     server_llm_provider: str = "groq"

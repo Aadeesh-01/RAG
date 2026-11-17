@@ -105,7 +105,7 @@ def test_state_mismatch_is_rejected(tmp_path):
     r = callback(client, code="good-code", state="not-the-state")
     assert r.status_code == 303 and r.headers["location"] == "/login?error=state"
     assert SESSION_COOKIE not in set_cookies(r)
-    assert github.exchanged == [] and not (tmp_path / "coderag.db").exists()
+    assert github.exchanged == [] and users(tmp_path) == []          # nobody was signed in
     assert client.get("/api/auth/me").status_code == 401
 
 

@@ -1,4 +1,5 @@
 import json
+import tempfile
 import os
 
 import pytest
@@ -35,7 +36,7 @@ def make_client(sample_repo, factory=None, tmp_dir=None, indexer=None, fetch_sou
     demo = Demo(id="sample", name="Sample", url="https://github.com/o/r", sha="a" * 40,
                 root="src", questions=["q?"], agents={"v7": agent})
     factory = factory or Factory()
-    settings.setdefault("data_dir", str(tmp_dir or os.path.join(os.path.dirname(sample_repo), "_unused")))
+    settings.setdefault("data_dir", str(tmp_dir or tempfile.mkdtemp(prefix="coderag-test-")))   # the database lives there
     app = create_app(Settings(**settings), demos={"sample": demo}, llm_factory=factory,
                      limiter=RateLimiter(), embedder=HashEncoder(), indexer=indexer,
                      **({"fetch_source": fetch_source} if fetch_source else {}))

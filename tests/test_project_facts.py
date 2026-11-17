@@ -109,10 +109,10 @@ def test_indexer_stores_facts_with_the_index(tmp_path):
     assert calls == [("someone", "pkg", None)]                      # public repo: no token
     info = client.get(f"/api/repos/{job['repo_id']}").json()
     assert info["facts"]["homepage"] == "https://pkg.example.com" and info["facts"]["platforms"] == []
-    saved = json.loads((tmp_path / "repos" / job["repo_id"] / "demo.json").read_text())
-    assert saved["facts"]["homepage"] == "https://pkg.example.com"
-    version = saved["versions"][0]
-    assert json.loads((tmp_path / "repos" / job["repo_id"] / version / "facts.json").read_text())["homepage"]
+    from conftest import repo_row
+    row = repo_row(app, job["repo_id"])                              # the repos row holds them
+    assert row.facts["homepage"] == "https://pkg.example.com"
+    assert json.loads(open(os.path.join(row.index_path, "facts.json"), encoding="utf-8").read())["homepage"]
 
 
 # ── routing and the prompt ────────────────────────────────────────────────
