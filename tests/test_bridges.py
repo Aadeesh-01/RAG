@@ -17,7 +17,7 @@ from coderag.context import display_name  # noqa: E402
 from coderag.resolve import CodeGraph  # noqa: E402
 from conftest import ROOT, FakeIndex  # noqa: E402
 
-FIXTURES = os.path.join(ROOT, "tests", "bridge_fixtures")
+FIXTURES = os.path.join(ROOT, "tests", "fixtures", "bridges")
 V10 = get_config("v10")
 
 
@@ -105,6 +105,9 @@ def test_http_clients_reach_their_routes():
         ("ItemsApi", "ItemController.get"): ("pattern", "GET /api/v1/items/{id}", "GET /api/v1/items/{id}"),
         ("ItemsApi", "ItemController.create"): ("exact", "POST /api/v1/items", "POST /api/v1/items"),
         ("Pinger.ping", "ping"): ("pattern", "GET /ping", "* /ping"),                      # OkHttp
+        # interpolated URLs: each interpolation is one wildcard segment, always a pattern
+        ("openRepo", "ask"): ("pattern", "POST /api/repos/{}/ask", "POST /api/repos/{repo_id}/ask"),
+        ("delete_item", "item"): ("pattern", "DELETE /items/{}", "DELETE /items/<int:item_id>"),
     }
     assert set(edges) == set(expected)
     for key, (confidence, client, server) in expected.items():
@@ -118,11 +121,12 @@ def test_http_clients_reach_their_routes():
 def test_dynamic_urls_are_never_matched():
     chunks, edges = bridges("http")
     sources = {src for src, _ in edges}
-    # a template with a value, a literal plus a variable, an f-string
-    assert not {"openRepo", "forgetRepo", "delete_item"} & sources
+    # a literal plus a variable ("/api/repos/mine/" + id) stays unmatched
+    assert "forgetRepo" not in sources
     # a literal route beats a parametrised one: /api/repos/mine is not also /api/repos/{repo_id}
     assert ("loadMine", "repo_info") not in edges
-    assert not any(dst == "ask" for _, dst in edges)
+    # templates and f-strings are patterns, never exact
+    assert edges[("openRepo", "ask")].confidence == edges[("delete_item", "item")].confidence == "pattern"
 
 
 # ── in the graph ─────────────────────────────────────────────────────────────
@@ -132,12 +136,14 @@ def polyglot(tmp_path):
     return str(tmp_path)
 
 
-def test_v10_is_v9_plus_bridges():
+def test_v10_is_v9_plus_bridges_and_project_files():
     v9, v10 = get_config("v9"), get_config("v10")
     assert v9.bridges == () and v10.bridges == ("jni", "ctypes_cffi", "http")
-    assert {k: v for k, v in vars(v9).items() if k not in ("name", "description", "bridges")} == \
-           {k: v for k, v in vars(v10).items() if k not in ("name", "description", "bridges")}
-    assert v9.index_mismatch(v10) == ["bridges"]
+    assert v9.project_files is False and v10.project_files is True
+    changed = ("name", "description", "bridges", "project_files")
+    assert {k: v for k, v in vars(v9).items() if k not in changed} == \
+           {k: v for k, v in vars(v10).items() if k not in changed}
+    assert v9.index_mismatch(v10) == ["bridges", "project_files"]
 
 
 def test_expansion_follows_bridges_as_a_hop(tmp_path):

@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 
 from .config import FLAN_PROMPT, SYSTEM_PROMPT_CITED
+from .facts import DEPLOYMENT_RULE
 
 TRUNCATION_MARK = "\n[... context truncated]"
 
@@ -61,9 +62,12 @@ class LLMUnavailable(LLMError):
 def build_messages(config, context, question):
     """Chat messages for `config.prompt_style`."""
     if config.prompt_style == "cited":
+        system = (SYSTEM_PROMPT_CITED.replace("a Python codebase", "a codebase")
+                  if getattr(config, "languages", ()) else SYSTEM_PROMPT_CITED)
+        if context.startswith("REPO FACTS") or "\n\nREPO FACTS" in context:
+            system += "\n" + DEPLOYMENT_RULE        # project question (v10): configured vs recorded
         return [
-            {"role": "system", "content": (SYSTEM_PROMPT_CITED.replace("a Python codebase", "a codebase")
-                                           if getattr(config, "languages", ()) else SYSTEM_PROMPT_CITED)},
+            {"role": "system", "content": system},
             {"role": "user", "content": f"Sources:\n\n{context}\n\nQuestion: {question}"},
         ]
     return [

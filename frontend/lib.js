@@ -237,3 +237,97 @@ export function avatarSrc(user, size = 64) {
   url.searchParams.set("s", String(size));
   return url.href;
 }
+
+// ── the console: counts, dates and collapsed views (pure, tested in tests/lib.test.mjs) ──
+
+/** "1 file", "2 files", "1 class", "3 classes": a count in people's words. */
+export function plural(n, one, many = `${one}s`) {
+  const count = Number.isFinite(n) ? n : 0;
+  return `${count.toLocaleString()} ${count === 1 ? one : many}`;
+}
+
+/** Shorten any name in the middle: "a_very_long_function_name" -> "a_very_lo…ion_name". */
+export function middleTruncateName(name, max = 28) {
+  const text = String(name ?? "");
+  if (text.length <= max) return text;
+  const head = Math.ceil((max - 1) / 2), tail = Math.floor((max - 1) / 2);
+  return `${text.slice(0, head)}…${text.slice(text.length - tail)}`;
+}
+
+/** "3 Nov 2026" for an ISO timestamp, or "" when it isn't one (never a raw ISO string). */
+export function formatDate(iso, locale = undefined) {
+  const at = Date.parse(iso || "");
+  if (Number.isNaN(at)) return "";
+  return new Date(at).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
+}
+
+/**
+ * Questions per day for the last `days` days, oldest first, from ISO timestamps.
+ * Days are local calendar days; the last entry is today.
+ */
+export function questionsPerDay(times, days = 7, now = new Date()) {
+  const counts = new Array(days).fill(0);
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const DAY = 86400000;
+  for (const t of times || []) {
+    const at = Date.parse(typeof t === "string" ? t : t?.t || "");
+    if (Number.isNaN(at)) continue;
+    const day = new Date(at);
+    const start = new Date(day.getFullYear(), day.getMonth(), day.getDate()).getTime();
+    const back = Math.round((today - start) / DAY);
+    if (back >= 0 && back < days) counts[days - 1 - back] += 1;
+  }
+  return counts;
+}
+
+/** Bridge edges by mechanism: {total, byMechanism: {http: n, jni: n, ...}}. */
+export function bridgeCounts(links) {
+  const byMechanism = {};
+  let total = 0;
+  for (const l of links || []) {
+    if (l.type !== "bridge") continue;
+    total += 1;
+    const m = l.mechanism || "other";
+    byMechanism[m] = (byMechanism[m] || 0) + 1;
+  }
+  return { total, byMechanism };
+}
+
+/**
+ * The state of a repository as the Repos table shows it: an indexing job wins, then a
+ * failed one, then an index an older preset built ("update"), else indexed.
+ */
+export function repoStatus(info, job) {
+  if (job && (job.status === "queued" || job.status === "running" || job.status === "indexing")) {
+    return { key: "indexing", label: job.status === "queued" ? "Queued" : "Indexing", tone: "warn", progress: job.progress ?? 0 };
+  }
+  if (job && job.status === "failed") return { key: "failed", label: "Failed", tone: "bad" };
+  if (info?.reindex_to) return { key: "update", label: "Update available", tone: "warn" };
+  return { key: "indexed", label: "Indexed", tone: "ok" };
+}
+
+/**
+ * A large repository collapsed to its modules: one node per file, one link per pair of
+ * files with a call, inheritance or bridge between them (counted). Ids are "m:<path>".
+ */
+export function moduleGraph(graph) {
+  const fileOf = new Map(graph.nodes.map((n) => [n.id, n.file]));
+  const files = new Map();
+  for (const n of graph.nodes) {
+    const f = files.get(n.file) || files.set(n.file, { id: `m:${n.file}`, kind: "module", file: n.file, name: n.file.split("/").pop(),
+                                                       label: n.file.split("/").pop(), start_line: 1, members: 0, language: n.language }).get(n.file);
+    f.members += 1;
+    if (n.language && !f.language) f.language = n.language;
+  }
+  const pairs = new Map();
+  for (const l of graph.links) {
+    if (l.type === "member") continue;
+    const a = fileOf.get(l.source), b = fileOf.get(l.target);
+    if (!a || !b || a === b) continue;
+    const key = `${a}>${b}:${l.type === "bridge" ? "bridge" : "calls"}`;
+    const p = pairs.get(key) || pairs.set(key, { source: `m:${a}`, target: `m:${b}`, type: l.type === "bridge" ? "bridge" : "calls", count: 0,
+                                                 mechanism: l.mechanism, label: l.label, evidence: l.evidence, confidence: l.confidence }).get(key);
+    p.count += 1;
+  }
+  return { nodes: [...files.values()], links: [...pairs.values()], collapsed: true };
+}

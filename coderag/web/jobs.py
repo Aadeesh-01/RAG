@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from ..agent import RAGCodebaseAgent
 from ..config import get_config
 from ..gitfetch import SHA, FetchError, fetch_commit, parse_github_url, resolve_sha, rmtree
+from ..config import VERSIONS
 from ..languages import language_for
 from .registry import Demo, repo_id_for, repo_stats, write_repo_meta
 from .sources import indexed_files
@@ -67,6 +68,7 @@ class IndexJob:
     owner_id: int | None = None      # user who asked for it
     private: bool = False            # only visible with that user's token
     token: str = field(default="", repr=False)      # never in public() or logs; cleared when done
+    reindex: bool = False            # rebuild an indexed repo with the current default version
 
     def public(self, queue_position=0):
         return {"job_id": self.id, "repo_id": self.repo_id, "name": self.name, "sha": self.sha,
@@ -108,11 +110,6 @@ def check_limits(root, max_files, max_mb):
     return {"files": files, "bytes": size, "languages": dict(languages)}
 
 
-def version_for(languages):
-    """v8 for Python-only repos (v9 would index them identically), v9 when other languages are there."""
-    return "v9" if set(languages) - {"python"} else "v8"
-
-
 def save_sources(agent, clone, cache_dir):
     """Copy the indexed files next to the index (the code viewer's cache, see sources.py)."""
     for rel in indexed_files(agent):
@@ -124,12 +121,15 @@ def save_sources(agent, clone, cache_dir):
 
 class Indexer:
 
-    def __init__(self, settings, repos, embedder, fetch=fetch_commit, resolve=resolve_sha):
+    def __init__(self, settings, repos, embedder, fetch=fetch_commit, resolve=resolve_sha, facts=None):
         self.settings = settings
         self.repos = repos
         self.embedder = embedder
         self.fetch = fetch
         self.resolve = resolve
+        # facts(owner, repo, token=None) -> GitHub metadata; by default only when the code itself
+        # came from GitHub (a test or local fetch has no GitHub repo behind it)
+        self.facts = facts
         self.jobs = {}
         self.inflight = {}           # repo_id -> job_id
         self.queue = queue.Queue()
@@ -189,6 +189,34 @@ class Indexer:
                 self.worker.start()
             return job, True
 
+    def reindex(self, repo_id, allow_new=lambda: (True, 0), token=None, owner_id=None):
+        """
+        Rebuild an indexed visitor repo (same commit) with the current default
+        version. Returns (job, queued_new); KeyError if it isn't a visitor repo.
+        """
+        meta = self.repos.summary(repo_id)
+        if not meta or meta.get("kind") != "user":
+            raise KeyError(repo_id)
+        with self.lock:
+            if repo_id in self.inflight:
+                return self.jobs[self.inflight[repo_id]], False
+            allowed, retry = allow_new()
+            if not allowed:
+                raise NotAllowed("You've indexed several repositories recently; try again later.", retry)
+            if self.queue.qsize() >= self.settings.max_index_queue:
+                raise QueueFull("The indexing queue is full; please try again in a few minutes.")
+            private = bool(meta.get("private"))
+            job = IndexJob(id=uuid.uuid4().hex, repo_id=repo_id, name=meta["name"], url=meta["url"],
+                           sha=meta["sha"], ref=meta.get("ref") or "", owner_id=owner_id,
+                           private=private, token=token if private and token else "", reindex=True)
+            self._remember(job)
+            self.inflight[repo_id] = job.id
+            self.queue.put(job)
+            if self.worker is None:
+                self.worker = threading.Thread(target=self._work, name="indexer", daemon=True)
+                self.worker.start()
+            return job, True
+
     def _remember(self, job):
         self.jobs[job.id] = job
         if len(self.jobs) > 500:                     # forget the oldest finished jobs
@@ -208,6 +236,20 @@ class Indexer:
                            if j.status == "queued" and j.created < job.created)
 
     # ── working ──────────────────────────────────────────────────────────────
+    def _facts(self, job, agent):
+        """Repo facts: GitHub metadata (the user's token for a private repo) + platforms from config files."""
+        from ..facts import fetch_github_facts, platforms
+        fetcher = self.facts or (fetch_github_facts if self.fetch is fetch_commit else None)
+        facts = {}
+        if fetcher is not None:
+            owner, repo = job.url.rstrip("/").split("/")[-2:]
+            try:
+                facts = fetcher(owner, repo, token=job.token or None) or {}
+            except Exception:                          # metadata is a bonus: never fail an index for it
+                log.warning("repo facts for %s unavailable", job.name)
+        facts["platforms"] = platforms(agent.documents)
+        return facts
+
     def _work(self):
         while True:
             job = self.queue.get()
@@ -229,7 +271,8 @@ class Indexer:
             found = check_limits(clone, s.max_py_files, s.max_py_mb)
 
             self._set(job, "parsing", 0.25, "Parsing code and resolving calls…")
-            config = get_config(version_for(found["languages"]), ignore_dirs=tuple(s.index_ignore_dirs))
+            default = s.default_version if s.default_version in VERSIONS else "v10"
+            config = get_config(default, ignore_dirs=tuple(s.index_ignore_dirs))
             from ..index import VectorIndex
 
             def progress(stage, fraction):
@@ -243,9 +286,14 @@ class Indexer:
             except ValueError:
                 raise IndexFailure("No code to index (tests, docs and examples are skipped).")
 
+            if config.indexes_project_files():
+                agent.facts = self._facts(job, agent)
             self._set(job, "saving", 0.97, "Saving the index…")
             out = self.repos.directory(job.repo_id)
             agent.save(os.path.join(out, config.name))
+            for old in os.listdir(out):                # a re-index replaces the older version's index
+                if old not in (config.name, "sources") and os.path.isfile(os.path.join(out, old, "meta.json")):
+                    rmtree(os.path.join(out, old))
             if job.private:
                 save_sources(agent, clone, os.path.join(out, "sources"))
             stats = repo_stats(agent)
@@ -255,11 +303,13 @@ class Indexer:
                 "url": job.url, "sha": job.sha, "root": "", "questions": [],
                 "stats": stats, "built": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "owner_id": job.owner_id, "private": job.private,
+                "indexed_with": default, "facts": getattr(agent, "facts", {}) or {},
             }
             write_repo_meta(out, {**meta, "versions": [config.name]})
             # the in-memory record matches what a reload from disk would give
             self.repos.add(Demo(**meta, agents={config.name: agent}))
-            done = f"Indexed {stats['chunks']:,} chunks from {stats['files']:,} files"
+            done = (f"Re-indexed with {default}: " if job.reindex else "Indexed ") + \
+                f"{stats['chunks']:,} chunks from {stats['files']:,} files"
         except (IndexFailure, FetchError) as e:
             job.error = str(e)
         except Exception:

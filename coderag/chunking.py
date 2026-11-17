@@ -20,7 +20,7 @@ import re
 import textwrap
 
 from .config import SKIP_DIRS
-from .languages import language_for
+from .languages import TEMPLATE, TEMPLATE_EXTENSIONS, language_for
 
 
 # =============================================================================
@@ -788,6 +788,37 @@ def parse_tree_sitter_file(file_path, lang, repo_path=None, max_file_chars=30_00
                       repo_path, 1, max(len(lines), 1), imports=imports)]
 
 
+# =============================================================================
+# TEMPLATES  (v10 HTTP bridges: forms and htmx requests)
+# =============================================================================
+_TEMPLATE_REQUEST = re.compile(r"<form\b[^>]*\baction\s*=|\bhx-(?:get|post|put|patch|delete)\s*=", re.I)
+
+
+def parse_template_file(file_path, repo_path=None, max_file_chars=1_000_000):
+    """
+    One "template" chunk for an HTML template that sends requests (a <form
+    action> or an hx-get/hx-post/... attribute), so an HTTP bridge has a node
+    to start from; [] for any other HTML file. Its requests are read by
+    bridges/http.py, not here.
+    """
+    try:
+        with open(file_path, encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except OSError:
+        return []
+    if len(text) > max_file_chars or not _TEMPLATE_REQUEST.search(text):
+        return []
+    name = os.path.basename(file_path)
+    lines = text.splitlines()
+    return [{
+        "content": text.rstrip("\n"), "type": "template", "file": file_path, "name": name,
+        "qname": make_qname(file_path, name, repo_path), "start_line": 1, "end_line": max(len(lines), 1),
+        "content_hash": content_hash(text), "base_classes": [], "methods": [], "calls": [],
+        "call_sites": [], "assert_call_sites": [], "decorators": [], "docstring": "", "parent": "",
+        "called_by": [], "also_in": [], "language": TEMPLATE, "imports": [],
+    }]
+
+
 def dedup_chunks(chunks, verbose=True):
     """
     Drop chunks with the same name + normalised content hash. The first
@@ -823,7 +854,9 @@ def load_ast_chunks(repo_path, config, verbose=True):
         if verbose:
             print(f"[RAG]   Parsing: {os.path.relpath(file_path, repo_path)}")
         lang = language_for(file_path, config.languages)
-        if lang is not None:
+        if file_path.lower().endswith(TEMPLATE_EXTENSIONS):
+            chunks.extend(parse_template_file(file_path, repo_path, config.max_file_chars))
+        elif lang is not None:
             chunks.extend(parse_tree_sitter_file(
                 file_path, lang, repo_path,
                 max_file_chars=config.max_file_chars,
@@ -845,6 +878,11 @@ def load_ast_chunks(repo_path, config, verbose=True):
         else:
             continue
         file_count += 1
+
+    if config.indexes_project_files():           # v10: README, Procfile, Dockerfile ... as config
+        from .facts import iter_project_files, parse_config_file
+        for path in iter_project_files(repo_path, SKIP_DIRS, config.ignore_dirs):
+            chunks.extend(parse_config_file(path, repo_path))
 
     if verbose:
         print(f"[RAG] Parsed {file_count} files -> {len(chunks)} chunks")
@@ -869,4 +907,5 @@ def load_chunks(repo_path, config, verbose=True):
     else:
         raise ValueError(f"Unknown chunker: {config.chunker!r}")
 
-    return [c for c in chunks if len(c["content"]) > config.min_chunk_chars]
+    # config files are kept however short: a one-line runtime.txt still answers "which Python?"
+    return [c for c in chunks if len(c["content"]) > config.min_chunk_chars or c.get("type") == "config"]

@@ -20,6 +20,7 @@ from .config import RAGConfig
 
 INDEX_FORMAT = 1
 META_FILE, CHUNKS_FILE, GRAPH_FILE = "meta.json", "chunks.json", "graph.json"
+FACTS_FILE = "facts.json"            # repo facts (GitHub metadata), v10 web indexes
 
 
 def _write_json(directory, name, data):
@@ -46,6 +47,11 @@ def save_agent(agent, directory):
     elif os.path.exists(graph_path):
         os.remove(graph_path)
     agent.index.save(directory)
+    facts_path = os.path.join(directory, FACTS_FILE)
+    if getattr(agent, "facts", None):
+        _write_json(directory, FACTS_FILE, agent.facts)
+    elif os.path.exists(facts_path):
+        os.remove(facts_path)
 
     _write_json(directory, META_FILE, {
         "format":      INDEX_FORMAT,
@@ -116,6 +122,8 @@ def load_agent(cls, directory, config=None, llm=None, load_llm=True, verbose=Tru
             code_graph.apply_called_by()
             agent._log("[RAG] Call graph migrated to the current resolver")
     agent._set_documents(documents, code_graph)
+    agent.facts = (_read_json(directory, FACTS_FILE)
+                   if os.path.exists(os.path.join(directory, FACTS_FILE)) else {})
 
     agent.index = VectorIndex.load(directory, config.embed_model, embedder)
     if agent.index.size != len(documents):

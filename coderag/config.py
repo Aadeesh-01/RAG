@@ -8,7 +8,7 @@ copy of the whole pipeline.
 
 from dataclasses import dataclass, fields, replace
 
-from .languages import extensions_for, registered
+from .languages import TEMPLATE_EXTENSIONS, extensions_for, registered
 
 # Directories never worth indexing (pruned in-place during os.walk)
 SKIP_DIRS = frozenset({
@@ -91,6 +91,8 @@ class RAGConfig:
                                             # v0-v8 set () and index Python only
     bridges: tuple = ()                     # cross-language edges (coderag/bridges/): jni,
                                             # ctypes_cffi, http; needs scoped call resolution
+    project_files: bool = False             # README/Procfile/Dockerfile/... as "config" chunks +
+                                            # repo facts for project questions (v10)
     prune_dirs: bool = True                 # skip SKIP_DIRS and dot-directories
     ignore_dirs: tuple = ()                 # more directory names to skip (e.g. tests, docs)
     chunk_size: int = 1000                  # fixed chunker only
@@ -148,13 +150,21 @@ class RAGConfig:
     def from_dict(cls, data):
         """Inverse of dataclasses.asdict after a JSON round trip (lists back to tuples)."""
         known = {f.name for f in fields(cls)}
-        data = {"languages": (), "bridges": (), **data}   # older indexes: Python only, no bridges
+        data = {"languages": (), "bridges": (), "project_files": False, **data}   # older indexes
         return cls(**{k: tuple(v) if isinstance(v, list) else v
                       for k, v in data.items() if k in known})
 
     def source_extensions(self):
-        """Extensions of every indexed file: `extensions` plus those of `languages`."""
-        return tuple(dict.fromkeys(tuple(self.extensions) + extensions_for(self.languages)))
+        """
+        Extensions of every indexed file: `extensions` plus those of `languages`,
+        plus HTML templates when HTTP bridges are on (forms and htmx call routes).
+        """
+        templates = TEMPLATE_EXTENSIONS if "http" in self.bridges else ()
+        return tuple(dict.fromkeys(tuple(self.extensions) + extensions_for(self.languages) + templates))
+
+    def indexes_project_files(self):
+        """Config chunks and repo facts (v10)."""
+        return bool(self.project_files)
 
     def index_mismatch(self, other):
         """INDEX_FIELDS on which `other` differs, i.e. would need a different index."""
@@ -164,7 +174,7 @@ class RAGConfig:
 # Fields that shape the saved index (chunks, embeddings, call graph). Everything
 # else (retrieval depth, context budget, LLM) can change on an existing index.
 INDEX_FIELDS = (
-    "chunker", "extensions", "languages", "bridges", "prune_dirs", "ignore_dirs", "chunk_size", "chunk_overlap",
+    "chunker", "extensions", "languages", "bridges", "project_files", "prune_dirs", "ignore_dirs", "chunk_size", "chunk_overlap",
     "max_file_chars", "min_segment_chars", "min_chunk_chars", "chunk_methods", "skip_overloads",
     "dedup_content", "structural", "call_resolution", "max_ambiguous", "ignore_assert_calls",
     "embed_model",
@@ -247,9 +257,10 @@ _V9 = replace(
 
 _V10 = replace(
     _V9, name="v10",
-    description="v9 + bridge edges across languages and processes: JNI, ctypes/cffi, "
-                "HTTP client calls to server routes",
+    description="v9 + bridge edges across languages and processes (JNI, ctypes/cffi, HTTP client "
+                "calls to server routes) + project files and repo facts for project questions",
     bridges=("jni", "ctypes_cffi", "http"),
+    project_files=True,
 )
 
 _V0 = RAGConfig(

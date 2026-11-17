@@ -16,7 +16,7 @@ from datetime import datetime, timezone
 import yaml
 
 from ..agent import RAGCodebaseAgent
-from ..config import get_config
+from ..config import VERSIONS, get_config
 from ..gitfetch import fetch_commit, rmtree
 from ..languages import label_of, language_of
 
@@ -38,6 +38,9 @@ class Demo:
     kind: str = "demo"              # "demo" (curated) | "user" (indexed by a visitor)
     ref: str = ""                   # branch or tag the visitor asked for, if any
     owner_id: int | None = None     # user who indexed it (visitor repos)
+    facts: dict = field(default_factory=dict)      # repo facts: GitHub metadata + platforms (v10)
+    indexed_with: str = ""          # preset the server indexed it with (its index may be saved under
+                                    # an older, identical one: see jobs.settled_config)
     private: bool = False           # private on GitHub: only users who added it may open it
     agents: dict = field(default_factory=dict, repr=False)     # version -> agent
 
@@ -72,14 +75,38 @@ class Demo:
                 "languages": self.languages(),
                 "url": self.url, "sha": self.sha, "root": self.root, "questions": self.questions,
                 "stats": self.stats, "built": self.built, "versions": self.versions,
-                "kind": self.kind, "ref": self.ref, "private": self.private}
+                "kind": self.kind, "ref": self.ref, "private": self.private,
+                "indexed_with": self.built_with(), "bridges_checked": bridges_checked(self.built_with()),
+                "facts": self.repo_facts()}
+
+    def repo_facts(self):
+        """GitHub metadata and platforms recorded when it was indexed ({} if none)."""
+        if self.facts:
+            return self.facts
+        agent = self.agents.get(self.versions[-1]) if self.agents else None
+        return getattr(agent, "facts", None) or {}
+
+    def built_with(self):
+        """The preset this repo was indexed with (older indexes: the newest version saved)."""
+        return self.indexed_with or (self.versions[-1] if self.versions else "")
+
+
+def bridges_checked(version):
+    """Whether indexing with `version` looked for cross-language bridges."""
+    return bool(version in VERSIONS and VERSIONS[version].bridges)
+
+
+def is_older(version, than):
+    """True when preset `version` comes before `than` (unknown versions count as older)."""
+    order = list(VERSIONS)
+    return (order.index(version) if version in order else -1) < (order.index(than) if than in order else -1)
 
 
 def language_files(documents):
     """{"Python": 12, "Go": 3}: files per language label, most files first."""
     files = {}
     for d in documents:
-        if "qname" in d:
+        if "qname" in d and d.get("type") != "config":     # config files aren't a language
             files.setdefault(d["qname"].split("::")[0], language_of(d))
     counts = {}
     for lang in files.values():
@@ -203,7 +230,9 @@ class Repos:
             meta = json.load(f)
         keys = ("id", "name", "description", "url", "sha", "root", "questions", "stats", "built",
                 "versions", "kind", "ref", "private")
-        return {**{k: meta.get(k) for k in keys}, "languages": (meta.get("stats") or {}).get("languages", {})}
+        built_with = meta.get("indexed_with") or (meta.get("versions") or [""])[-1]
+        return {**{k: meta.get(k) for k in keys}, "languages": (meta.get("stats") or {}).get("languages", {}),
+                "indexed_with": built_with, "bridges_checked": bridges_checked(built_with)}
 
     def private(self, repo_id):
         """True if `repo_id` is a visitor repo that is private on GitHub (read without loading it)."""

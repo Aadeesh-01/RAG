@@ -1,0 +1,48 @@
+# testdrivenio/fastapi-react: a React + TypeScript frontend (frontend/src) calling a FastAPI backend
+# (backend/app). Pinned. Cross-language questions: each pairs the component that sends the
+# request with the route that handles it. The repo has only four routes, so several questions
+# ask different things about the same pair. Written from the source before any retrieval ran.
+url: https://github.com/testdrivenio/fastapi-react
+sha: e01168769ad3713454e35a1e2b560d185dc805de
+
+questions:
+  - q: What happens when a new todo is submitted?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::AddTodo, backend/app/api.py::add_todo]
+
+  - q: How does the app load the list of todos?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::Todos, backend/app/api.py::get_todos]
+
+  - q: What happens when a todo is edited and saved in the update dialog?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::UpdateTodo, backend/app/api.py::update_todo]
+
+  - q: What happens when the Delete Todo button is clicked?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::DeleteTodo, backend/app/api.py::delete_todo]
+
+  - q: How does the backend respond when the frontend asks to update a todo that doesn't exist?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::UpdateTodo, backend/app/api.py::update_todo]
+
+  - q: After a todo is deleted, how does the list on the page get refreshed?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::DeleteTodo, backend/app/api.py::delete_todo,
+           frontend/src/components/Todos.tsx::Todos]
+
+  - q: Which server endpoint does the todo input form post to, and what does it return?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::AddTodo, backend/app/api.py::add_todo]
+
+  - q: What does the page show when it first loads, and where does that data come from on the server?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::Todos, backend/app/api.py::get_todos]
+
+  - q: Which HTTP method does the Save button in the update dialog use, and which handler receives it?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::UpdateTodo, backend/app/api.py::update_todo]
+
+  - q: How does the frontend send a deletion to the server, and how does the server find the todo to remove?
+    type: cross-language
+    gold: [frontend/src/components/Todos.tsx::DeleteTodo, backend/app/api.py::delete_todo]

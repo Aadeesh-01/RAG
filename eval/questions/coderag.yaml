@@ -27,3 +27,43 @@ questions:
   - q: How are the user's repository tabs loaded when the app starts?
     type: cross-language
     gold: [frontend/app.js::loadUserRepos, coderag/web/app.py::create_app.my_repos]
+
+  - q: What happens on the server when a question is asked in the chat?
+    type: cross-language
+    gold: [frontend/app.js::ask, coderag/web/app.py::create_app.ask]
+
+  - q: How does the code viewer load a whole source file?
+    type: cross-language
+    gold: [frontend/app.js::loadFile, coderag/web/app.py::create_app.source_file]
+
+  - q: How is the progress of an indexing job shown while a repository is being added?
+    type: cross-language
+    gold: [frontend/app.js::trackJob, coderag/web/app.py::create_app.job_status]
+
+  - q: How does the app load a repository's call graph when the repository is selected?
+    type: cross-language
+    gold: [frontend/app.js::selectRepo, coderag/web/app.py::create_app.graph]
+
+  - q: What happens when the user closes a repository tab?
+    type: cross-language
+    gold: [frontend/app.js::removeUserRepo, coderag/web/app.py::create_app.forget_repo]
+
+  - q: How is an opened repository added to the user's list on the server?
+    type: cross-language
+    gold: [frontend/app.js::rememberUserRepo, coderag/web/app.py::create_app.keep_repo]
+
+  - q: What happens when the Re-index button is clicked?
+    type: cross-language
+    gold: [frontend/app.js::reindexRepo, coderag/web/app.py::create_app.reindex_repo]
+
+  - q: What does the Check if live button ask the server to do?
+    type: cross-language
+    gold: [frontend/app.js::renderFacts, coderag/web/app.py::create_app.live_check]
+
+  - q: How does the home page load the list of demo repositories?
+    type: cross-language
+    gold: [frontend/home.js::loadRepos, coderag/web/app.py::create_app.list_demos]
+
+  - q: How does the app fetch a repository's details when it is opened from a link?
+    type: cross-language
+    gold: [frontend/app.js::repoInfo, coderag/web/app.py::create_app.repo_info]

@@ -10,6 +10,7 @@ from .repomap import is_broad_question, repo_map
 from .context import (asks_for_callers, build_context, display_name, format_chunk, public_name,
                       keyword_filter, parse_citations, source_location)
 from .graph import build_name_index, build_reverse_index, expand_bfs
+from .facts import is_project_question
 from .languages import language_of
 from .llm import LLMError, LLMRateLimited, LLMUnavailable
 
@@ -35,6 +36,7 @@ class RAGCodebaseAgent:
                  load_llm=True, verbose=True, progress=None):
         self.config = config or get_config()
         self.verbose = verbose
+        self.facts = {}                   # repo facts (GitHub metadata), set by the web indexer
         self.repo_path = os.path.abspath(repo_path)
         self._log(f"[RAG] Loading repo from: {repo_path}  (config {self.config.name})")
 
@@ -136,12 +138,25 @@ class RAGCodebaseAgent:
         seeds = []
         seen_keys = set()
 
+        # project questions ("is it deployed?", "how do I run it?"): the matching config files first
+        pinned = []
+        if cfg.indexes_project_files() and is_project_question(question):
+            from .facts import config_chunks_for
+            pinned = config_chunks_for(question, self.metadata)
+        for idx in pinned:
+            results.append((self.chunks[idx], self.metadata[idx], 0))
+            seen_keys.add(self.chunks[idx][:80])
+            if trace is not None:
+                trace[idx] = {"rank": None, "similarity": None, "pinned": "project question"}
+
         scored = getattr(self.index, "search_scored", None)
         hits = (scored(question, cfg.top_k) if scored and trace is not None
                 else [(i, None) for i in self.index.search(question, cfg.top_k)])
 
         self._log("\n--- RETRIEVED CHUNKS (vector search) ---")
         for rank, (idx, similarity) in enumerate(hits):
+            if idx in pinned:
+                continue
             chunk, meta = self.chunks[idx], self.metadata[idx]
             if cfg.dedup_prefix:
                 key = chunk[:80]                # cheap content fingerprint
@@ -283,6 +298,11 @@ class RAGCodebaseAgent:
         with_map = cfg.prompt_style == "cited" and is_broad_question(question)
         if with_map:
             context = f"{self.repo_map()}\n\n---\n\n{context}"
+        # project questions: what GitHub and the config files record, before the code sources
+        with_facts = cfg.indexes_project_files() and is_project_question(question)
+        if with_facts:
+            from .facts import facts_block
+            context = f"{facts_block(getattr(self, 'facts', {}), self.documents)}\n\n---\n\n{context}"
         sources = [Source.from_meta(n, meta, hop, self._position[id(meta)],
                                     edge=vias.get(self._position[id(meta)], (None, None))[1])
                    for n, (_, meta, hop) in enumerate(retrieved, 1)]
@@ -296,7 +316,7 @@ class RAGCodebaseAgent:
                 source.debug = self._explain(source.chunk_id, trace, chunk, meta, hop,
                                              question, cfg, n)
         yield {"type": "sources", "sources": [asdict(s) for s in sources], "context": context,
-               "repo_map": with_map,
+               "repo_map": with_map, "repo_facts": with_facts,
                "retrieve_ms": round((time.perf_counter() - t0) * 1000, 1)}
         self._log(f"\n--- CONTEXT SENT TO LLM ---\n{context[:1000]}")
 

@@ -5,7 +5,8 @@ FastAPI server for the pre-indexed demo repositories.
     GET  /api/health
     GET  /api/demos
     GET  /api/auth/github, /api/auth/github/callback, /api/auth/me; POST /api/auth/logout  (auth.py)
-    POST /api/repos                         index a GitHub repo (signed in)
+    POST /api/repos                         index a GitHub repo (signed in) with CODERAG_DEFAULT_VERSION
+    POST /api/repos/{repo_id}/reindex       rebuild it with the default version (signed in)
     GET  /api/repos/mine                    repos the signed-in user added (their repo tabs)
     PUT  /api/repos/mine/{repo_id}          add an indexed repo they can open to that list
     DELETE /api/repos/mine/{repo_id}        take it off the list (the index stays)
@@ -45,7 +46,8 @@ from ..visualize import graph_data
 from .auth import Auth, GitHubError, GitHubReauth
 from .jobs import Indexer, NotAllowed, QueueFull
 from .limits import AnswerCache, RateLimiter, client_ip
-from .registry import Repos, load_demos, repo_name_of
+from .live import LiveChecker, candidate_urls
+from .registry import Repos, is_older, load_demos, repo_name_of
 from .settings import Settings
 from .sources import SourceUnavailable, fetch_url, read_source
 
@@ -165,7 +167,7 @@ def _sse(event):
 
 
 def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedder=None,
-               indexer=None, fetch_source=fetch_url, github=None):
+               indexer=None, fetch_source=fetch_url, github=None, live=None):
     """
     settings    : Settings (default: from CODERAG_* env vars)
     demos       : {id: Demo} (default: loaded from settings.data_dir)
@@ -174,6 +176,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     indexer     : jobs.Indexer for visitors' repos (default: built from the above)
     fetch_source: callable(url) -> text, for files not saved locally (default: GitHub raw)
     github      : GitHub OAuth client (default: auth.GitHubOAuth from the settings)
+    live        : web.live.LiveChecker for "Check if live" (default: real HEAD requests)
     """
     settings = settings or Settings.from_env()
     if embedder is None:
@@ -187,6 +190,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     llm_factory = llm_factory or LLMFactory(settings)
     limiter = limiter or RateLimiter()
     auth = Auth(settings, github)
+    live = live or LiveChecker()
     cache = AnswerCache(settings.answer_cache_size)
     graphs = {}
 
@@ -249,8 +253,9 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                 "indexing": {"max_py_files": settings.max_py_files,
                              "max_py_mb": settings.max_py_mb,
                              "skipped_dirs": list(settings.index_ignore_dirs),
-                             "per_hour": settings.index_per_ip_per_hour},
-                "auth": {"github": auth.enabled}}
+                             "per_hour": settings.index_per_ip_per_hour,
+                             "default_version": settings.default_version},
+                "auth": {"github": auth.enabled}, "live_check": settings.live_check}
 
     @app.get("/api/demos")
     def list_demos():
@@ -345,12 +350,52 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     @app.get("/api/repos/{repo_id}")
     def repo_info(repo_id: str, request: Request):
         demo, _, _ = resolve(repo_id, None, request)
-        return demo.info()
+        info = demo.info()
+        if demo.kind == "user" and is_older(demo.built_with(), settings.default_version):
+            info["reindex_to"] = settings.default_version         # the UI offers "Re-index with v10"
+        return info
+
+    @app.post("/api/repos/{repo_id}/live")
+    def live_check(repo_id: str, request: Request):
+        """
+        HEAD the repo's homepage (or latest deployment / Pages URL) from the server:
+        status and response time, cached 10 min. https and public addresses only.
+        """
+        if not settings.live_check:                       # CODERAG_LIVE_CHECK off: no such endpoint
+            raise HTTPException(404, "Not found")
+        demo, _, _ = resolve(repo_id, None, request)
+        urls = candidate_urls(demo.repo_facts())
+        if not urls:
+            raise HTTPException(404, "No homepage or deployment URL is recorded for this repository.")
+        limit(request, "live", 30)
+        return live.check(urls[0])
+
+    @app.post("/api/repos/{repo_id}/reindex")
+    def reindex_repo(repo_id: str, request: Request):
+        """Rebuild a visitor repo with the default version (202 + job)."""
+        user = signed_in(request)
+        demo, _, _ = resolve(repo_id, None, request)
+        if demo.kind != "user":
+            raise HTTPException(404, f"Unknown repository {repo_id!r}")
+        limit(request, "submit", settings.submit_per_ip_per_hour)
+        ip = client_ip(request, settings.trusted_proxy_hops)
+        try:
+            job, queued = indexer.reindex(
+                repo_id, allow_new=lambda: limiter.hit(f"index:{ip}", settings.index_per_ip_per_hour, HOUR),
+                token=auth.token(user), owner_id=user.id)
+        except KeyError:
+            raise HTTPException(404, f"Unknown repository {repo_id!r}")
+        except NotAllowed as e:
+            raise HTTPException(429, str(e), headers={"Retry-After": str(int(e.retry_after))})
+        except QueueFull as e:
+            raise HTTPException(503, str(e), headers={"Retry-After": "60"})
+        auth.users.add_repo(user.id, repo_id)
+        return JSONResponse(job.public(indexer.position(job)), status_code=202 if queued else 200)
 
     @app.get("/api/repos/{repo_id}/graph")
     def graph(repo_id: str, request: Request, version: str | None = None):
         demo, version, agent = resolve(repo_id, version, request)
-        key = (repo_id, version)
+        key = (repo_id, version, id(agent))               # a re-index brings a new agent
         if key not in graphs:
             graphs[key] = graph_data(agent)
         return graphs[key]

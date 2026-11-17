@@ -28,6 +28,8 @@ class Settings:
     max_py_mb: int = 25
     fetch_timeout: int = 120
     index_ignore_dirs: tuple = ("tests", "test", "docs", "examples", "benchmarks")
+    default_version: str = "v10"                # preset new visitor repos are indexed with
+    live_check: bool = False                    # "Check if live": server-side HEAD to a repo's homepage
     # GitHub sign-in (all three needed; without them the site works signed out)
     github_client_id: str = ""
     github_client_secret: str = field(default="", repr=False)
@@ -44,6 +46,8 @@ class Settings:
                 continue
             if f.type in (int, "int"):
                 values[f.name] = int(raw)
+            elif f.type in (bool, "bool"):
+                values[f.name] = raw.strip().lower() in ("1", "true", "yes", "on")
             elif f.type in (tuple, "tuple"):
                 values[f.name] = tuple(v.strip() for v in raw.split(",") if v.strip())
             else:

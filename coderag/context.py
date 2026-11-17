@@ -46,6 +46,10 @@ def public_name(meta):
     """
     if meta.get("type") == "file" and "qname" in meta:
         return f"{module_path(meta).split('.')[-1]} (module)"
+    if meta.get("type") == "template":
+        return f"{meta['name']} (template)"
+    if meta.get("type") == "config":
+        return meta["qname"].split("::")[0]                  # the file: README.md, .github/workflows/ci.yml
     return display_name(meta)
 
 

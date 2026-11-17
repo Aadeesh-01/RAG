@@ -1,12 +1,15 @@
 import {
-  citedSources, createSSEParser, errorMessage, focusSubgraph, formatLocation, hopLabel, middleTruncate,
-  normalizeCitations, renderAnswer, repoOverview, suggestedQuestions, viaLabel, initials, avatarSrc,
+  bridgeCounts, citedSources, createSSEParser, errorMessage, focusSubgraph, formatDate, formatLocation, hopLabel, middleTruncate,
+  middleTruncateName, moduleGraph, normalizeCitations, plural, questionsPerDay, renderAnswer, repoOverview, repoStatus, suggestedQuestions,
+  viaLabel, initials, avatarSrc,
 } from "./lib.js";
 import { currentUser, signIn, signOut } from "./auth.js";
 
 const $ = (selector) => document.querySelector(selector);
 const SETTINGS_KEY = "coderag.settings";
+const ASKED_KEY = "coderag.asked";
 const FULL_GRAPH_LIMIT = 120;          // draw the whole graph up front only for small repos
+const HISTORY_LIMIT = 4;               // thumbnails of the last answers' subgraphs
 
 const state = {
   demos: [], demo: null, health: null,
@@ -16,16 +19,19 @@ const state = {
   cited: null,                         // Set of chunk_ids the answer cites; null until it is written
   answerTurn: null,                    // the turn whose sources the graph shows
   sources: [],                         // that answer's sources (file, lines, chunk_id, id)
-  pane: "graph", panel: "chat",        // right pane on wide screens; the one pane on narrow
-  paneChosen: false,                   // the visitor picked Code or Call graph themselves
+  selected: null,                      // the node (chunk id or "m:<file>") the panel shows
+  view: "overview",                    // the pill nav: overview | ask | graph | repos
   positions: new Map(),                // repo id -> node id -> {x, y}: where the graph left things
   graphLayout: "free",                 // answer graph: "free" | "rings" (by call distance)
   trailsShown: null,                   // the answer turn whose paths have already flowed
   overviews: new Map(),                // repo id -> repoOverview(graph)
+  history: new Map(),                  // repo id -> [{turn, evidence, thumb}] the last answers' subgraphs
   busy: false, turn: 0, controller: null,
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
-  userRepos: [],                       // [{id, name}] the signed-in user's repositories (from the server)
+  userRepos: [],                       // the signed-in user's repositories (server summaries)
+  jobs: new Map(),                     // repo id -> latest indexing job seen
   chats: new Map(),                    // repo id -> {turns, evidence} while another repo is open
+  reposFilter: "all",
 };
 
 // what the graph and legend show for one answer; kept per repo while another is open
@@ -59,8 +65,28 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+/** replaceChildren that skips null, undefined and false (never renders the word "null"). */
+function fill(node, ...children) {
+  node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
+}
+
 function escapeHtml(text) {
   return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+function svgIcon(d) {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+  path.setAttribute("d", d);
+  svg.append(path);
+  return svg;
+}
+
+/** A category dot beside its word: the same mark everywhere a category is named. */
+function dot(kind, language) {
+  return el("i", { class: `dot${kind ? ` dot--${kind}` : ""}`, "data-language": language || null, "aria-hidden": "true" });
 }
 
 // Markdown + sanitizer; if the CDN libraries failed to load, show plain escaped text.
@@ -167,6 +193,26 @@ function updateLlmBanner() {
   }
 }
 
+// ── views: the pill nav ─────────────────────────────────────────────────────
+function isNarrow() {
+  return window.matchMedia("(max-width: 60rem)").matches;
+}
+
+function setView(name, { focus = false } = {}) {
+  state.view = name;
+  document.body.dataset.view = name;
+  document.querySelectorAll(".pill-nav button").forEach((b) => {
+    if (b.dataset.view === name) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  const repos = name === "repos";
+  $("#view-work").hidden = repos;
+  $("#view-repos").hidden = !repos;
+  if (repos) renderRepos();
+  else if (name === "graph") requestAnimationFrame(() => drawGraph());
+  if (focus && name === "ask") $("#question").focus();
+  if (focus && name === "overview") window.scrollTo({ top: 0 });
+}
+
 // ── repositories ────────────────────────────────────────────────────────────
 function githubUrl(demo, file, start, end) {
   if (!demo.url || !demo.sha) return null;
@@ -174,44 +220,64 @@ function githubUrl(demo, file, start, end) {
   return `${demo.url}/blob/${demo.sha}/${path}#L${start}-L${end}`;
 }
 
-function renderRepoTabs() {
-  const nav = $("#repo-tabs");
-  const tab = (repo, removable) => {
-    const open = el("button", {
-      type: "button", class: "tab-open", title: removable ? repo.name : null,
-      "aria-pressed": String(repo.id === state.demo?.id), onclick: () => selectRepo(repo.id),
-    }, repo.name);
-    if (!removable) return el("span", { class: "tab" }, open);
-    // a sibling button, not nested in the tab: both are reachable with Tab
-    const close = el("button", {
-      type: "button", class: "close", "aria-label": `Remove ${repo.name}`, title: "Remove from this list",
-      onclick: () => removeUserRepo(repo.id),
-    }, svgIcon("M7 7l10 10M17 7L7 17"));
-    return el("span", { class: "tab user" }, open, close);
+/** The repo switcher: a search box over Demos and Your repos. */
+function setupRepoSwitcher() {
+  const button = $("#repo-button");
+  const menu = $("#repo-menu");
+  const filter = $("#repo-filter");
+  const open = (on) => {
+    menu.hidden = !on;
+    button.setAttribute("aria-expanded", String(on));
+    if (on) { filter.value = ""; renderRepoMenu(); filter.focus(); }
   };
-  nav.replaceChildren(...state.demos.map((d) => tab(d, false)),
-                      ...state.userRepos.map((r) => tab(r, true)));
-  // on a narrow bar the tab row scrolls: keep the open repo in view
-  nav.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-  syncTabFades();
+  button.addEventListener("click", () => open(menu.hidden));
+  filter.addEventListener("input", renderRepoMenu);
+  document.addEventListener("click", (e) => {
+    if (!menu.hidden && !menu.contains(e.target) && !button.contains(e.target)) open(false);
+  });
+  menu.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") { e.preventDefault(); open(false); button.focus(); return; }
+    const items = [...menu.querySelectorAll(".repo-list li")];
+    const i = items.indexOf(document.activeElement);
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      const to = e.key === "ArrowDown" ? Math.min(items.length - 1, i + 1) : Math.max(0, i - 1);
+      items[to]?.focus();
+    } else if ((e.key === "Enter" || e.key === " ") && i >= 0) {
+      e.preventDefault();
+      items[i].click();
+    }
+  });
+  state.closeRepoMenu = () => open(false);
 }
 
-/** Fade the tab row's edges when more tabs are scrolled out of view. */
-function syncTabFades() {
-  const nav = $("#repo-tabs");
-  const more = nav.scrollWidth - nav.clientWidth;
-  nav.classList.toggle("fade-start", more > 1 && nav.scrollLeft > 1);
-  nav.classList.toggle("fade-end", more > 1 && nav.scrollLeft < more - 1);
+function renderRepoMenu() {
+  const q = $("#repo-filter").value.trim().toLowerCase();
+  const match = (r) => !q || r.name.toLowerCase().includes(q) || r.id.toLowerCase().includes(q);
+  const item = (repo, removable) => el("li", {
+    role: "option", tabindex: "-1", "aria-selected": String(repo.id === state.demo?.id), title: repo.name,
+    onclick: () => { state.closeRepoMenu(); selectRepo(repo.id); },
+  },
+  dot(null, mainLanguage(repo)),
+  el("span", { class: "name", text: repo.name }),
+  repo.private ? el("span", { class: "private-badge", text: "Private" }) : null,
+  removable ? el("button", { type: "button", class: "icon-button remove", "aria-label": `Remove ${repo.name}`, title: "Remove from your repos",
+    onclick: (e) => { e.stopPropagation(); removeUserRepo(repo.id); renderRepoMenu(); } }, svgIcon("M7 7l10 10M17 7L7 17")) : null);
+  $("#repo-demos").replaceChildren(...state.demos.filter(match).map((d) => item(d, false)));
+  const mine = state.userRepos.filter(match);
+  $("#repo-mine").replaceChildren(...mine.map((r) => item(r, true)));
+  const note = $("#repo-mine-empty");
+  note.textContent = !currentUser() ? "Sign in to add your own repositories."
+    : !state.userRepos.length ? "None yet. Add one below." : !mine.length ? `No repository matches “${$("#repo-filter").value.trim()}”.` : "";
+  $("#repo-current").textContent = state.demo ? state.demo.name : "Choose a repository";
 }
 
-function svgIcon(d) {
-  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  svg.setAttribute("viewBox", "0 0 24 24");
-  svg.setAttribute("aria-hidden", "true");
-  const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-  path.setAttribute("d", d);
-  svg.append(path);
-  return svg;
+/** The language with the most files, in the indexer's key ("python"), or null. */
+function mainLanguage(repo) {
+  const entries = Object.entries(repo?.languages || {});
+  if (!entries.length) return null;
+  const [label] = entries.sort((a, b) => b[1] - a[1])[0];
+  return languageKey(label);
 }
 
 // ── the signed-in user's repositories: kept on the server, per GitHub account ──
@@ -220,20 +286,24 @@ const OLD_REPOS_KEY = "coderag.repos";     // this browser's list before account
 async function loadUserRepos() {
   try { localStorage.removeItem(OLD_REPOS_KEY); } catch { /* storage blocked */ }
   try {
-    const mine = await fetchJSON("/api/repos/mine");
-    return mine.map((r) => ({ id: r.id, name: r.name }));
+    return await fetchJSON("/api/repos/mine");
   } catch {
-    return [];                 // signed out meanwhile, or the server is unreachable: no tabs
+    return [];                 // signed out meanwhile, or the server is unreachable: no repos
   }
 }
 
-/** Show `id` as one of the user's tabs, and keep it on their account. */
-function rememberUserRepo(id, name) {
-  const known = state.userRepos.some((r) => r.id === id);
-  state.userRepos = [{ id, name }, ...state.userRepos.filter((r) => r.id !== id)];
+/** Show `id` as one of the user's repos, and keep it on their account. */
+function rememberUserRepo(id, name, info = null) {
+  const known = state.userRepos.find((r) => r.id === id);
+  const entry = { ...(known || {}), ...(info || {}), id, name };
+  state.userRepos = [entry, ...state.userRepos.filter((r) => r.id !== id)];
   if (!known && currentUser()) {
     fetch(`/api/repos/mine/${encodeURIComponent(id)}`, { method: "PUT" }).catch(() => {});
   }
+  if (!info) fetchJSON(`/api/repos/${encodeURIComponent(id)}`).then((full) => {
+    state.userRepos = state.userRepos.map((r) => (r.id === id ? { ...r, ...full } : r));
+    if (state.view === "repos") renderRepos();
+  }).catch(() => {});
 }
 
 function removeUserRepo(id) {
@@ -241,28 +311,40 @@ function removeUserRepo(id) {
   if (currentUser()) fetch(`/api/repos/mine/${encodeURIComponent(id)}`, { method: "DELETE" }).catch(() => {});
   // switching away stores the open chat, so forget it only afterwards
   if (state.demo?.id === id) selectRepo(state.demos[0]?.id).then(() => state.chats.delete(id));
-  else { state.chats.delete(id); renderRepoTabs(); }
+  else { state.chats.delete(id); renderRepoMenu(); }
+  if (state.view === "repos") renderRepos();
 }
 
 // ── languages: the indexer's (coderag/languages.py) labels and highlight.js names ──
 const LANGUAGE_LABELS = { python: "Python", javascript: "JavaScript", typescript: "TypeScript", java: "Java",
-  kotlin: "Kotlin", c: "C", cpp: "C++", go: "Go", rust: "Rust" };
+  kotlin: "Kotlin", c: "C", cpp: "C++", go: "Go", rust: "Rust", html: "HTML", config: "config" };
 const EXTENSION_LANGUAGES = { py: "python", js: "javascript", mjs: "javascript", cjs: "javascript", jsx: "javascript",
   ts: "typescript", mts: "typescript", cts: "typescript", tsx: "typescript", java: "java", kt: "kotlin", kts: "kotlin",
-  c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp", hxx: "cpp", go: "go", rs: "rust" };
-const INDEXED_GITHUB_LANGUAGES = new Set(Object.values(LANGUAGE_LABELS));
+  c: "c", h: "c", cpp: "cpp", cc: "cpp", cxx: "cpp", hpp: "cpp", hh: "cpp", hxx: "cpp", go: "go", rs: "rust",
+  html: "html", htm: "html" };
+const INDEXED_GITHUB_LANGUAGES = new Set(Object.values(LANGUAGE_LABELS).filter((l) => l !== "HTML" && l !== "config"));
 
 /** "go", "python" ... for a file path (by extension), or null. */
 function languageOfPath(path) {
   return EXTENSION_LANGUAGES[(path || "").split(".").pop().toLowerCase()] || null;
 }
 
-/** Language tags say something only when a repository mixes languages, or isn't Python. */
-function languageTag(language) {
+/** "Python" -> "python", "C++" -> "cpp": the key a label or a node language maps to. */
+function languageKey(label) {
+  if (!label) return null;
+  const lower = String(label).toLowerCase();
+  if (LANGUAGE_LABELS[lower]) return lower;
+  const found = Object.entries(LANGUAGE_LABELS).find(([, name]) => name.toLowerCase() === lower);
+  return found ? found[0] : "other";
+}
+
+/** The language word with its dot, or null for a Python-only repository's Python. */
+function languageTag(language, { always = false } = {}) {
   if (!language) return null;
   const mixed = Object.keys(state.demo?.languages || {}).length > 1;
-  if (!mixed && language === "python") return null;
-  return el("span", { class: "lang-tag", "data-language": language, text: LANGUAGE_LABELS[language] || language });
+  if (!always && !mixed && language === "python") return null;
+  return el("span", { class: "lang", title: LANGUAGE_LABELS[language] || language }, dot(null, languageKey(language)),
+    el("span", { text: LANGUAGE_LABELS[language] || language }));
 }
 
 const GENERIC_QUESTIONS = [
@@ -321,7 +403,7 @@ function setupRepoPicker({ onChange, onAdd, onOpen }) {
 
   function option(r, i) {
     const [owner, name] = r.full_name.split("/");
-    const meta = [r.language || "No language", r.pushed_at && `pushed ${pushedAgo(r.pushed_at)}`].filter(Boolean).join(" · ");
+    const meta = [r.language || "No language", r.pushed_at && `pushed ${pushedAgo(r.pushed_at)}`].filter(Boolean).join(", ");
     return el("li", {
       id: optionId(i), role: "option", class: `repo-option${r.indexed ? " indexed" : ""}`,
       "aria-selected": String(r.full_name === selected), "data-full-name": r.full_name, title: r.description || null,
@@ -343,7 +425,7 @@ function setupRepoPicker({ onChange, onAdd, onOpen }) {
                                 && (!q || r.full_name.toLowerCase().includes(q)));
     if (!shown.some((r) => r.full_name === selected)) selected = null;
     list.replaceChildren(...shown.map(option));
-    const total = `${repos.length.toLocaleString()} ${repos.length === 1 ? "repository" : "repositories"}`;
+    const total = plural(repos.length, "repository", "repositories");
     if (!repos.length) setStatus("No repositories on your GitHub account yet. Paste a URL below to add someone else's.");
     else if (!shown.length) setStatus(q ? `No repositories match “${search.value.trim()}”.` : `No ${filter} repositories.`);
     else setStatus(shown.length === repos.length ? total : `${shown.length.toLocaleString()} of ${total}`);
@@ -376,7 +458,7 @@ function setupRepoPicker({ onChange, onAdd, onOpen }) {
       if (response.status === 401) {
         // the token was revoked or expired (or the session ended): sign in with GitHub again
         showProblem(el("span", { text: "GitHub needs you to sign in again to list your repositories." }),
-          el("button", { type: "button", class: "ghost", text: "Reconnect GitHub",
+          el("button", { type: "button", class: "secondary small", text: "Reconnect GitHub",
                          onclick: () => signIn(window.location.pathname + window.location.search) }));
         return;
       }
@@ -482,6 +564,7 @@ function setupAddRepo() {
     syncSubmit();
   });
   const open = (url = "") => {
+    state.closeRepoMenu?.();
     input.value = url;
     showError("");
     const limits = state.health?.indexing;
@@ -498,7 +581,9 @@ function setupAddRepo() {
     (signedIn && !url ? $("#repo-search") : input).focus();
   };
   // adding a repository needs an account (it costs the server an index); the demos don't
-  $("#add-repo-button").addEventListener("click", () => (currentUser() ? open() : toSignIn()));
+  const openOrSignIn = () => (currentUser() ? open() : toSignIn());
+  $("#add-repo-button").addEventListener("click", openOrSignIn);
+  $("#repos-add").addEventListener("click", openOrSignIn);
   $("#add-repo-cancel").addEventListener("click", () => dialog.close());
   form.addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -533,6 +618,11 @@ function setupAddRepo() {
 function trackJob(job) {
   const card = el("div", { class: "job", "data-job": job.job_id });
   $("#jobs").append(card);
+  const note = (j) => {
+    state.jobs.set(j.repo_id, j);
+    if (!state.userRepos.some((r) => r.id === j.repo_id)) rememberUserRepo(j.repo_id, j.name);
+    if (state.view === "repos") renderRepos();
+  };
   const render = (j) => {
     card.className = `job ${j.status}`;
     const waiting = j.status === "queued" && j.queue_position > 1 ? ` (${j.queue_position} in queue)` : "";
@@ -543,10 +633,13 @@ function trackJob(job) {
         j.status === "failed" || j.status === "ready"
           ? el("button", { type: "button", class: "link-button", text: "Dismiss", onclick: () => card.remove() }) : null),
       el("div", { class: "msg", text: (j.status === "failed" ? j.error : j.message) + waiting }),
-      j.status === "failed" ? null : el("div", { class: "bar" }, el("i", { style: `--progress:${j.progress}` })));
+      j.status === "failed" ? null : el("div", { class: "progress" }, el("i", { style: `--progress:${j.progress}` })));
+    note(j);
   };
   const finish = (j) => {
     render(j);
+    for (const cache of [state.graphs, state.overviews, state.positions, state.history]) cache?.delete?.(j.repo_id);
+    state.jobs.delete(j.repo_id);
     rememberUserRepo(j.repo_id, j.name);
     selectRepo(j.repo_id);
     setTimeout(() => card.remove(), 4000);
@@ -566,38 +659,168 @@ function trackJob(job) {
   }, 1000);
 }
 
+/** Rebuild a visitor repo with the server's default version; the job card shows progress. */
+async function reindexRepo(repo, button) {
+  if (button) button.disabled = true;
+  try {
+    const response = await fetch(`/api/repos/${encodeURIComponent(repo.id)}/reindex`, { method: "POST" });
+    const job = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(job.error || `The server could not re-index it (error ${response.status}).`);
+    trackJob(job);
+  } catch (err) {
+    banner(err.message, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+/**
+ * Repo facts: what GitHub records (homepage, Pages, deployments) and which platforms the config
+ * files set up. Recorded, not proven: "Check if live" asks the server to try the URL now.
+ */
+function renderFacts(demo) {
+  const f = demo.facts || {};
+  const latest = (f.deployments || [])[0];
+  const rows = [
+    f.homepage ? ["Homepage", el("a", { href: f.homepage, target: "_blank", rel: "noopener", text: f.homepage })] : null,
+    f.has_pages ? ["GitHub Pages", f.pages_url ? el("a", { href: f.pages_url, target: "_blank", rel: "noopener", text: f.pages_url }) : "enabled"] : null,
+    latest ? ["Last deployment", `${latest.environment || "unknown"}: ${latest.state || "no status"}, ${formatDate(latest.created_at) || "undated"}`] : null,
+    f.platforms?.length ? ["Configured for", f.platforms.map((p) => p.name).join(", ")] : null,
+  ].filter(Boolean);
+  if (!rows.length) return null;
+  // the server only makes live checks when CODERAG_LIVE_CHECK is on (reported by /api/health)
+  const canCheck = Boolean(state.health?.live_check)
+    && Boolean(f.homepage || f.pages_url || (f.deployments || []).some((d) => d.environment_url));
+  const result = el("span", { class: "live-result", role: "status" });
+  const check = canCheck ? el("button", { type: "button", class: "link-button", text: "Check if live",
+    onclick: async (e) => {
+      const button = e.currentTarget;
+      button.disabled = true;
+      result.textContent = "Checking…";
+      try {
+        const r = await fetch(`/api/repos/${encodeURIComponent(demo.id)}/live`, { method: "POST" });
+        const body = await r.json().catch(() => ({}));
+        result.textContent = !r.ok ? body.error || `Check failed (${r.status}).`
+          : body.error ? `${body.url}: ${body.error}`
+          : `${body.url} answered ${body.status} in ${body.ms} ms${body.cached ? " (checked in the last 10 min)" : ""}`;
+        result.dataset.ok = String(Boolean(body.ok));
+      } catch {
+        result.textContent = "The check could not be run.";
+      } finally {
+        button.disabled = false;
+      }
+    } }) : null;
+  return el("section", { class: "repo-facts" },
+    el("h3", { text: "Repo facts" }),
+    el("dl", {}, rows.map(([k, v]) => [el("dt", { text: k }), el("dd", {}, v)])),
+    check ? el("div", { class: "row" }, check, " ", result) : null);
+}
+
+/** The repository's name, description and meta line above the tiles. */
+function renderRepoHead(demo) {
+  const head = $("#repo-head");
+  if (!demo) {
+    head.replaceChildren(el("div", { class: "repo-head-skeleton", "aria-hidden": "true" }, el("span"), el("span")));
+    return;
+  }
+  const languages = Object.entries(demo.languages || {}).sort((a, b) => b[1] - a[1]);
+  fill(head, 
+    el("h1", {}, demo.url ? el("a", { href: `${demo.url}/tree/${demo.sha}`, target: "_blank", rel: "noopener", text: demo.name }) : demo.name),
+    el("div", { class: "meta" },
+      demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null,
+      demo.built && formatDate(demo.built) ? el("span", { text: `indexed ${formatDate(demo.built)}` }) : null,
+      demo.indexed_with ? el("span", {}, el("code", { text: demo.indexed_with })) : null,
+      languages.length ? el("span", { class: "dots", title: languages.map(([l, n]) => `${plural(n, `${l} file`)}`).join(", ") },
+        languages.slice(0, 6).map(([label, n]) => el("span", { class: "lang", title: plural(n, `${label} file`) }, dot(null, languageKey(label)), label))) : null,
+      demo.reindex_to ? el("button", { type: "button", class: "link-button reindex",
+        title: `Indexed with ${demo.indexed_with || "an older version"}. Rebuild it with ${demo.reindex_to}: `
+          + "other languages and links across them (HTTP, JNI, ctypes) are indexed too.",
+        text: `Re-index with ${demo.reindex_to}`, onclick: (e) => reindexRepo(demo, e.currentTarget) }) : null),
+    demo.description ? el("p", { class: "description", text: demo.description.replace(/ -> /g, " → ") }) : null);
+}
+
+// ── the stat tiles ──────────────────────────────────────────────────────────
+function loadAsked() {
+  try { return JSON.parse(localStorage.getItem(ASKED_KEY) || "[]"); } catch { return []; }
+}
+
+function logAsked(repoId) {
+  const cutoff = Date.now() - 30 * 86400000;
+  const list = loadAsked().filter((x) => Date.parse(x.t) > cutoff);
+  list.push({ t: new Date().toISOString(), repo: repoId });
+  try { localStorage.setItem(ASKED_KEY, JSON.stringify(list)); } catch { /* not persisted */ }
+}
+
+/** A mini bar chart: one series, the current bar in the accent, each bar named on hover. */
+function bars(values, { current = -1, empty = false, cat = null } = {}) {
+  const max = Math.max(1, ...values.map((v) => v.value));
+  return el("ul", { class: `bars${empty ? " empty" : ""}`, "aria-hidden": "true" },
+    values.map((v, i) => el("li", { class: i === current ? "current" : null, title: v.title || null, style: v.cat ? `--cat:${v.cat}` : cat ? `--cat:${cat}` : null },
+      el("i", { style: `--v:${(v.value / max).toFixed(3)}` }))));
+}
+
+function tile(label, value, note, chart) {
+  return el("div", { class: "tile" },
+    el("span", { class: "label", text: label }),
+    value === null ? el("span", { class: "value pending", "aria-label": "loading" }) : el("span", { class: "value", text: value.toLocaleString() }),
+    el("span", { class: "note" }, el("span", {}, note), chart));
+}
+
+function renderTiles(demo) {
+  const box = $("#tiles");
+  if (!demo) {
+    box.replaceChildren(...["Files", "Functions", "Bridges", "Questions asked"].map((l) => tile(l, null, "", bars([]))));
+    return;
+  }
+  const overview = state.overviews.get(demo.id);
+  const graph = state.graphs.get(demo.id);
+  const c = overview?.counts || demo.counts || {};
+  const languages = Object.entries(demo.languages || {}).sort((a, b) => b[1] - a[1]);
+  const filesNote = languages.length > 1 ? plural(languages.length, "language") : languages[0]?.[0] || "no languages recorded";
+  const files = tile("Files", c.files ?? demo.counts?.files ?? 0, filesNote,
+    bars(languages.slice(0, 8).map(([l, n]) => ({ value: n, title: plural(n, `${l} file`), cat: `var(--lang-${languageKey(l)})` })), { empty: !languages.length }));
+
+  const packages = overview?.packages || [];
+  const functions = tile("Functions", graph ? c.functions ?? 0 : null,
+    overview ? `${plural(c.classes ?? 0, "class", "classes")}, ${plural(packages.length, "package")}` : "counting…",
+    bars(packages.slice(0, 8).map((p) => ({ value: p.functions, title: `${p.name}: ${plural(p.functions, "function")}` })), { empty: !packages.length }));
+
+  const b = bridgeCounts(graph?.links);
+  const mechanisms = Object.entries(b.byMechanism).sort((x, y) => y[1] - x[1]);
+  const BRIDGE_NAMES = { http: "HTTP", jni: "JNI", ctypes_cffi: "ctypes/cffi" };
+  const bridgeNote = !graph ? "counting…" : b.total ? mechanisms.map(([m]) => BRIDGE_NAMES[m] || m).join(", ")
+    : demo.bridges_checked ? (languages.length > 1 ? "none found" : "one language") : "not checked (re-index)";
+  const bridges = tile("Bridges", graph ? b.total : null, bridgeNote,
+    bars(mechanisms.map(([m, n]) => ({ value: n, title: `${BRIDGE_NAMES[m] || m}: ${plural(n, "bridge")}` })), { empty: !b.total, cat: "var(--cat-bridge)" }));
+
+  const asked = loadAsked().filter((x) => x.repo === demo.id);
+  const perDay = questionsPerDay(asked, 7);
+  const today = perDay[perDay.length - 1];
+  const dayName = (back) => { const d = new Date(); d.setDate(d.getDate() - back); return d.toLocaleDateString(undefined, { weekday: "short" }); };
+  const questions = tile("Questions asked", asked.length, today ? el("b", { class: "up", text: `+${today} today` }) : asked.length ? "none today" : "in this browser",
+    bars(perDay.map((n, i) => ({ value: n, title: `${dayName(6 - i)}: ${plural(n, "question")}` })), { current: 6, empty: !asked.length }));
+  box.replaceChildren(files, functions, bridges, questions);
+}
+
+// ── the chat's first card: the repository's shape ───────────────────────────
 function renderRepoCard(demo) {
-  const s = demo.stats || {};
   const overview = state.overviews.get(demo.id);
   const c = overview?.counts;
-  const stat = (n, one, many) => el("span", {}, el("b", { text: n }), ` ${n === 1 ? one : many}`);
   const generated = overview ? suggestedQuestions(overview) : [];
   const questions = demo.questions.length ? demo.questions
     : generated.length ? generated : state.graphs.has(demo.id) ? GENERIC_QUESTIONS : [];
   const card = $("#repo-card");
-  card.replaceChildren(
-    el("h1", {}, demo.url ? el("a", { href: `${demo.url}/tree/${demo.sha}`, target: "_blank", rel: "noopener", text: demo.name }) : demo.name),
-    el("p", { class: "description", text: demo.description }),
-    el("div", { class: "stats" },
-      stat(c?.files ?? s.files ?? 0, "file", "files"),
-      c ? stat(c.functions, "function", "functions") : null,
-      c ? stat(c.classes, "class", "classes") : null,
-      demo.sha ? el("span", {}, "commit ", el("code", { text: demo.sha.slice(0, 7) })) : null,
-      Object.keys(demo.languages || {}).length ? el("span", { class: "lang-counts" },
-        Object.entries(demo.languages).map(([label, n]) => el("span", {
-          class: "lang-count", title: `${n.toLocaleString()} ${label} ${n === 1 ? "file" : "files"}` },
-        el("b", { text: n.toLocaleString() }), ` ${label}`))) : null,
-      el("button", { type: "button", class: "link-button clear-chat", text: "Clear chat", hidden: true,
-        title: "Remove this repository's questions and answers (saved answers are kept)",
-        onclick: clearChat })),
+  const intro = c ? `${plural(c.files, "file")}, ${plural(c.functions, "function")} and ${plural(c.classes, "class", "classes")}. Ask anything about this code; every answer cites the lines it came from.`
+    : state.graphs.has(demo.id) ? "Ask anything about this code; every answer cites the lines it came from."
+    : "Reading the call graph…";
+  fill(card, 
+    el("h2", { text: demo.name }),
+    el("p", { class: "intro", text: intro }),
     overview ? renderOverview(overview) : null,
-    questions.length ? el("section", { class: "suggest" }, el("h2", { text: "Try asking" }),
-      el("div", { class: "chips" }, questions.map((q) => el("button", {
-        type: "button", class: "chip", text: q, onclick: () => ask(q),
-        // a tooltip only when the question is cut off
-        onmouseenter: (e) => { const b = e.currentTarget; b.title = b.scrollWidth > b.clientWidth ? q : ""; },
-      })))) : null,
+    renderFacts(demo),
   );
+  $("#suggest").replaceChildren(...questions.map((q) => el("button", {
+    type: "button", class: "chip", text: q, title: q, onclick: () => ask(q),
+  })));
   syncRepoCard();
 }
 
@@ -631,11 +854,13 @@ async function selectRepo(id) {
   state.demo = demo;
   setEvidence(chat?.evidence);
   state.graphMode = "focus";
-  hideNodeCard();
-  if (state.sources.length) showAnswerCode();
-  else renderCodeEmpty();
-  renderRepoTabs();
+  state.selected = null;
+  renderNodePanel(null);
+  renderRepoMenu();
+  renderRepoHead(demo);
+  renderTiles(demo);
   renderRepoCard(demo);
+  renderThumbs();
   conversation.replaceChildren($("#repo-card"), ...(chat?.turns || []));
   syncRepoCard();
   syncLegend();
@@ -650,6 +875,8 @@ async function selectRepo(id) {
   if (state.demo === demo) {
     state.graph = graph;
     renderRepoCard(demo);
+    renderTiles(demo);
+    if (state.selected === null) renderNodePanel(null);
     drawGraph();
   }
 }
@@ -697,12 +924,19 @@ function sourceList(ids) {
   return names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names.at(-1)}` : names[0];
 }
 
-/** The Ask button turns into Stop while an answer is being written. */
+/** The send button turns into Stop while an answer is being written. */
 function setAskBusy(busy) {
   const button = $("#ask-button");
-  button.textContent = busy ? "Stop" : "Ask";
   button.classList.toggle("stop", busy);
-  button.title = busy ? "Stop writing this answer" : "";
+  button.setAttribute("aria-label", busy ? "Stop" : "Send");
+  button.title = busy ? "Stop writing this answer" : "Send (Enter)";
+}
+
+/** A skeleton the shape of the answer to come, with what the system is doing. */
+function answerSkeleton(saying) {
+  return el("div", { class: "status", role: "status" },
+    el("span", { class: "skeleton-line" }), el("span", { class: "skeleton-line" }), el("span", { class: "skeleton-line" }),
+    el("span", { class: "saying", text: saying }));
 }
 
 async function ask(question) {
@@ -713,19 +947,22 @@ async function ask(question) {
   setAskBusy(true);
   $("#question").value = "";
   autosize();
+  if (isNarrow()) setView("ask");
   updateUrl({ repo: state.demo.id, q: question });
   const repo = state.demo;               // the answer belongs here even if the visitor switches
   $("#conversation .cleared")?.remove();
+  logAsked(repo.id);
+  renderTiles(repo);
 
   const turnId = ++state.turn;
-  const status = el("div", { class: "status" }, el("span", { class: "spinner" }), el("span", { text: "Searching the code…" }));
+  const status = answerSkeleton("Searching the code…");
   const body = el("div", { class: "body" });
   const answer = el("div", { class: "answer" }, status, body);
   const turn = el("article", { class: "turn", "data-turn": turnId }, el("div", { class: "question", text: question }), answer);
   const conversation = $("#conversation");
   conversation.append(turn);
   syncRepoCard();
-  turn.scrollIntoView({ behavior: "smooth", block: "start" });
+  turn.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "start" });
 
   let text = "";
   let sources = [];
@@ -783,13 +1020,11 @@ async function ask(question) {
           if (state.demo?.id === repo.id) {
             setEvidence(found);
             state.graphMode = "focus";
-            hideNodeCard();
             drawGraph();
-            renderCodeFiles();
           } else if (state.chats.has(repo.id)) {
             state.chats.get(repo.id).evidence = found;          // visitor switched away
           }
-          status.lastChild.textContent = "Writing the answer…";
+          status.querySelector(".saying").textContent = "Writing the answer…";
         } else if (event.type === "token") {
           text += data.text;
           if (!frame) frame = requestAnimationFrame(paint);
@@ -799,9 +1034,6 @@ async function ask(question) {
           status.remove();
           const cited = citedSources(text, sources.length);
           showCited(turn, repo.id, sources, cited);
-          if (state.demo?.id === repo.id && state.answerTurn === turn) {
-            showAnswerCode({ reveal: isWide() && !state.paneChosen });
-          }
           const seconds = (data.llm_ms / 1000).toFixed(1);
           const copy = el("button", { type: "button", class: "link-button", text: "Copy answer",
             onclick: () => copyText(normalizeCitations(text), copy) });
@@ -815,6 +1047,7 @@ async function ask(question) {
             el("span", { class: "actions" }, copy, save)), answer.querySelector(".sources"));
           announce(cited.length ? `Answer ready. It cites ${sourceList(cited)}.`
             : sources.length ? `Answer ready. It cites none of the ${sources.length} sources.` : "Answer ready.");
+          if (sources.length) rememberAnswer(repo.id, turn);
         } else if (event.type === "error") {
           notice(errorMessage(data.code, data.message));
         }
@@ -853,47 +1086,33 @@ function showCited(turn, repoId, sources, cited) {
   }
 }
 
+/** Source rows: each is a button that selects its node, opens the panel and the overlay. */
 function renderSources(sources, { graph = true } = {}) {
   const rows = sources.map((s) => {
-    const details = el("details", { class: "source", "data-sid": s.id, "data-chunk": s.chunk_id,
-      "data-file": s.file, "data-start": s.start_line, "data-end": s.end_line },
-      el("summary", {},
-        // the " " text nodes keep screen-reader names apart; grid layout ignores them
-        el("span", { class: "sid", "data-relation": relationOf(s), title: relationWord(s), text: `S${s.id}` }), " ",
-        el("span", { class: "what" },
-          el("span", { class: "name", text: s.name }), " ",
-          languageTag(s.language), " ",
-          el("span", { class: "where", title: formatLocation(s),
-            text: `${middleTruncate(s.file)}${s.start_line ? `:${s.start_line}-${s.end_line}` : ""}` }),
-          // debug mode: how it was retrieved, visible without expanding the row
-          s.debug ? el("span", { class: "debug", text: debugLine(s.debug) }) : null), " ",
-        // a direct match is the default and says nothing; a graph source names its path
-        relationLabel(s) ? el("span", { class: "hop", "data-relation": relationOf(s), "data-confidence": s.confidence || null,
-          "data-bridge": s.bridge?.mechanism || null,
-          title: s.bridge ? bridgeEvidence(s.bridge)
-            : `${viaLabel(s)}. ${hopHelp(s.hop)}${s.confidence === "name_match" ? " Linked by name only, not resolved." : ""}` },
-        relationLabel(s)) : null),
-      s.code ? codeBlock(s) : null,
-      el("div", { class: "source-actions" },
-        graph ? el("button", { type: "button", class: "link-button", text: "Show in file",
-          onclick: () => showCode(s.file, { start: s.start_line, end: s.end_line, reveal: true }) }) : null,
-        s.url ? el("a", { class: "open", href: s.url, target: "_blank", rel: "noopener", text: "Open on GitHub" }) : null,
-        el("button", { type: "button", class: "link-button", text: "Copy location",
-          onclick: (e) => copyText(`${formatLocation(s)}  ${s.name}`, e.currentTarget) })));
+    const row = el("button", { type: "button", class: "source", "data-sid": s.id, "data-chunk": s.chunk_id,
+      "data-file": s.file, "data-start": s.start_line, "data-end": s.end_line,
+      title: `${s.name}\n${formatLocation(s)}${relationLabel(s) ? `\n${relationLabel(s)}` : ""}`,
+      onclick: () => (graph ? selectNode(s.chunk_id, { open: true, source: s }) : null) },
+      el("span", { class: "sid", "data-relation": relationOf(s), title: relationWord(s), text: `S${s.id}` }),
+      el("span", { class: "what" },
+        el("span", { class: "name" }, el("span", { text: middleTruncateName(s.name, 40) }), languageTag(s.language)),
+        el("span", { class: "where" },
+          el("span", { title: formatLocation(s), text: `${middleTruncate(s.file)}${s.start_line ? `:${s.start_line}-${s.end_line}` : ""}` }),
+          // a direct match is the default and says nothing; a graph source names its path
+          relationLabel(s) ? el("span", { class: "hop", "data-relation": relationOf(s), "data-confidence": s.confidence || null,
+            "data-bridge": s.bridge?.mechanism || null,
+            title: s.bridge ? bridgeEvidence(s.bridge)
+              : `${viaLabel(s)}. ${hopHelp(s.hop)}${s.confidence === "name_match" ? " Linked by name only, not resolved." : ""}` },
+          relationLabel(s)) : null),
+        // debug mode: how it was retrieved, visible without expanding the row
+        s.debug ? el("span", { class: "debug", text: debugLine(s.debug) }) : null));
     if (graph) {
-      const summary = details.querySelector("summary");
       for (const [on, off] of [["mouseenter", "mouseleave"], ["focus", "blur"]]) {
-        summary.addEventListener(on, () => graphView?.highlight(s.chunk_id));
-        summary.addEventListener(off, () => graphView?.highlight(null));
+        row.addEventListener(on, () => graphView?.highlight(s.chunk_id));
+        row.addEventListener(off, () => graphView?.highlight(null));
       }
-      details.addEventListener("toggle", () => {
-        if (!details.open) return;
-        pulseNode(s.chunk_id);
-        // a wide screen already showing code follows the row that was opened
-        if (isWide() && state.pane === "code") showCode(s.file, { start: s.start_line, end: s.end_line });
-      });
     }
-    return details;
+    return row;
   });
   return el("section", { class: "sources" }, el("h2", { text: `Sources (${sources.length})` }), rows);
 }
@@ -911,21 +1130,20 @@ function relationOf(s) {
   return RELATIONS.includes(s?.relation) ? s.relation : s?.hop ? "callee" : "match";
 }
 
-/** The relation as a word, for titles, the node card and screen readers. */
+/** The relation as a word, for titles, the node panel and screen readers. */
 function relationWord(s) {
   return RELATION_WORDS[relationOf(s)];
 }
 
-/** "called by main", "calls Session.send", "base class of Bat", "class of Zoo.run": the previous step named. */
 // bridge edges (v10): code reached across a language or process boundary
 const BRIDGE_LABELS = { http: "HTTP", jni: "JNI", ctypes_cffi: "ctypes/cffi" };
 
-/** "HTTP POST /api/repos (exact)" plus the matched strings and both locations: a bridge's evidence. */
+/** "HTTP POST /api/repos ← app.js:412": a bridge's evidence, one line per fact. */
 function bridgeEvidence(b) {
   const e = b.evidence || {};
   const matched = (e.matched || []).join("  →  ");
-  return [`${b.label} (${b.confidence === "exact" ? "exact match" : "pattern match"})`, matched,
-    e.src && e.dst ? `${e.src}  →  ${e.dst}` : ""].filter(Boolean).join("\n");
+  return [`${b.label} ${e.src ? `← ${e.src}` : ""}`.trim(), `${b.confidence === "exact" ? "exact match" : "pattern match"}`, matched,
+    e.dst ? `implemented at ${e.dst}` : ""].filter(Boolean).join("\n");
 }
 
 function relationLabel(s) {
@@ -942,21 +1160,11 @@ function relationOfNode(id) {
   return s ? relationOf(s) : null;
 }
 
-/** Source code with its real line numbers (drawn by CSS, so copying skips them). */
-function codeBlock(s) {
-  const lines = s.code.replace(/\n$/, "").split("\n");
-  return el("pre", {}, el("code", { style: `counter-reset: line ${Math.max((s.start_line || 1) - 1, 0)}` },
-    lines.map((line) => el("span", { class: "ln" }, line, "\n"))));
-}
-
 /** Once the answer is written: cited sources first, the rest folded under "Also retrieved". */
 function groupSources(section, cited) {
   const rows = [...section.querySelectorAll(".source")];
   const isCited = (row) => cited.includes(Number(row.dataset.sid));
-  for (const row of rows) {
-    row.querySelector(".sid").classList.toggle("cited", isCited(row));
-    row.querySelector(".hop .key")?.classList.toggle("key--cited", isCited(row));
-  }
+  for (const row of rows) row.querySelector(".sid").classList.toggle("cited", isCited(row));
   if (!cited.length) return;
   const heading = section.querySelector("h2");
   const citedRows = rows.filter(isCited);
@@ -1056,10 +1264,9 @@ function setupSaved() {
     if (!row) return;
     const group = row.closest("details.also");
     if (group) group.open = true;
-    row.open = true;
     row.scrollIntoView({ behavior: "smooth", block: "nearest" });
-    row.classList.add("flash");
-    setTimeout(() => row.classList.remove("flash"), 1200);
+    row.setAttribute("aria-current", "true");
+    setTimeout(() => row.removeAttribute("aria-current"), 1200);
   });
   updateSavedCount();
 }
@@ -1083,7 +1290,7 @@ function renderSaved() {
       el("summary", {},
         el("span", { class: "q", text: r.question }),
         el("span", { class: "where" }, el("span", { text: r.repoName }),
-          el("time", { datetime: r.savedAt, text: `Saved ${new Date(r.savedAt).toLocaleDateString()}` }))),
+          el("time", { datetime: r.savedAt, text: `Saved ${formatDate(r.savedAt) || "earlier"}` }))),
       el("div", { class: "answer" },
         body,
         el("div", { class: "meta" },
@@ -1104,16 +1311,14 @@ async function openSavedRepo(record) {
     banner(`${record.repoName} is no longer indexed on the server. Add it again to ask new questions.`);
     return;
   }
-  if (info.kind === "user") rememberUserRepo(info.id, info.name);
+  if (info.kind === "user") rememberUserRepo(info.id, info.name, info);
   await selectRepo(info.id);
 }
 
-/** Compact the repo header once there is a conversation; suggestions only when empty. */
+/** Once there is a conversation the repository card folds away; suggestions stay above the input. */
 function syncRepoCard() {
   const hasTurns = Boolean($("#conversation .turn"));
-  const card = $("#repo-card");
-  card.classList.toggle("compact", hasTurns);
-  card.querySelector(".clear-chat")?.toggleAttribute("hidden", !hasTurns);
+  $("#repo-card").classList.toggle("compact", hasTurns);
 }
 
 function clearChat() {
@@ -1125,9 +1330,8 @@ function clearChat() {
   turns.forEach((t) => t.remove());
   state.chats.delete(repoId);
   setEvidence();
-  hideNodeCard();
+  selectNode(null);
   drawGraph();
-  renderCodeEmpty();
   syncRepoCard();
   conversation.querySelector(".cleared")?.remove();
   const note = el("p", { class: "cleared" }, "Chat cleared.",
@@ -1137,35 +1341,48 @@ function clearChat() {
       conversation.append(...turns);
       setEvidence(kept);
       drawGraph();
-      showAnswerCode();
       syncRepoCard();
       $("#question").focus();
     } }));
   $("#repo-card").after(note);
-  note.querySelector("button").focus();        // the Clear chat button is gone: keep focus nearby
+  note.querySelector("button").focus();
   setTimeout(() => note.remove(), 12000);
 }
 
-function openSource(turn, n, { panel = true, code: revealCode = false } = {}) {
+/** Scroll to a source row in an answer and mark it; the node and the panel follow. */
+function openSource(turn, n) {
   const row = turn?.querySelector(`.source[data-sid="${n}"]`);
   if (!row) return;
-  if (revealCode && isWide()) {
-    showCode(row.dataset.file, { start: Number(row.dataset.start), end: Number(row.dataset.end), reveal: true });
-  }
   const group = row.closest("details.also");
   if (group) group.open = true;
-  if (panel) showPanel("chat");
-  row.open = true;
-  row.scrollIntoView({ behavior: "smooth", block: "center" });
-  row.classList.add("flash");
-  setTimeout(() => row.classList.remove("flash"), 1200);
-  pulseNode(Number(row.dataset.chunk));
+  if (isNarrow()) setView("ask");
+  row.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "center" });
+  selectNode(Number(row.dataset.chunk));
+}
+
+// ── selection: one state shared by the source row, the graph node and the panel ──
+let graphView = null;
+
+/** The drawn node for an id, from the graph or the collapsed module graph. */
+function nodeById(id) {
+  if (id === null || id === undefined) return null;
+  return graphView?.byId.get(id) || state.graph?.nodes.find((n) => n.id === id) || null;
+}
+
+function selectNode(id, { open = false, source = null } = {}) {
+  state.selected = id;
+  const node = nodeById(id);
+  document.querySelectorAll(".source[aria-current]").forEach((r) => r.removeAttribute("aria-current"));
+  if (id !== null && state.answerTurn) {
+    state.answerTurn.querySelector(`.source[data-chunk="${id}"]`)?.setAttribute("aria-current", "true");
+  }
+  graphView?.node.classed("selected", (n) => n.id === id);
+  renderNodePanel(node, source);
+  if (open && node) openFocus(node);
+  else if (open && source) openFocus({ ...source, id: source.chunk_id, name: source.name, kind: source.kind || "function" });
 }
 
 // ── graph ───────────────────────────────────────────────────────────────────
-let graphView = null;
-
-
 /** Legend counts for the answer the graph shows (empty when there is none). */
 function syncLegend() {
   const n = state.retrieved.size;
@@ -1181,7 +1398,9 @@ function syncLegend() {
   const mechanisms = [...new Set((state.graph?.links || []).filter((l) => l.type === "bridge").map((l) => l.mechanism))];
   const bridges = bridgeLegend();
   bridges.hidden = !mechanisms.length;
-  bridges.querySelector("span").textContent = `Crosses language: ${mechanisms.map((m) => BRIDGE_LABELS[m] || m).join(" / ")}`;
+  const languages = Object.keys(state.demo?.languages || {}).filter((l) => l !== "HTML");
+  noBridgesNote().hidden = !(state.graph && state.demo?.bridges_checked && languages.length > 1 && !mechanisms.length);
+  bridges.querySelector("span").textContent = `Bridge: ${mechanisms.map((m) => BRIDGE_LABELS[m] || m).join(" / ")}`;
   $("#legend-trail").hidden = !n || !state.sources.some((s) => s.via_ids?.length);
   // relation keys: only the relations this answer has, each a toggle for its nodes
   const present = new Set(state.sources.map(relationOf));
@@ -1199,13 +1418,36 @@ function nameMatchLegend() {
   return item;
 }
 
-/** The legend key for bridge edges ("Crosses language: HTTP / JNI"), added once. */
+/** Said when a repo mixes languages but no link between them was found (bridges were looked for). */
+function noBridgesNote() {
+  let item = $("#legend-no-bridges");
+  if (!item) {
+    item = el("li", { id: "legend-no-bridges", class: "legend-note",
+      text: "No cross-language links found (supported: JNI, ctypes, HTTP via fetch/axios/forms)." });
+    bridgeLegend().after(item);
+  }
+  return item;
+}
+
+/** The bridge key: a dash-dot line drawn as SVG, the same stroke the graph uses. */
+function bridgeKey() {
+  const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svg.setAttribute("class", "key-line key-line--bridge");
+  svg.setAttribute("viewBox", "0 0 18 4");
+  svg.setAttribute("aria-hidden", "true");
+  const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+  for (const [k, v] of Object.entries({ x1: 0, y1: 2, x2: 18, y2: 2, "stroke-dasharray": "6 2 1.5 2" })) line.setAttribute(k, v);
+  svg.append(line);
+  return svg;
+}
+
+/** The legend key for bridge edges ("Bridge: HTTP / JNI"), added once. */
 function bridgeLegend() {
   let item = $("#legend-bridge");
   if (!item) {
     item = el("li", { id: "legend-bridge", title: "Edges across a language or process boundary: an HTTP call to its route, "
       + "a JNI declaration to its C function, a ctypes/cffi call to its C function. Point at one to see its evidence." },
-    el("i", { class: "key-line key-line--bridge", "aria-hidden": "true" }), el("span"));
+    bridgeKey(), el("span"));
     nameMatchLegend().after(item);
   }
   return item;
@@ -1226,6 +1468,12 @@ function nodeClass(n) {
   return state.cited?.size ? "node retrieved dimmed" : "node retrieved";
 }
 
+/** "0", "1", "2", "3" (3 or more) for the hop scale, or null for a neighbour. */
+function hopOf(n) {
+  const hop = state.retrieved.get(n.id);
+  return hop === undefined ? null : String(Math.min(hop, 3));
+}
+
 function nodeStatus(n) {
   const hop = state.retrieved.get(n.id);
   if (hop === undefined) return state.retrieved.size ? "Neighbour, not sent to the model" : "";
@@ -1244,10 +1492,9 @@ function nodeName(n) {
 function markGraph() {
   syncLegend();
   if (!graphView) return;
-  graphView.node.attr("class", graphView.cls || nodeClass).attr("aria-label", nodeName);
-  // the answer is written: if its graph is on screen, its paths flow once. Checked after this
-  // frame, because a wide screen may be switching to the code pane; then they flow when the
-  // graph is next shown (drawGraph plays them)
+  graphView.node.attr("class", nodeClass).attr("data-hop", hopOf).attr("aria-label", nodeName).classed("selected", (n) => n.id === state.selected);
+  if (state.selected !== null) renderNodePanel(nodeById(state.selected));
+  // the answer is written: if its graph is on screen, its paths flow once
   if (state.cited && state.trailsShown !== state.answerTurn) {
     requestAnimationFrame(() => {
       if (!graphView || state.trailsShown === state.answerTurn || !$("#graph").getBoundingClientRect().width) return;
@@ -1257,28 +1504,27 @@ function markGraph() {
   }
 }
 
-// ── the repo header's overview: packages, most called, entry points ───────
+// ── the chat's overview card: packages, most called, entry points ───────────
 function renderOverview(o) {
   const codeButton = (n, text, note, extra = "") => el("li", {},
-    el("button", { type: "button", class: `fact ${extra}`.trim(), title: formatLocation(n),
-      onclick: () => showCode(n.file, { start: n.start_line, end: n.end_line, reveal: true }) },
-      el("code", { text })),
-    note ? el("span", { class: "note", text: note }) : null);
-  const group = (title, items) => el("section", { class: "facts" }, el("h2", { text: title }), el("ul", {}, items));
+    el("button", { type: "button", class: `fact ${extra}`.trim(), title: `${n.label || n.name}\n${formatLocation(n)}`,
+      onclick: () => selectNode(n.id, { open: true }) },
+      el("code", { text }), note ? el("span", { class: "note", text: note }) : null));
+  const group = (title, items) => el("section", { class: "facts" }, el("h3", { text: title }), el("ul", {}, items));
   const label = (n) => n.label || n.name;
   const groups = [];
   if (o.packages.length > 1) {
     groups.push(group("Packages", o.packages.map((p) => el("li", {},
       el("button", { type: "button", class: "fact", onclick: () => ask(p.name === "top level"
         ? "What do the files at the top level of this repository do?"
-        : `What does the ${p.name.replace(/\/$/, "")} part of the code do?`) }, el("code", { text: p.name })),
-      el("span", { class: "note", text: `${p.functions} functions` })))));
+        : `What does the ${p.name.replace(/\/$/, "")} part of the code do?`) }, el("code", { text: p.name }),
+      el("span", { class: "note", text: plural(p.functions, "function") }))))));
   }
   if (o.mostCalled.length) {
-    groups.push(group("Most called", o.mostCalled.map((x) => codeButton(x.node, label(x.node), `called by ${x.callers}`))));
+    groups.push(group("Most called", o.mostCalled.map((x) => codeButton(x.node, label(x.node), `× ${x.callers}`))));
   }
   if (o.entryPoints.length) {
-    groups.push(group("Entry points", o.entryPoints.map((n) => codeButton(n, n.name, middleTruncate(n.file, 34)))));
+    groups.push(group("Entry points", o.entryPoints.map((n) => codeButton(n, n.name, middleTruncate(n.file, 24)))));
   }
   if (o.hierarchy.length >= 3 || (o.hierarchy.length === 2 && groups.length < 3)) {
     const leaf = o.hierarchy.at(-1);
@@ -1288,18 +1534,18 @@ function renderOverview(o) {
 }
 
 // ── the graph engine: one live force layout that remembers where things were ─
-//   continuity: a new view starts from the old positions and glides there;
-//   structure: files as soft outlines, hubs larger, curved calls;
-//   evidence: the paths that reached the answer's sources, flowing once.
 const MOTION_LIMIT = 600;                 // nodes: above this, views change without movement
 const HULL_LIMIT = 150;                   // nodes: above this, no file outlines
 const RING_RADII = [80, 185, 290, 395];   // By distance: direct match, 1 call, 2+ calls, neighbours
 const RING_NAMES = ["direct match", "1 call away", "2+ calls away", "neighbours"];
 const MORPH_MS = 560;                     // the authored moment: one view becoming the next
+const ZOOMED_IN = 1.35;                   // past this scale, every function shows its name
 const calm = () => window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-const jitter = (id, salt) => ((((id + 1) * (salt ? 7919 : 104729)) % 97) / 97) - 0.5;
+const jitter = (id, salt) => (((hashId(id) * (salt ? 7919 : 104729)) % 97) / 97) - 0.5;
+const hashId = (id) => (typeof id === "number" ? id + 1 : [...String(id)].reduce((h, c) => (h * 31 + c.charCodeAt(0)) % 100003, 7));
 const nodeId = (end) => (typeof end === "object" ? end.id : end);
-const pairKey = (a, b) => (a < b ? `${a}-${b}` : `${b}-${a}`);
+const pairKey = (a, b) => (String(a) < String(b) ? `${a}-${b}` : `${b}-${a}`);
+const SHAPES = { function: "circle", method: "circle", class: "diamond", file: "square", module: "square", template: "triangle", config: "wye" };
 
 function positionsFor(repoId) {
   if (!state.positions.has(repoId)) state.positions.set(repoId, new Map());
@@ -1346,8 +1592,11 @@ function forceCluster(strength) {
   return force;
 }
 
-function syncLayoutButtons() {
-  document.querySelectorAll("#graph-layout button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.layout === state.graphLayout)));
+/** The symbol path for a node: shape by kind, area by radius. */
+function symbolPath(kind, r) {
+  const shape = SHAPES[kind] || "circle";
+  const type = { circle: d3.symbolCircle, diamond: d3.symbolDiamond, square: d3.symbolSquare, triangle: d3.symbolTriangle, wye: d3.symbolWye }[shape];
+  return d3.symbol().type(type).size(Math.PI * r * r * (shape === "circle" ? 1 : 1.15))();
 }
 
 function drawGraph() {
@@ -1355,42 +1604,62 @@ function drawGraph() {
   const svg = window.d3 && d3.select("#graph");
   const hint = $("#graph-hint");
   const toggle = $("#graph-toggle");
+  const subtitle = $("#graph-subtitle");
   if (!svg) { hint.textContent = "The graph library could not be loaded."; return; }
   graphView?.stop();
   graphView = null;
   const graph = state.graph;
   const answer = state.retrieved.size > 0 && state.graphMode !== "full";
-  $("#graph-layout").hidden = !answer;
-  syncLayoutButtons();
-  if (!graph) { svg.selectAll("g.scene").remove(); hint.textContent = "No graph for this repository."; toggle.hidden = true; return; }
+  $("#layout-toggle").hidden = !answer;
+  $("#layout-toggle").setAttribute("aria-pressed", String(state.graphLayout === "rings"));
+  if (!graph) {
+    svg.selectAll("g.scene").remove();
+    hint.textContent = state.demo ? "No graph for this repository yet." : "Choose a repository to see its call graph.";
+    hint.classList.remove("caption");
+    toggle.hidden = true;
+    subtitle.textContent = "";
+    $("#tray").hidden = true;
+    return;
+  }
 
   const small = graph.nodes.length <= FULL_GRAPH_LIMIT;
   let data;
-  if (state.graphMode === "full" || (small && !state.retrieved.size)) data = graph;
+  let collapsed = false;
+  if (state.graphMode === "full") data = graph;
   else if (state.retrieved.size) data = focusSubgraph(graph, state.retrieved);
-  else data = null;
+  else if (small) data = graph;
+  else { data = moduleGraph(graph); collapsed = true; }      // a large repository: its modules
 
   toggle.hidden = small && !state.retrieved.size;
-  toggle.textContent = state.graphMode === "full"
-    ? (state.retrieved.size ? "Show answer subgraph" : "Hide full graph")
-    : `Show full graph (${graph.nodes.length} nodes)`;
-  const caption = data && !state.retrieved.size && state.graphMode !== "full";
+  toggle.setAttribute("aria-pressed", String(state.graphMode === "full"));
+  const toggleLabel = state.graphMode === "full"
+    ? (state.retrieved.size ? "Show the answer's subgraph" : "Show modules only")
+    : `Show the full graph (${plural(graph.nodes.length, "node")})`;
+  toggle.setAttribute("aria-label", toggleLabel);
+  toggle.title = toggleLabel;
+  subtitle.textContent = state.graphMode === "full" ? plural(graph.nodes.length, "node")
+    : state.retrieved.size ? `${plural(state.retrieved.size, "source")} and their neighbours`
+    : collapsed ? `${plural(data.nodes.length, "module")}, collapsed` : plural(graph.nodes.length, "node");
+  const caption = !state.retrieved.size && state.graphMode !== "full";
   hint.classList.toggle("caption", Boolean(caption));
-  hint.textContent = !data || caption
-    ? "Ask a question to light up the code it uses. Point at a node to see its calls." : "";
-  if (!data) { svg.selectAll("g.scene").remove(); return; }
+  hint.textContent = caption ? "Ask a question to light up the code it uses. Point at a node to see its calls." : "";
 
   const { width, height } = svg.node().getBoundingClientRect();
   if (!width || !height) return;                       // hidden pane: drawn when shown, from where it was
 
   const rings = answer && state.graphLayout === "rings";
-  const positions = positionsFor(state.demo?.id || "_");
-  const nodes = data.nodes.map((n) => ({ ...n }));
+  const positions = positionsFor(`${state.demo?.id || "_"}${collapsed ? ":modules" : ""}`);
+  // isolated nodes wait in the tray (the answer's own sources always stay in the picture)
+  const linked = new Set();
+  for (const l of data.links) { linked.add(l.source); linked.add(l.target); }
+  const isolated = data.nodes.filter((n) => !linked.has(n.id) && !state.retrieved.has(n.id));
+  renderTray(isolated);
+  const nodes = data.nodes.filter((n) => linked.has(n.id) || state.retrieved.has(n.id)).map((n) => ({ ...n }));
   const byId = new Map(nodes.map((n) => [n.id, n]));
   const links = data.links.map((l) => ({ ...l }));
   const big = nodes.length > 250;
   const moving = !calm() && nodes.length <= MOTION_LIMIT;
-  const outlined = !rings && nodes.length <= HULL_LIMIT;
+  const outlined = !rings && !collapsed && nodes.length <= HULL_LIMIT;
   const trails = state.retrieved.size ? trailEdges() : new Map();
 
   // hubs read larger; the answer's code is always the largest
@@ -1403,15 +1672,16 @@ function drawGraph() {
     if (l.type === "member") continue;
     related.get(l.source)?.add(l.target);
     related.get(l.target)?.add(l.source);
-    degree.set(l.source, (degree.get(l.source) || 0) + 1);
-    degree.set(l.target, (degree.get(l.target) || 0) + 1);
+    degree.set(l.source, (degree.get(l.source) || 0) + (l.count || 1));
+    degree.set(l.target, (degree.get(l.target) || 0) + (l.count || 1));
   }
   const radius = (n) => (state.retrieved.has(n.id)
     ? 7 + (n.kind === "class" ? 2 : 0)
-    : 3 + Math.min(Math.sqrt(degree.get(n.id) || 0) * 0.9, 4) + (n.kind === "class" ? 1.5 : 0));
-  // label everything only in small views; otherwise just the retrieved code
-  const labelled = (n) => state.retrieved.has(n.id) || nodes.length <= (state.retrieved.size ? 25 : 60);
-  const labelText = (n) => n.label || n.name;          // shortest unique qualified name
+    : (collapsed ? 5 : 3) + Math.min(Math.sqrt(degree.get(n.id) || 0) * 0.9, 4) + (n.kind === "class" || n.kind === "file" ? 1.5 : 0));
+  // modules, the answer's sources and (in small views) everything carry a label; the rest show theirs zoomed in
+  const isModule = (n) => n.kind === "file" || n.kind === "module";
+  const labelled = (n) => state.retrieved.has(n.id) || isModule(n) || nodes.length <= (state.retrieved.size ? 12 : 30);
+  const labelText = (n) => middleTruncateName(n.label || n.name, 34);          // shortest unique qualified name
   const sidText = (n) => (state.sids.has(n.id) ? `S${state.sids.get(n.id)} ` : "");
   const labelWidth = (n) => (labelled(n) ? (sidText(n) + labelText(n)).length * 7.4 + 12 : 0);
   const ringRadius = (n) => {
@@ -1435,13 +1705,13 @@ function drawGraph() {
   const overview = !state.retrieved.size;
   const el = svg.node();
   el.classList.toggle("overview", overview);
-  el.classList.remove("hovering");
+  el.classList.remove("hovering", "zoomed-in");
   const subject = (n) => overview || state.retrieved.has(n.id);
 
   // arrowheads coloured by CSS, so a theme change needs no redraw
   if (svg.select("defs").empty()) {
     const defs = svg.append("defs");
-    for (const id of ["arrow", "arrow-lit", "arrow-trail"]) {
+    for (const id of ["arrow", "arrow-lit", "arrow-trail", "arrow-bridge"]) {
       defs.append("marker").attr("id", id).attr("viewBox", "0 -4 8 8").attr("refX", 8)
         .attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
         .append("path").attr("d", "M0,-4L8,0L0,4");
@@ -1464,14 +1734,21 @@ function drawGraph() {
   // further out, only by hand, they shrink (and other labels hide below ~11.5px)
   const MIN_FIT = 0.6;
   const labelScale = (k) => Math.min(1 / MIN_FIT, Math.max(1, 1 / k));
-  // the extent is fixed at draw time: a camera move that starts after the pane is hidden
-  // (a wide screen switching to code) must not read a zero-size box and divide by it
+  let zoomTimer = null;
   const zoom = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on("zoom", (e) => {
     root.attr("transform", e.transform);
     el.style.setProperty("--label-scale", String(labelScale(e.transform.k)));
     el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / e.transform.k)));
-    // zoomed out, only the answer's own labels stay; the rest would be unreadably small
+    // zoomed out, only the answer's own labels stay; zoomed in, every function shows its name
     el.classList.toggle("zoomed-out", e.transform.k < 0.96);
+    const zoomedIn = e.transform.k >= ZOOMED_IN;
+    if (zoomedIn !== el.classList.contains("zoomed-in")) {
+      el.classList.toggle("zoomed-in", zoomedIn);
+      if (zoomedIn) placeQuiet(new Set(nodes.map((n) => n.id)), { hideOverlaps: true });
+    } else if (zoomedIn) {
+      clearTimeout(zoomTimer);
+      zoomTimer = setTimeout(() => placeQuiet(new Set(nodes.map((n) => n.id)), { hideOverlaps: true }), 120);
+    }
   });
   svg.call(zoom).on("dblclick.zoom", null);
   svg.on("dblclick.fit", (e) => { if (e.target === el) fit(true); });   // double-click the background: fit
@@ -1504,9 +1781,12 @@ function drawGraph() {
   let timer = null;
   const node = nodeLayer.selectAll("g").data(nodes).join("g")
     .attr("class", nodeClass)
+    .attr("data-hop", hopOf)
+    .attr("data-kind", (n) => n.kind || null)
     .attr("data-relation", (n) => relationOfNode(n.id))
     .attr("data-language", (n) => n.language || null)
     .classed("off", (n) => hiddenRelations.has(relationOfNode(n.id)))
+    .classed("selected", (n) => n.id === state.selected)
     .attr("role", "button")
     .attr("aria-label", nodeName)
     .attr("tabindex", (n) => (n === order[0] ? 0 : -1))
@@ -1531,19 +1811,19 @@ function drawGraph() {
       else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.5); }
       else if (e.key === "0") { e.preventDefault(); fit(true); }
     });
-  node.append("circle").attr("class", "ring").attr("r", (n) => radius(n) + 4);
-  node.append("circle").attr("class", "dot").attr("r", radius);
-  node.append("title").text((n) => `${n.name}\n${formatLocation(n)}${n.language ? ` · ${LANGUAGE_LABELS[n.language] || n.language}` : ""}`);
+  node.append("path").attr("class", "ring").attr("d", (n) => symbolPath(n.kind, radius(n) + 4));
+  node.append("path").attr("class", "dot").attr("d", (n) => symbolPath(n.kind, radius(n)));
+  node.append("title").text((n) => `${n.label || n.name}\n${formatLocation(n)}${n.language ? `\n${LANGUAGE_LABELS[n.language] || n.language}` : ""}${collapsed ? `\n${plural(n.members, "symbol")}` : ""}`);
   const label = node.filter(labelled).append("text").attr("class", "label").attr("text-anchor", "middle")
     .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4);
   label.filter((n) => state.sids.has(n.id)).append("tspan").attr("class", "label-sid").text(sidText);
   label.append("tspan").text(labelText);
-  // every other node keeps a quiet label, shown while it or a neighbour is pointed at
+  // every other node keeps a quiet label, shown zoomed in or while it or a neighbour is pointed at
   node.filter((n) => !labelled(n)).append("text").attr("class", "label quiet").attr("text-anchor", "middle")
     .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4).text(labelText);
 
   const sim = d3.forceSimulation(nodes)
-    .force("link", d3.forceLink(links).id((n) => n.id).distance((l) => (l.type === "member" ? 28 : 70)).strength(rings ? 0.06 : 0.5))
+    .force("link", d3.forceLink(links).id((n) => n.id).distance((l) => (l.type === "member" ? 28 : collapsed ? 90 : 70)).strength(rings ? 0.06 : 0.5))
     .force("charge", d3.forceManyBody().strength(big ? -35 : rings ? -150 : state.retrieved.size ? -260 : -170))
     .force("center", rings ? null : d3.forceCenter(width / 2, height / 2))
     // gentle gravity keeps disconnected parts of the graph from drifting apart
@@ -1594,7 +1874,7 @@ function drawGraph() {
     const bend = l.type === "member" ? 0 : 0.1;
     const cx = (s.x + t.x) / 2 - dy * bend, cy = (s.y + t.y) / 2 + dx * bend;
     const ex = t.x - cx, ey = t.y - cy, len = Math.hypot(ex, ey) || 1;
-    const back = l.type === "calls" ? radius(t) + 2.5 : 0;
+    const back = l.type === "calls" || l.type === "bridge" ? radius(t) + 2.5 : 0;
     return `M${s.x},${s.y}Q${cx},${cy} ${t.x - (ex / len) * back},${t.y - (ey / len) * back}`;
   };
   const render = () => {
@@ -1636,9 +1916,8 @@ function drawGraph() {
   };
 
   // ── camera ──
-  const bar = document.querySelector(".graph-actions");
-  const top = bar ? bar.getBoundingClientRect().height + 12 : 0;
-  const room = height - top - (caption ? 40 : 0);
+  const top = 8;
+  const room = height - top - (caption ? 36 : 8);
   const fitTransform = () => {
     const focus = rings ? nodes : nodes.filter((n) => state.retrieved.has(n.id));
     const pts = focus.length ? focus : nodes;
@@ -1712,17 +1991,21 @@ function drawGraph() {
       .attr("text-anchor", (n) => (n.side === "right" ? "start" : n.side === "left" ? "end" : "middle"))
       .attr("dominant-baseline", (n) => (n.side === "below" ? "hanging" : n.side === "above" ? "auto" : "central"));
   };
-  // names revealed by pointing go where they cover the fewest labels already showing
-  const placeQuiet = (ids) => {
+  // names revealed by pointing or zooming go where they cover the fewest labels already showing;
+  // zoomed in, a name that would still cover another stays hidden (collision avoidance)
+  const placeQuiet = (ids, { hideOverlaps = false } = {}) => {
     const k = d3.zoomTransform(el).k;
     const boxes = nodes.filter(labelled).map((n) => labelBox(n, n.side || "below", subject(n) ? labelScale(k) : 1));
-    const reveal = nodes.filter((n) => ids.has(n.id) && !labelled(n));
+    const reveal = nodes.filter((n) => ids.has(n.id) && !labelled(n)).sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0));
     for (const n of reveal) {
       const best = sideFor(n, Math.max(1, 1 / k), boxes);
       n.side = best.side;
-      boxes.push(best.q);
+      n.hidden = hideOverlaps && best.area > 0;
+      if (!n.hidden) boxes.push(best.q);
     }
-    setSide(node.filter((n) => ids.has(n.id) && !labelled(n)).select("text.quiet"));
+    const quiet = node.filter((n) => ids.has(n.id) && !labelled(n)).select("text.quiet");
+    setSide(quiet);
+    quiet.classed("hide", (n) => Boolean(n.hidden));
   };
   const placeLabels = (scale) => {
     const placed = [];
@@ -1791,11 +2074,12 @@ function drawGraph() {
   }
 
   graphView = {
-    node, highlight, fit, zoomBy, playTrails,
+    node, byId, nodes, links, related, highlight, fit, zoomBy, playTrails, collapsed,
     stop: () => {
       timer?.stop();
       timer = null;
       clearTimeout(flowTimer);
+      clearTimeout(zoomTimer);
       sim.stop();
       svg.interrupt();
       remember();                                       // a view interrupted mid-glide continues from here
@@ -1808,6 +2092,19 @@ function drawGraph() {
   }
 }
 
+/** Isolated nodes, listed in a tray under the graph instead of floating in it. */
+function renderTray(isolated) {
+  const tray = $("#tray");
+  tray.hidden = !isolated.length;
+  if (!isolated.length) return;
+  $("#tray-title").textContent = `Unconnected (${isolated.length})`;
+  fill($("#tray-list"), ...isolated.slice(0, 60).map((n) => el("button", {
+    type: "button", class: "fact", title: `${n.label || n.name}\n${formatLocation(n)}`,
+    onclick: () => selectNode(n.id, { open: true }),
+  }, el("code", { text: middleTruncateName(n.label || n.name, 28) }))),
+  isolated.length > 60 ? el("span", { class: "note", text: `and ${plural(isolated.length - 60, "more")}` }) : null);
+}
+
 /** Roving focus: one node is in the Tab order; the arrow keys move it. */
 function focusNode(datum, move) {
   if (!graphView) return;
@@ -1815,12 +2112,15 @@ function focusNode(datum, move) {
   if (move) graphView.node.filter((n) => n === datum).node()?.focus();
 }
 
-/** Open a node: its card, and on a wide screen its source row in the answer. */
+/** Open a node: select it everywhere, and open the focus overlay. */
 function activateNode(n) {
-  showNodeCard(n);
+  selectNode(n.id, { open: true });
   const sid = state.sids.get(n.id);
-  if (sid && state.answerTurn && !window.matchMedia("(max-width: 60rem)").matches) {
-    openSource(state.answerTurn, sid, { panel: false });
+  if (sid && state.answerTurn && !isNarrow()) {
+    const row = state.answerTurn.querySelector(`.source[data-sid="${sid}"]`);
+    const group = row?.closest("details.also");
+    if (group) group.open = true;
+    row?.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "nearest" });
   }
 }
 
@@ -1830,49 +2130,69 @@ function pulseNode(chunkId) {
   setTimeout(() => graphView?.node.classed("pulse", false), 1600);
 }
 
-function hideNodeCard() {
-  $("#node-card").hidden = true;
+// ── the last answers' subgraphs: thumbnails down the graph's left edge ───────
+function rememberAnswer(repoId, turn) {
+  const list = state.history.get(repoId) || state.history.set(repoId, []).get(repoId);
+  const entry = { turn, evidence: evidence(), thumb: snapshotGraph(), n: turn.dataset.turn };
+  list.unshift(entry);
+  if (list.length > HISTORY_LIMIT) list.length = HISTORY_LIMIT;
+  renderThumbs();
 }
 
-function showNodeCard(n) {
-  const card = $("#node-card");
-  const url = githubUrl(state.demo, n.file, n.start_line, n.end_line);
-  const sid = state.sids.get(n.id);
-  const status = nodeStatus(n);
-  card.replaceChildren(
-    el("div", { class: "node-head" },
-      sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", "data-relation": relationOfNode(n.id), title: RELATION_WORDS[relationOfNode(n.id)], text: `S${sid}` }) : null,
-      el("h2", { text: n.name }),
-      el("button", { type: "button", class: "icon-button", "aria-label": "Close", title: "Close (Esc)", onclick: () => {
-        hideNodeCard();
-        graphView?.node.filter(function focused() { return this.tabIndex === 0; }).node()?.focus();
-      } }, svgIcon("M7 7l10 10M17 7L7 17"))),
-    el("p", {}, `${n.kind[0].toUpperCase()}${n.kind.slice(1)} in `, el("code", { text: formatLocation(n) }),
-      languageTag(n.language) ? " " : null, languageTag(n.language)),
-    status ? el("p", { class: "node-status", text: status }) : null,
-    el("div", { class: "row" },
-      sid && state.answerTurn ? el("button", { type: "button", class: "link-button", text: `Show S${sid} in the answer`,
-        onclick: () => openSource(state.answerTurn, sid) }) : null,
-      el("button", { type: "button", class: "link-button", text: "Show in code", onclick: () => {
-        showCode(n.file, { start: n.start_line, end: n.end_line, reveal: true });
-      } }),
-      el("button", { type: "button", class: "link-button", text: "Ask about this", onclick: () => {
-        $("#question").value = `What does \`${n.label || n.name}\` do and who calls it?`;
-        autosize();
-        showPanel("chat");
-        $("#question").focus();
-      } }),
-      url ? el("a", { class: "open", href: url, target: "_blank", rel: "noopener", text: "Open on GitHub" }) : null));
-  card.hidden = false;
+/** A small picture of the graph as drawn now: dots in their hop colours, lines between them. */
+function snapshotGraph() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  if (!graphView?.nodes.length) return svg;
+  const pts = graphView.nodes.filter((n) => state.retrieved.size ? (state.retrieved.has(n.id) || graphView.related.get(n.id)?.size) : true);
+  const xs = pts.map((n) => n.x), ys = pts.map((n) => n.y);
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  const W = 64, H = 48, pad = 6;
+  const sx = (x) => pad + ((x - x0) / Math.max(1, x1 - x0)) * (W - 2 * pad);
+  const sy = (y) => pad + ((y - y0) / Math.max(1, y1 - y0)) * (H - 2 * pad);
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  const keep = new Set(pts.map((n) => n.id));
+  for (const l of graphView.links.slice(0, 200)) {
+    const s = l.source, t = l.target;
+    if (!keep.has(s.id) || !keep.has(t.id)) continue;
+    const line = document.createElementNS(ns, "line");
+    line.setAttribute("x1", sx(s.x).toFixed(1)); line.setAttribute("y1", sy(s.y).toFixed(1));
+    line.setAttribute("x2", sx(t.x).toFixed(1)); line.setAttribute("y2", sy(t.y).toFixed(1));
+    svg.append(line);
+  }
+  for (const n of pts.slice(0, 200)) {
+    const c = document.createElementNS(ns, "circle");
+    c.setAttribute("cx", sx(n.x).toFixed(1)); c.setAttribute("cy", sy(n.y).toFixed(1));
+    c.setAttribute("r", state.retrieved.has(n.id) ? "2.6" : "1.6");
+    const hop = hopOf(n);
+    if (hop !== null) c.setAttribute("data-hop", hop);
+    svg.append(c);
+  }
+  return svg;
 }
 
-// ── code viewer ─────────────────────────────────────────────────────────────
+function renderThumbs() {
+  const list = state.history.get(state.demo?.id) || [];
+  $("#thumbs").replaceChildren(...list.map((h) => {
+    const q = h.turn.querySelector(".question")?.textContent || "";
+    return el("button", { type: "button", class: "thumb", "aria-pressed": String(h.evidence.answerTurn === state.answerTurn && state.graphMode !== "full"),
+      title: `Show this answer's graph again: ${middleTruncateName(q, 60)}`, "aria-label": `Answer ${h.n}: ${q}`,
+      onclick: () => restoreAnswer(h) }, h.thumb.cloneNode(true), el("span", { class: "n", text: `#${h.n}` }));
+  }));
+}
+
+function restoreAnswer(h) {
+  setEvidence(h.evidence);
+  state.graphMode = "focus";
+  state.trailsShown = h.evidence.answerTurn;
+  selectNode(null);
+  drawGraph();
+  renderThumbs();
+  if (h.turn.isConnected) h.turn.scrollIntoView({ behavior: calm() ? "auto" : "smooth", block: "start" });
+}
+
+// ── the node panel ──────────────────────────────────────────────────────────
 const fileCache = new Map();             // "repo:path" -> Promise<{text, url}>
-const code = { repo: null, path: null, target: null, rendered: false, token: 0 };
-
-function isWide() {
-  return !window.matchMedia("(max-width: 60rem)").matches;
-}
 
 function loadFile(repoId, path) {
   const key = `${repoId}:${path}`;
@@ -1911,142 +2231,361 @@ function highlightLines(text, path = "") {
   return lines;
 }
 
-/** Files the current answer used, in source order. */
-function answerFiles() {
-  return [...new Set(state.sources.map((s) => s.file))];
-}
-
-function renderCodeFiles() {
-  const nav = $("#code-files");
-  const files = answerFiles();
-  nav.hidden = !files.length;
-  nav.replaceChildren(...files.map((file) => el("button", {
-    type: "button", "aria-pressed": String(file === code.path), title: file,
-    onclick: () => showCode(file, { first: true }),
-  }, file.split("/").pop())));
-  nav.querySelector('[aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-}
-
-function renderCodeEmpty(message = "Ask a question, then choose a citation or a source to read its code here.") {
-  code.token++;
-  Object.assign(code, { repo: null, path: null, target: null, rendered: false });
-  $("#code-title").textContent = "";
-  $("#code-github").hidden = true;
-  $("#code-view").replaceChildren(el("p", { class: "code-status", text: message }));
-  renderCodeFiles();
-}
-
-/**
- * Open `path` in the code viewer. start/end: the range to scroll to and outline;
- * first: scroll to the first source of the answer in this file; reveal: show the pane.
- */
-async function showCode(path, { start = null, end = null, first = false, reveal = false } = {}) {
-  if (!path || !state.demo) return;
-  if (reveal) showPanel("code");
-  const repo = state.demo;
-  if (first) {
-    const s = state.sources.filter((x) => x.file === path)
-      .sort((a, b) => Number(!state.cited?.has(a.chunk_id)) - Number(!state.cited?.has(b.chunk_id)) || a.start_line - b.start_line)[0];
-    if (s) ({ start_line: start, end_line: end } = s);
+/** Degree of a node in the full graph: how many call it, how many it calls. */
+function callCounts(n) {
+  const links = state.graph?.links || [];
+  if (typeof n.id === "string" && n.id.startsWith("m:")) {
+    const file = n.file;
+    const fileOf = new Map(state.graph.nodes.map((x) => [x.id, x.file]));
+    const own = links.filter((l) => l.type !== "member" && fileOf.get(l.source) !== fileOf.get(l.target));
+    return { callers: own.filter((l) => fileOf.get(l.target) === file).length, calls: own.filter((l) => fileOf.get(l.source) === file).length };
   }
-  code.target = start ? { start, end: end || start } : null;
-  if (code.repo === repo.id && code.path === path && code.rendered) {
-    markCode();
-    renderCodeFiles();
-    scrollToTarget({ smooth: true });          // within one file the motion shows the direction
+  const own = links.filter((l) => l.type !== "member");
+  return { callers: own.filter((l) => l.target === n.id).length, calls: own.filter((l) => l.source === n.id).length };
+}
+
+function codeSkeleton() {
+  return el("div", { class: "code-skeleton", "aria-hidden": "true" }, el("span", { class: "skeleton" }), el("span", { class: "skeleton" }), el("span", { class: "skeleton" }), el("span", { class: "skeleton" }));
+}
+
+/** The state pill for a node: Cited / Retrieved / Neighbour / Module / Selected. */
+function statePill(n) {
+  if (!n) return null;
+  if (state.cited?.has(n.id)) return el("span", { class: "status-pill", "data-tone": "accent", text: "Cited" });
+  if (state.retrieved.has(n.id)) return el("span", { class: "status-pill", "data-tone": "ok", text: state.cited ? "Retrieved, not cited" : "Retrieved" });
+  if (n.kind === "module") return el("span", { class: "status-pill", text: "Module" });
+  if (state.retrieved.size) return el("span", { class: "status-pill", text: "Neighbour" });
+  return el("span", { class: "status-pill", text: "Selected" });
+}
+
+function kindWord(kind) {
+  return { function: "Function", method: "Method", class: "Class", file: "Module", module: "Module", template: "Template", config: "Config" }[kind] || "Symbol";
+}
+
+function renderNodePanel(n, source = null) {
+  const panel = $("#node-panel");
+  if (!n) {
+    panel.replaceChildren(el("div", { class: "node-empty" }, el("h2", { class: "card-title", text: "Selected node" }),
+      el("p", { text: state.graph ? "Select a node in the graph, or a source under an answer, to see what it is, who calls it, and its code."
+        : "The repository's graph is loading." })));
     return;
   }
-  const token = ++code.token;
-  Object.assign(code, { repo: repo.id, path, rendered: false });
-  $("#code-title").textContent = path;
-  $("#code-github").hidden = true;
-  renderCodeFiles();
-  const view = $("#code-view");
-  view.setAttribute("aria-busy", "true");
-  view.replaceChildren(el("p", { class: "code-status" }, el("span", { class: "spinner" }), ` Loading ${path}…`));
+  const { callers, calls } = callCounts(n);
+  const sid = state.sids.get(n.id);
+  const lines = n.end_line && n.start_line ? n.end_line - n.start_line + 1 : null;
+  const language = n.language || languageOfPath(n.file);
+  const url = n.start_line && n.end_line ? githubUrl(state.demo, n.file, n.start_line, n.end_line) : null;
+  const preview = el("div", { class: "code-view short", tabindex: "0", role: "region", "aria-label": "Code preview" }, codeSkeleton());
+  const nodeTile = (label, value, text = false) => el("div", { class: "node-tile" }, el("span", { class: "label", text: label }),
+    el("span", { class: `value${text ? " text" : ""}` }, value));
+  fill(panel, 
+    el("div", { class: "node-head" },
+      el("span", { class: "kind", text: kindWord(n.kind) }),
+      el("h2", {}, sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", text: `S${sid}` }) : null,
+        el("span", { title: n.label || n.name, text: middleTruncateName(n.label || n.name, 34) })),
+      el("span", { class: "where", title: formatLocation(n), text: formatLocation({ ...n, file: middleTruncate(n.file, 40) }) }),
+      statePill(n)),
+    el("div", { class: "node-tiles" },
+      nodeTile("Called by", callers.toLocaleString()),
+      nodeTile("Calls", calls.toLocaleString()),
+      nodeTile("Language", language ? [dot(null, languageKey(language)), el("span", { text: LANGUAGE_LABELS[language] || language })] : el("span", { text: "unknown" }), true),
+      nodeTile("Lines", lines ? lines.toLocaleString() : el("span", { text: "whole file" }))),
+    el("div", { class: "node-preview" }, el("h3", { text: "Code" }), preview),
+    el("div", { class: "node-actions" },
+      el("button", { type: "button", class: "primary small", text: "Ask about this", onclick: () => askAbout(n) }),
+      el("button", { type: "button", class: "secondary small", text: "Open code", onclick: () => openFocus(n) })),
+    el("div", { class: "node-links" },
+      sid && state.answerTurn ? el("button", { type: "button", class: "link-button", text: `Show S${sid} in the answer`, onclick: () => openSource(state.answerTurn, sid) }) : null,
+      url ? el("a", { href: url, target: "_blank", rel: "noopener", text: "Open on GitHub" }) : null));
+  renderPreview(preview, n, source);
+}
+
+/** The node's own lines (a source's code if we have it, else a slice of the file). */
+async function renderPreview(view, n, source) {
+  const code = source?.code || state.sources.find((s) => s.chunk_id === n.id)?.code;
+  const start = n.start_line || 1;
+  if (code) {
+    paintLines(view, code.replace(/\n$/, "").split("\n"), start, n.file, { max: 40 });
+    return;
+  }
   try {
-    const file = await loadFile(repo.id, path);
-    if (token !== code.token) return;                    // another file was asked for meanwhile
-    // hljs output is escaped text in spans; .lines is as wide as the longest line,
-    // so tinted ranges stay full width when the view scrolls sideways
-    view.innerHTML = `<div class="lines">${highlightLines(file.text, path)
-      .map((html, i) => `<span class="line" data-n="${i + 1}">${html || " "}</span>`).join("")}</div>`;
-    code.rendered = true;
-    code.url = file.url;
-    markCode();
-    scrollToTarget();
-  } catch (error) {
-    if (token !== code.token) return;
-    view.replaceChildren(el("p", { class: "code-status error", text: error.message }));
-  } finally {
-    if (token === code.token) view.removeAttribute("aria-busy");
+    const file = await loadFile(state.demo.id, n.file);
+    if (!view.isConnected) return;
+    const all = file.text.split("\n");
+    const end = n.end_line || Math.min(all.length, start + 39);
+    paintLines(view, all.slice(start - 1, end), start, n.file, { max: 40 });
+  } catch (err) {
+    if (view.isConnected) view.replaceChildren(el("p", { class: "code-status error", text: err.message }));
   }
 }
 
-/** Tint the answer's sources in this file: cited strong, retrieved faint; outline the target. */
-function markCode() {
-  const view = $("#code-view");
-  view.querySelectorAll(".line.cited, .line.retrieved, .line.target, .line[data-tag]").forEach((line) => {
-    line.classList.remove("cited", "retrieved", "target", "tag-cited");
-    line.removeAttribute("data-tag");
+function paintLines(view, lines, start, path, { max = Infinity } = {}) {
+  const shown = lines.slice(0, max);
+  view.innerHTML = `<div class="lines">${highlightLines(shown.join("\n"), path)
+    .map((html, i) => `<span class="line" data-n="${start + i}">${html || " "}</span>`).join("")}</div>`;
+  if (lines.length > max) view.append(el("p", { class: "code-status", text: `${plural(lines.length - max, "more line")}. Open code to read the whole file.` }));
+}
+
+function askAbout(n) {
+  $("#question").value = n.kind === "module" || n.kind === "file" ? `What does \`${n.file}\` do and what depends on it?` : `What does \`${n.label || n.name}\` do and who calls it?`;
+  autosize();
+  if (isNarrow()) setView("ask");
+  $("#question").focus();
+}
+
+// ── the focus overlay ───────────────────────────────────────────────────────
+const focusState = { token: 0, opener: null };
+
+function setupFocus() {
+  const dialog = $("#focus");
+  $("#focus-close").addEventListener("click", () => dialog.close());
+  // a click on the backdrop (outside the card) closes it; focus is trapped by the dialog itself
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
+  dialog.addEventListener("close", () => {
+    focusState.token++;
+    const back = focusState.opener;
+    focusState.opener = null;
+    if (back?.isConnected) back.focus();
+    else graphView?.node.filter(function focused() { return this.tabIndex === 0; }).node()?.focus();
   });
-  const line = (n) => view.querySelector(`.line[data-n="${n}"]`);
-  const sources = state.sources.filter((s) => s.file === code.path);
-  // wide ranges first, so a cited method inside a retrieved class ends up cited
+}
+
+/** Edges touching a node in the full graph, with their evidence. */
+function edgesOf(n) {
+  const links = state.graph?.links || [];
+  const byId = new Map(state.graph?.nodes.map((x) => [x.id, x]) || []);
+  const trails = trailEdges();
+  const isModule = typeof n.id === "string" && n.id.startsWith("m:");
+  const out = [];
+  for (const l of links) {
+    if (l.type === "member") continue;
+    const s = byId.get(l.source), t = byId.get(l.target);
+    if (!s || !t) continue;
+    const mine = isModule ? (s.file === n.file) !== (t.file === n.file) && (s.file === n.file || t.file === n.file) : l.source === n.id || l.target === n.id;
+    if (!mine) continue;
+    const outgoing = isModule ? s.file === n.file : l.source === n.id;
+    out.push({ link: l, other: outgoing ? t : s, outgoing, onPath: trails.has(pairKey(l.source, l.target)) });
+  }
+  out.sort((a, b) => Number(b.link.type === "bridge") - Number(a.link.type === "bridge") || Number(b.onPath) - Number(a.onPath));
+  return out;
+}
+
+function edgeVerb(e) {
+  const t = e.link.type;
+  if (t === "bridge") return e.outgoing ? "reaches, across languages," : "reached, across languages, by";
+  if (t === "inherits") return e.outgoing ? "inherits from" : "base class of";
+  return e.outgoing ? "calls" : "called by";
+}
+
+function openFocus(n) {
+  const dialog = $("#focus");
+  focusState.opener = document.activeElement;
+  const token = ++focusState.token;
+  const sid = state.sids.get(n.id);
+  const { callers, calls } = callCounts(n);
+  const language = n.language || languageOfPath(n.file);
+  const s = state.sources.find((x) => x.chunk_id === n.id);
+  fill($("#focus-title"), sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", text: `S${sid}` }) : null, " ", el("span", { text: n.label || n.name }));
+  fill($("#focus-where"), el("span", { text: formatLocation(n) }), statePill(n), language ? languageTag(language, { always: true }) : null);
+  const meta = (label, ...value) => el("div", {}, el("dt", { text: label }), el("dd", {}, ...value));
+  fill($("#focus-meta"), 
+    meta("Kind", el("span", { text: kindWord(n.kind) })),
+    meta("Called by", el("span", { text: callers.toLocaleString() })),
+    meta("Calls", el("span", { text: calls.toLocaleString() })),
+    meta("Lines", el("span", { text: n.end_line && n.start_line ? plural(n.end_line - n.start_line + 1, "line") : "whole file" })),
+    s && s.hop ? meta("Reached", el("span", { title: relationLabel(s), text: relationLabel(s) })) : s ? meta("Found by", el("span", { text: "direct match" })) : null,
+    s?.bridge ? meta("Bridge", el("span", { title: bridgeEvidence(s.bridge), text: s.bridge.label })) : null);
+
+  // the edges, each with its evidence
+  const edges = edgesOf(n);
+  $("#focus-edges-title").textContent = edges.length ? `Edges (${edges.length})` : "Edges";
+  fill($("#focus-edges"), ...(edges.length ? edges.slice(0, 40).map((e) => {
+    const b = e.link.type === "bridge" ? e.link : null;
+    const ev = b?.evidence || {};
+    return el("li", {},
+      dot(b ? "bridge" : e.onPath ? "cited" : null, b ? null : null),
+      el("span", { class: "edge-what" },
+        el("span", {}, el("span", { class: "verb", text: `${edgeVerb(e)} ` }),
+          el("b", { text: e.other.label || e.other.name }), e.link.count > 1 ? el("span", { class: "verb", text: ` (${plural(e.link.count, "call")})` }) : null),
+        b ? el("span", { text: `${b.label}${ev.src ? ` ← ${ev.src}` : ""}${ev.dst ? ` → ${ev.dst}` : ""} (${b.confidence === "exact" ? "exact" : "pattern"} match)` })
+          : el("span", { text: `${formatLocation(e.other)}${e.link.confidence === "name_match" ? ", matched by name" : ""}${e.onPath ? ", on the path to this answer" : ""}` })));
+  }) : [el("li", { class: "none", text: n.kind === "module" ? "No calls to or from other modules." : "No calls to or from other code were resolved." })]),
+  edges.length > 40 ? el("li", { class: "none", text: `and ${plural(edges.length - 40, "more edge")}` }) : null);
+
+  drawFocusGraph(n, edges);
+  dialog.showModal();
+  $("#focus-close").focus();
+
+  // the whole file, the answer's sources tinted, scrolled to this node
+  const view = $("#focus-code");
+  const note = $("#focus-code-note");
+  view.replaceChildren(codeSkeleton());
+  note.textContent = "";
+  loadFile(state.demo.id, n.file).then((file) => {
+    if (token !== focusState.token) return;
+    const lines = file.text.split("\n");
+    view.innerHTML = `<div class="lines">${highlightLines(file.text, n.file)
+      .map((html, i) => `<span class="line" data-n="${i + 1}">${html || " "}</span>`).join("")}</div>`;
+    markLines(view, n);
+    const target = view.querySelector(`.line[data-n="${n.start_line || 1}"]`);
+    if (target) view.scrollTop = Math.max(0, target.offsetTop - view.clientHeight / 3);
+    const url = n.start_line && n.end_line ? githubUrl(state.demo, n.file, n.start_line, n.end_line) : null;
+    fill(note, `${plural(lines.length, "line")} in ${n.file}${file.origin === "github" ? ", fetched from GitHub" : ""}. `,
+      url ? el("a", { href: url, target: "_blank", rel: "noopener", text: "Open on GitHub" }) : null);
+  }).catch((err) => {
+    if (token !== focusState.token) return;
+    const s2 = state.sources.find((x) => x.chunk_id === n.id);
+    if (s2?.code) { paintLines(view, s2.code.replace(/\n$/, "").split("\n"), s2.start_line || 1, n.file); markLines(view, n); note.textContent = "Only the retrieved lines are available: " + err.message; }
+    else view.replaceChildren(el("p", { class: "code-status error", text: err.message }));
+  });
+}
+
+/** Tint the answer's sources in this file: cited strong, retrieved faint; outline the node's own lines. */
+function markLines(view, n) {
+  const line = (k) => view.querySelector(`.line[data-n="${k}"]`);
+  const sources = state.sources.filter((s) => s.file === n.file);
   for (const s of [...sources].sort((a, b) => (b.end_line - b.start_line) - (a.end_line - a.start_line))) {
     const cited = Boolean(state.cited?.has(s.chunk_id));
-    for (let n = s.start_line; n <= s.end_line; n++) line(n)?.classList.add(cited ? "cited" : "retrieved");
+    for (let k = s.start_line; k <= s.end_line; k++) line(k)?.classList.add(cited ? "cited" : "retrieved");
     const head = line(s.start_line);
     if (head) {
       head.dataset.tag = [head.dataset.tag, `S${s.id}`].filter(Boolean).join(" ");
       if (cited) head.classList.add("tag-cited");
     }
   }
-  if (code.target) {
-    for (let n = code.target.start; n <= code.target.end; n++) line(n)?.classList.add("target");
+  if (n.start_line && n.end_line) for (let k = n.start_line; k <= n.end_line; k++) line(k)?.classList.add("target");
+}
+
+/** The node in the middle, its neighbours around it, the edges labelled by kind. */
+function drawFocusGraph(n, edges) {
+  const svg = d3.select("#focus-svg");
+  svg.selectAll("*").remove();
+  const box = svg.node().getBoundingClientRect();
+  const width = Math.max(320, box.width || 560), height = Math.max(240, box.height || 420);
+  svg.attr("viewBox", `0 0 ${width} ${height}`);
+  const defs = svg.append("defs");
+  for (const id of ["f-arrow", "f-arrow-bridge", "f-arrow-trail"]) {
+    defs.append("marker").attr("id", id).attr("viewBox", "0 -4 8 8").attr("refX", 8).attr("markerWidth", 7).attr("markerHeight", 7).attr("orient", "auto")
+      .append("path").attr("d", "M0,-4L8,0L0,4");
   }
-  const link = $("#code-github");
-  link.hidden = !code.url;
-  if (code.url) link.href = code.target ? `${code.url}#L${code.target.start}-L${code.target.end}` : code.url;
+  const shown = edges.slice(0, 16);
+  const others = [...new Map(shown.map((e) => [e.other.id, e.other])).values()];
+  const cx = width / 2, cy = height / 2, R = Math.min(width, height) / 2 - 70;
+  const pos = new Map([[n.id, { x: cx, y: cy }]]);
+  others.forEach((o, i) => {
+    const a = (i / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2;
+    pos.set(o.id, { x: cx + R * Math.cos(a), y: cy + R * Math.sin(a) });
+  });
+  const g = svg.append("g");
+  const edgeLayer = g.append("g");
+  for (const e of shown) {
+    const from = e.outgoing ? pos.get(n.id) : pos.get(e.other.id), to = e.outgoing ? pos.get(e.other.id) : pos.get(n.id);
+    const dx = to.x - from.x, dy = to.y - from.y, len = Math.hypot(dx, dy) || 1;
+    const back = 16;
+    edgeLayer.append("line").attr("class", `f-link ${e.link.type}${e.onPath ? " trail" : ""}`)
+      .attr("x1", from.x + (dx / len) * 12).attr("y1", from.y + (dy / len) * 12).attr("x2", to.x - (dx / len) * back).attr("y2", to.y - (dy / len) * back);
+    const label = e.link.type === "bridge" ? e.link.label : e.link.type === "inherits" ? "inherits" : e.link.count > 1 ? `${e.link.count} calls` : "calls";
+    edgeLayer.append("text").attr("class", "f-edge-label").attr("x", (from.x + to.x) / 2).attr("y", (from.y + to.y) / 2 - 6).text(label);
+  }
+  const nodeLayer = g.append("g");
+  const draw = (node, centre) => {
+    const p = pos.get(node.id);
+    const grp = nodeLayer.append("g").attr("class", `f-node${centre ? " centre" : ""}`).attr("data-hop", hopOf(node)).attr("transform", `translate(${p.x},${p.y})`);
+    const r = centre ? 11 : 7;
+    if (centre) grp.append("path").attr("class", "ring").attr("d", symbolPath(node.kind, r + 5));
+    grp.append("path").attr("class", "dot").attr("d", symbolPath(node.kind, r));
+    const t = grp.append("text").attr("text-anchor", "middle").attr("dominant-baseline", "hanging").attr("y", r + 5);
+    const sid = state.sids.get(node.id);
+    if (sid) t.append("tspan").attr("class", "label-sid").text(`S${sid} `);
+    t.append("tspan").text(middleTruncateName(node.label || node.name, centre ? 36 : 22));
+    grp.append("title").text(`${node.label || node.name}\n${formatLocation(node)}`);
+  };
+  others.forEach((o) => draw(o, false));
+  draw(n, true);
+  $("#focus-caption").textContent = edges.length > shown.length
+    ? `${shown.length} of ${plural(edges.length, "edge")} shown. Bridges first, then the path to this answer.`
+    : edges.length ? `${plural(edges.length, "edge")}. Bridges are magenta; the answer's path is blue.` : "This node has no resolved edges.";
 }
 
-/** Scroll the code view to the target (or the first source); a newly opened file jumps there. */
-function scrollToTarget({ smooth = false } = {}) {
-  const view = $("#code-view");
-  if (!code.rendered || !view.clientHeight) return;      // hidden pane: scrolled when shown
-  const n = code.target?.start || Number(view.querySelector(".line.cited, .line.retrieved")?.dataset.n || 1);
-  const line = view.querySelector(`.line[data-n="${n}"]`);
-  if (!line) return;
-  if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) smooth = false;
-  // position inside the scrolling view (offsetTop would be relative to the page)
-  const top = line.getBoundingClientRect().top - view.getBoundingClientRect().top + view.scrollTop;
-  view.scrollTo({ top: Math.max(top - 48, 0), behavior: smooth ? "smooth" : "auto" });
+// ── the repos page ──────────────────────────────────────────────────────────
+function setupRepos() {
+  const pills = [...document.querySelectorAll("#view-repos [data-status]")];
+  const setFilter = (value, focus = false) => {
+    state.reposFilter = value;
+    for (const b of pills) {
+      const on = b.dataset.status === value;
+      b.setAttribute("aria-checked", String(on));
+      b.tabIndex = on ? 0 : -1;
+      if (on && focus) b.focus();
+    }
+    renderRepos();
+  };
+  pills.forEach((b, i) => {
+    b.addEventListener("click", () => setFilter(b.dataset.status));
+    b.addEventListener("keydown", (e) => {
+      const step = { ArrowRight: 1, ArrowDown: 1, ArrowLeft: -1, ArrowUp: -1 }[e.key];
+      if (!step) return;
+      e.preventDefault();
+      setFilter(pills[(i + step + pills.length) % pills.length].dataset.status, true);
+    });
+  });
+  $("#repos-search").addEventListener("input", renderRepos);
+  document.addEventListener("click", (e) => {
+    if (!e.target.closest(".row-menu")) document.querySelectorAll(".row-menu .menu:not([hidden])").forEach((m) => { m.hidden = true; m.previousElementSibling.setAttribute("aria-expanded", "false"); });
+  });
 }
 
-/** After an answer (or a repo switch): show the first cited source, without taking over the pane. */
-function showAnswerCode({ reveal = false } = {}) {
-  const s = state.sources.find((x) => state.cited?.has(x.chunk_id)) || state.sources[0];
-  if (!s) { renderCodeEmpty(); return; }
-  showCode(s.file, { start: s.start_line, end: s.end_line, reveal });
+function repoRow(repo, { demo = false } = {}) {
+  const job = state.jobs.get(repo.id);
+  const status = repoStatus(repo, job);
+  const [owner, name] = repo.name.includes("/") ? repo.name.split("/") : [null, repo.name];
+  const languages = Object.entries(repo.languages || {}).sort((a, b) => b[1] - a[1]);
+  const version = repo.indexed_with || (repo.versions || []).at(-1) || "";
+  const open = () => { selectRepo(repo.id); setView("overview", { focus: true }); };
+  const menu = el("div", { class: "menu", role: "menu", hidden: true },
+    el("button", { type: "button", role: "menuitem", text: "Open", onclick: open }),
+    demo ? null : el("button", { type: "button", role: "menuitem", text: repo.reindex_to ? `Re-index with ${repo.reindex_to}` : "Re-index",
+      disabled: status.key === "indexing", onclick: () => reindexRepo(repo) }),
+    demo ? null : el("button", { type: "button", role: "menuitem", class: "danger", text: "Remove", onclick: () => removeUserRepo(repo.id) }));
+  const trigger = el("button", { type: "button", class: "icon-button", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": `Actions for ${repo.name}`,
+    onclick: (e) => { const on = menu.hidden; document.querySelectorAll(".row-menu .menu").forEach((m) => { m.hidden = true; }); menu.hidden = !on; e.currentTarget.setAttribute("aria-expanded", String(on)); } },
+  svgIcon("M5 12h.01M12 12h.01M19 12h.01"));
+  trigger.querySelector("path").setAttribute("stroke-width", "3");
+  return el("tr", { "aria-selected": String(repo.id === state.demo?.id) },
+    el("td", {}, el("div", { class: "repo-cell" },
+      el("div", { class: "name" },
+        el("button", { type: "button", title: repo.name, onclick: open }, owner ? el("span", { class: "owner", text: `${owner}/` }) : null, middleTruncateName(name, 30)),
+        repo.private ? el("span", { class: "private-badge", text: "Private" }) : null),
+      repo.description ? el("span", { class: "desc", title: repo.description, text: repo.description }) : null)),
+    el("td", {}, languages.length ? el("span", { class: "dots", title: languages.map(([l, k]) => plural(k, `${l} file`)).join(", ") },
+      languages.slice(0, 5).map(([l]) => dot(null, languageKey(l))), el("span", { class: "muted", text: ` ${languages.slice(0, 2).map(([l]) => l).join(", ")}${languages.length > 2 ? ` +${languages.length - 2}` : ""}` }))
+      : el("span", { class: "muted", text: "none recorded" })),
+    el("td", { class: "version" }, version || el("span", { class: "muted", text: "unknown" })),
+    el("td", { class: "when" }, formatDate(repo.built) || el("span", { class: "muted", text: "unknown" })),
+    el("td", {}, el("span", { class: "status-pill", "data-tone": status.tone, text: status.label }),
+      status.key === "indexing" ? el("div", { class: "progress", title: `${Math.round((status.progress || 0) * 100)}%` }, el("i", { style: `--progress:${status.progress || 0}` })) : null),
+    el("td", {}, el("div", { class: "row-menu" }, trigger, menu)));
+}
+
+function renderRepos() {
+  const q = $("#repos-search").value.trim().toLowerCase();
+  const match = (r) => !q || r.name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q);
+  const byStatus = (r) => state.reposFilter === "all" || repoStatus(r, state.jobs.get(r.id)).key === state.reposFilter;
+  const mine = state.userRepos.filter(match).filter(byStatus);
+  const rows = $("#repos-rows");
+  const empty = $("#repos-empty");
+  rows.replaceChildren(...mine.map((r) => repoRow(r)));
+  const signedIn = Boolean(currentUser());
+  empty.hidden = mine.length > 0;
+  empty.textContent = !signedIn ? "Sign in with GitHub to add your own repositories. The demos below are open to everyone."
+    : !state.userRepos.length ? "No repositories yet. Use + Add repo to index one from GitHub."
+    : q ? `No repository matches “${$("#repos-search").value.trim()}”.` : `No ${state.reposFilter === "update" ? "repositories with an update available" : `${state.reposFilter} repositories`}.`;
+  $("#repos-table").hidden = !mine.length;
+  $("#repos-lead").textContent = signedIn ? `${plural(state.userRepos.length, "repository", "repositories")} on your account.` : "The repositories you added, and where their indexes stand.";
+  $("#demos-rows").replaceChildren(...state.demos.filter(match).map((d) => repoRow(d, { demo: true })));
 }
 
 // ── layout / startup ────────────────────────────────────────────────────────
-function showPanel(name) {
-  if (name !== "chat") state.pane = name;
-  state.panel = name;
-  document.querySelectorAll(".panel-tabs button").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.panel === state.panel)));
-  document.querySelectorAll(".pane-tabs button").forEach((b) => {
-    b.setAttribute("aria-selected", String(b.dataset.panel === state.pane));
-    b.tabIndex = b.dataset.panel === state.pane ? 0 : -1;
-  });
-  document.querySelectorAll(".layout [data-panel]").forEach((p) => {
-    p.classList.toggle("active", p.dataset.panel === state.panel);       // narrow: the one pane
-    p.classList.toggle("current", p.dataset.panel === state.pane);       // wide: the right pane
-  });
-  if (name === "graph") drawGraph();
-  if (name === "code") scrollToTarget();
-}
-
 function autosize() {
   const area = $("#question");
   area.style.height = "auto";
@@ -2094,29 +2633,19 @@ async function start() {
   setupAccount();
   setupSettings();
   setupSaved();
+  setupRepoSwitcher();
+  setupFocus();
+  setupRepos();
   const openAddRepo = setupAddRepo();
+  renderRepoHead(null);
+  renderTiles(null);
+  renderNodePanel(null);
   state.userRepos = currentUser() ? await loadUserRepos() : [];   // your repositories need you signed in
-  showPanel("chat");
-  document.querySelectorAll(".panel-tabs button").forEach((b) => b.addEventListener("click", () => showPanel(b.dataset.panel)));
-  // Code | Call graph: a tablist, so the arrow keys move between the two tabs
-  document.querySelectorAll(".pane-tabs button").forEach((b) => {
-    b.addEventListener("click", () => { state.paneChosen = true; showPanel(b.dataset.panel); });
-    b.addEventListener("keydown", (e) => {
-      if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-      e.preventDefault();
-      const other = [...document.querySelectorAll(".pane-tabs button")].find((x) => x !== b);
-      state.paneChosen = true;
-      showPanel(other.dataset.panel);
-      other.focus();
-    });
-  });
-  renderCodeEmpty();
-  document.querySelectorAll("#graph-layout button").forEach((b) => b.addEventListener("click", () => {
-    if (state.graphLayout === b.dataset.layout) return;
-    state.graphLayout = b.dataset.layout;
-    hideNodeCard();
+  document.querySelectorAll(".pill-nav button").forEach((b) => b.addEventListener("click", () => setView(b.dataset.view, { focus: true })));
+  $("#layout-toggle").addEventListener("click", () => {
+    state.graphLayout = state.graphLayout === "rings" ? "free" : "rings";
     drawGraph();
-  }));
+  });
   $("#zoom-in").addEventListener("click", () => graphView?.zoomBy(1.5));
   $("#zoom-out").addEventListener("click", () => graphView?.zoomBy(1 / 1.5));
   $("#zoom-fit").addEventListener("click", () => graphView?.fit(true));
@@ -2128,6 +2657,7 @@ async function start() {
   $("#graph-toggle").addEventListener("click", () => {
     state.graphMode = state.graphMode === "full" ? "focus" : "full";
     drawGraph();
+    renderThumbs();
   });
   $("#ask-form").addEventListener("submit", (e) => { e.preventDefault(); ask($("#question").value); });
   // while an answer is being written the button is Stop (the empty field must not block it)
@@ -2141,18 +2671,13 @@ async function start() {
     const typing = e.target.closest?.("input, textarea, select, [contenteditable]");
     if (e.key === "/" && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
-      showPanel("chat");
+      if (isNarrow()) setView("ask");
       $("#question").focus();
-    } else if (e.key === "Escape" && !$("#node-card").hidden) {
-      const inCard = $("#node-card").contains(document.activeElement);
-      hideNodeCard();
-      if (inCard) graphView?.node.filter(function focused() { return this.tabIndex === 0; }).node()?.focus();
     }
   });
-  $("#repo-tabs").addEventListener("scroll", syncTabFades, { passive: true });
   $(".skip-link").addEventListener("click", (e) => {
     e.preventDefault();
-    showPanel("chat");
+    if (isNarrow()) setView("ask");
     $("#question").focus();
   });
   $("#question").addEventListener("input", autosize);
@@ -2163,16 +2688,17 @@ async function start() {
     const cite = e.target.closest("a.cite");
     if (!cite) return;
     e.preventDefault();
-    openSource(cite.closest(".turn"), Number(cite.dataset.source), { code: true });
+    const turn = cite.closest(".turn");
+    const row = turn?.querySelector(`.source[data-sid="${cite.dataset.source}"]`);
+    if (!row) return;
+    openSource(turn, Number(cite.dataset.source));
+    const s = state.sources.find((x) => x.chunk_id === Number(row.dataset.chunk));
+    selectNode(Number(row.dataset.chunk), { open: true, source: s });
   });
   let resizeTimer;
   window.addEventListener("resize", () => {
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => {
-      drawGraph();
-      $('#repo-tabs [aria-pressed="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
-      syncTabFades();
-    }, 200);
+    resizeTimer = setTimeout(() => drawGraph(), 200);
   });
 
   // Free hosting sleeps when idle: say so if the first response is slow.
@@ -2183,14 +2709,17 @@ async function start() {
   } catch {
     clearTimeout(wakeTimer);
     banner("Could not reach the server. Please reload the page in a moment.", "error");
+    $("#repo-current").textContent = "Server unreachable";
     return;
   }
   clearTimeout(wakeTimer);
   $("#server-model").textContent = state.health.llm.server ? `(${state.health.llm.models[0]})` : "(not configured)";
   updateLlmBanner();
+  renderRepoMenu();
 
   const params = new URL(window.location.href).searchParams;
   const wanted = params.get("repo");
+  if (params.get("view") === "repos") setView("repos");
   // a link to a repository someone added (not a demo) needs an account, as adding it did
   const demo = wanted && state.demos.some((d) => d.id === wanted || d.name === wanted);
   if (wanted && !demo && !currentUser()) { toSignIn(); return; }

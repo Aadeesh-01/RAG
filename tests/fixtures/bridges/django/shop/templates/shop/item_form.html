@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>Edit {{ item.name }}</h1>
+
+<!-- resolved through urls.py: shop:item-edit is ItemEditView, POST -> ItemEditView.post -->
+<form action="{% url 'shop:item-edit' item.pk %}" method="post">
+  {% csrf_token %}
+  <input name="name" value="{{ item.name }}">
+  <button type="submit">Save</button>
+</form>
+
+<!-- a literal URL to a regex route: the legacy item page -->
+<form action="/legacy/items/7/" method="get">
+  <button>Old page</button>
+</form>
+
+<!-- htmx: a literal URL, then a dynamic one that must not be matched -->
+<button hx-get="/shop/items/" hx-target="#list">Refresh the list</button>
+<button hx-delete="/shop/items/{{ item.pk }}/">Delete</button>
+
+<a href="{% url 'home' %}">Home</a>
+<form action="{% url 'home' %}" method="get"><button>Back home</button></form>
+{% endblock %}

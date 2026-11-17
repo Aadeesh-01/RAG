@@ -3,8 +3,8 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>coderag: answers about Python code, with citations</title>
-  <meta name="description" content="Ask questions about a Python codebase. Every answer cites the exact functions and lines it came from, found by search and the call graph.">
+  <title>coderag: ask the code, check every answer</title>
+  <meta name="description" content="Ask questions about a codebase. Every answer cites the exact functions and lines it came from, found by search and the call graph.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c2026'/><circle cx='11' cy='12' r='3.5' fill='%23eef1f5'/><circle cx='22' cy='9' r='2.5' fill='%23eef1f5'/><circle cx='20' cy='22' r='3.5' fill='%23eef1f5'/><path d='M11 12L22 9M11 12L20 22' stroke='%23eef1f5' stroke-width='1.6'/></svg>">
   <script>
     // links shared before the home page existed (/?repo=...&q=...) still open the app
@@ -37,31 +37,30 @@
       <span>coderag</span>
     </a>
     <nav class="site-nav" aria-label="Site">
-      <a href="#how">How it works</a>
-      <a href="#repos">Repositories</a>
-      <span id="account" class="account"><a class="ghost" href="/login">Sign in</a></span>
+      <a href="/app">Open the app</a>
+      <span id="account" class="account"><a class="secondary small" href="/login">Sign in</a></span>
     </nav>
   </header>
 
   <main id="main">
     <section class="hero" aria-labelledby="hero-title">
       <div class="hero-text">
-        <h1 id="hero-title">Ask a Python codebase. Get answers that cite the code.</h1>
-        <p class="lead">coderag finds the functions that match your question, follows the calls between them, and answers with a citation for every claim. Click a citation and you are at the exact lines.</p>
+        <h1 id="hero-title">Ask the code.<br>Check every answer.</h1>
+        <p class="lead">coderag answers questions about a codebase. Each answer cites the exact functions and lines it came from, found by vector search plus the code's call graph.</p>
         <div class="hero-actions">
-          <a id="primary-cta" class="primary" href="/app?repo=sample&amp;q=Which%20functions%20call%20normalize_name%3F">Try the sample repository</a>
+          <a id="primary-cta" class="primary" href="/app?repo=requests&amp;q=Who%20calls%20resolve_redirects%3F">Try with psf/requests</a>
+          <a id="hero-sign-in" class="secondary" href="/login">Sign in with GitHub</a>
         </div>
-        <p class="fine">Python only. Public GitHub repositories. Code is read, never run.</p>
+        <p class="fine">The demos open without an account. Code is read, never run.</p>
       </div>
 
-      <figure id="exhibit" class="hero-exhibit" aria-labelledby="exhibit-note">
+      <figure id="exhibit" class="hero-exhibit card" aria-labelledby="exhibit-note">
         <!-- the sample repository's call graph (pipeline package), drawn by hero-graph.js -->
         <div class="hero-graph" aria-hidden="false"></div>
 
         <!-- a real answer about the sample repository; this markup is its final state -->
         <div class="exhibit-card">
           <p class="prompt">
-            <svg class="prompt-mark" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.5 9.5 8 5 12.5"/></svg>
             <span class="visually-hidden">Question: Which functions call normalize_name?</span>
             <span class="prompt-text" aria-hidden="true">Which functions call normalize_name?</span><span class="caret" aria-hidden="true"></span>
           </p>
@@ -100,41 +99,10 @@
         </figcaption>
       </figure>
     </section>
-
-    <section id="how" class="how" aria-labelledby="how-title">
-      <h2 id="how-title">How an answer is made</h2>
-      <ol class="steps">
-        <li>
-          <h3>It finds the code</h3>
-          <p>Every function, method and class is indexed on its own. Your question is matched against them, not against whole files.</p>
-        </li>
-        <li>
-          <h3>It follows the calls</h3>
-          <p>Calls are resolved from imports and classes, so the answer also sees what the matching code calls, and what calls it.</p>
-        </li>
-        <li>
-          <h3>It cites every claim</h3>
-          <p>The model answers from those sources only and cites them as S1, S2. Each citation opens the file at the lines it came from; the call graph shows the path that found it.</p>
-        </li>
-      </ol>
-    </section>
-
-    <section id="repos" class="repos" aria-labelledby="repos-title">
-      <div class="repos-head">
-        <h2 id="repos-title">Ready to ask</h2>
-        <p id="repos-lead">Open one without signing in, or sign in to add any public GitHub repository<span id="limits"></span>.</p>
-      </div>
-      <p id="repo-status" class="repo-status" role="status"></p>
-      <ul id="repo-list" class="repo-list" aria-busy="true">
-        <li class="repo skeleton" aria-hidden="true"><span></span><span></span><span></span></li>
-        <li class="repo skeleton" aria-hidden="true"><span></span><span></span><span></span></li>
-        <li class="repo skeleton" aria-hidden="true"><span></span><span></span><span></span></li>
-      </ul>
-    </section>
   </main>
 
   <footer class="site-foot">
-    <p>Signing in, needed to add your own repositories, is a demo for now: any name and password work, and only the name is kept in this browser. GitHub sign-in is coming.</p>
+    <p>Public and private GitHub repositories. Only source files are downloaded and parsed; code is never run.</p>
     <a href="https://github.com/Aadeesh-01/RAG" target="_blank" rel="noopener">Source on GitHub</a>
   </footer>
 </body>

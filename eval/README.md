@@ -23,7 +23,8 @@ field.
 | `requests` | psf/requests (`src/requests`) | `3c7baaa0` | 22 |
 | `click` | pallets/click (`src/click`) | `2247b35e` | 21 |
 | `commander` | tj/commander.js v14.0.3 (`lib`), **JavaScript** | `b7d43804` | 12 |
-| `coderag` | this repository (frontend JS + web API Python), **cross-language** | working tree | 5 |
+| `coderag` | this repository (frontend JS + web API Python), **cross-language** | working tree | 15 |
+| `fastapi_react` | testdrivenio/fastapi-react (React TS + FastAPI), **cross-language** | `e0116876` | 10 |
 
 Each question has a type (`locate`, `callers`, `callees`, `inheritance`, `flow`) and gold symbols
 written as `path::Class.method`. Gold symbols in `.py` files are located with `ast`; in other
@@ -205,40 +206,60 @@ python eval/run_eval.py eval/questions/commander.yaml --versions v9 --by-type
 ## v10: bridge edges across languages
 
 v10 is v9 plus *bridge* edges ([coderag/bridges/](../coderag/bridges/)): an HTTP client call to the
-route that serves it (fetch/axios, requests/httpx, OkHttp/Retrofit -> FastAPI/Flask, Express, Spring,
-Go net/http), a Kotlin/Java `external`/`native` method to its JNI C function, and a ctypes/cffi call to
-its C function. Only literal URLs (or literals joined with `+`) are matched; a URL built from a
-variable or a template with values is skipped. Graph expansion follows a bridge as one hop.
+route that serves it, a Kotlin/Java `external`/`native` method to its JNI C function, and a
+ctypes/cffi call to its C function. It also adds project files (README, Procfile, ...) and repo
+facts for project questions, which these code questions don't use. Graph expansion follows a bridge
+as one hop.
 
-**Question set: coderag itself.** 5 hand-labelled questions where the answer spans the browser code
-and the Python route behind it, so each has 2 gold symbols: the JavaScript caller and the route
-handler. v10 finds 10 HTTP bridges in this repo (6 exact, 4 pattern: through the `fetchJSON` wrapper or a
-path parameter). The 7 calls whose URL is a template with values (`/api/repos/${id}/ask` ...) are
-skipped on purpose. Per-question rows:
-[results/v10-coderag.csv](results/v10-coderag.csv).
+- **Clients:** fetch/axios, jQuery, XMLHttpRequest, requests/httpx, OkHttp/Retrofit, and HTML forms
+  and htmx.
+- **Servers:** FastAPI/Flask (with router and blueprint prefixes), Express (with `app.use`
+  prefixes), Django and DRF, Spring, and Go net/http.
+- **URLs:** literal URLs match exactly. A template or f-string URL (`/api/repos/${id}/ask`) matches
+  as a pattern, with each interpolation counting as one wildcard segment. A URL held in a variable
+  or built as `base + path` is skipped.
+
+Both sets are cross-language. Each question's gold pairs the code that sends the request with the
+route handler that serves it, so a version has to cross the HTTP boundary to cover both. Per-question
+rows: [results/v10-crosslang.csv](results/v10-crosslang.csv).
 
 ```bash
-python eval/run_eval.py eval/questions/coderag.yaml --versions v9 v10
+python eval/run_eval.py eval/questions/coderag.yaml eval/questions/fastapi_react.yaml --versions v9 v10
 ```
 
 | Set | Version | n | R@ctx | Sig | Body | Hit@1 | Hit@3 | MRR | Chunks | Chars |
 |---|---|---|---|---|---|---|---|---|---|---|
-| coderag | v9 | 5 | 0.50 | 0.40 | 0.30 | 0.40 | 0.80 | 0.62 | 10.4 | 7313 |
-| coderag | **v10** | 5 | **0.90** | 0.40 | 0.32 | 0.40 | 0.80 | 0.62 | 12.0 | 8476 |
+| coderag | v9 | 15 | 0.30 | 0.27 | 0.22 | 0.20 | 0.47 | 0.35 | 10.9 | 8043 |
+| coderag | **v10** | 15 | **0.53** | 0.27 | 0.23 | 0.20 | 0.47 | 0.37 | 11.4 | 8515 |
+| fastapi_react | v9 | 10 | 0.82 | 0.82 | 0.83 | 1.00 | 1.00 | 1.00 | 4.0 | 2036 |
+| fastapi_react | **v10** | 10 | **0.97** | **0.97** | **0.96** | 1.00 | 1.00 | 1.00 | 5.7 | 3306 |
 
-- **Recall 0.50 -> 0.90.** v9 finds one side of every question: the JavaScript caller in 4 of 5,
-  since the questions talk about the UI. v10 crosses to the route in 4 of 5. Ranks (Hit@k, MRR) don't
-  change, since bridges only add expansions after the vector hits.
-- **The remaining miss** ("how does the page find out who is signed in?") is on the client side.
-  `fetchMe` is only called from module-level code in `auth.js` (`let user = await fetchMe()`), which
-  no chunk holds, and vector search doesn't rank it. v10 still reaches the route `/api/auth/me` via
-  `signOut`'s bridge to the same `Auth.router`.
-- **Sig doesn't move (0.40).** coderag's routes are nested functions inside `create_app` and
-  `Auth.router`, so a bridge lands on that whole enclosing chunk. It counts as covering the route,
-  but with the hop-1 character budget the context shows the top of `create_app`, not the route's
-  `def` line. Splitting nested route handlers into their own chunks would fix that. It is not done
-  here, because it would change Python chunking for v1-v9.
-- Small set: one question is 0.1 of R@ctx. It follows the working tree, so it has no pinned SHA.
+**coderag** (this repository, frontend JavaScript + web API Python, 15 questions, working tree, not
+pinned). v10 finds 19 HTTP bridges here (6 exact, 13 pattern), up from 10, because template URLs
+now count. The first 5 questions score as before (v9 0.50, v10 0.90). The 10 added questions are
+harder:
+
+- **The client side is never retrieved (4 questions: job progress, graph load, "Check if live",
+  adding to the list).** Vector search doesn't rank the JavaScript function that makes the call, so
+  there's nothing to cross from. Bridges only extend what search finds.
+- **The client is retrieved but the bridge isn't followed (3 questions: `ask`, `loadFile`,
+  `reindexRepo`).** These functions call many helpers (`el`, `$`, ...). Their name-matched callees
+  come before bridges in expansion order and fill the budget of 8 chunks before the bridge is reached.
+  Ordering bridges ahead of name-matched callees is the obvious next step. It hasn't been made,
+  because the change would come from looking at this test set.
+- **Sig stays low (0.27).** coderag's routes are nested inside `create_app` and `Auth.router`, so a
+  bridge lands on that whole function. The hop's character budget shows its top, not the route's
+  `def` line.
+
+**fastapi_react** ([testdrivenio/fastapi-react](https://github.com/testdrivenio/fastapi-react)
+pinned at `e0116876`: a React + TypeScript frontend and a FastAPI backend, 10 questions). All four
+routes are bridged: `POST /todo` and `GET /todo` exact, `PUT /todo/{id}` and `DELETE /todo/{id}` as
+patterns from template URLs. v10 covers both sides in 9 of 10 questions. The remaining 0.67 is a
+three-symbol question whose third gold (the `Todos` component that re-fetches the list) isn't
+reached. The repo has only four routes, so several questions ask different things about the same
+pair, and the scores are close to the ceiling.
+
+Small sets: one coderag question is 0.03 of R@ctx, one fastapi_react question 0.05.
 
 ## Answer quality
 

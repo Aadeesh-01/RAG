@@ -27,7 +27,15 @@ import sys
 def _source_patterns():
     """Sparse-checkout patterns of every indexable file: *.py and the registered languages."""
     from .languages import LANGUAGES
-    return ["*.py"] + sorted({f"*{ext}" for lang in LANGUAGES.values() for ext in lang.extensions})
+    from .languages import TEMPLATE_EXTENSIONS
+    return (["*.py"] + sorted({f"*{ext}" for lang in LANGUAGES.values() for ext in lang.extensions})
+            + [f"*{ext}" for ext in TEMPLATE_EXTENSIONS]           # templates: forms and htmx (v10)
+            + _project_patterns())                                 # README, Procfile, ... (never .env)
+
+
+def _project_patterns():
+    from .facts import PROJECT_FILES, WORKFLOWS
+    return list(PROJECT_FILES) + ["/" + w for w in WORKFLOWS]
 
 
 GITHUB_URL = re.compile(r"^https://github\.com/[A-Za-z0-9-]{1,39}/[A-Za-z0-9._-]{1,100}$")

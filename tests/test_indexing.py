@@ -90,7 +90,7 @@ def test_index_then_ask(tmp_path):
     info = client.get(f"/api/repos/{repo_id}").json()
     assert info["kind"] == "user" and info["name"] == "someone/pkg" and info["stats"]["chunks"] > 0
     assert info["description"] == "Indexed from GitHub."
-    assert info["sha"] == "a" * 40 and info["versions"] == ["v8"]
+    assert info["sha"] == "a" * 40 and info["versions"] == ["v10"]          # the server's default version
     sources = client.post(f"/api/repos/{repo_id}/retrieve",
                           json={"question": "normalize names"}).json()["sources"]
     assert sources and sources[0]["url"].startswith(f"https://github.com/someone/pkg/blob/{'a' * 40}/")

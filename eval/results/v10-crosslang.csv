@@ -1,0 +1,51 @@
+set,version,type,q,R@ctx,Sig,Body,Hit@1,Hit@3,MRR,Chunks,Chars,ms
+coderag,v9,cross-language,What happens when the Add repo button is clicked?,0.5,0.5,0.2835820895522388,0.0,1.0,0.5,12,9446,42.10709995822981
+coderag,v9,cross-language,How does the page find out who is signed in?,0.5,0.0,0.05,0.0,0.0,0.1111111111111111,9,5314,35.32000002451241
+coderag,v9,cross-language,What does the server do when the user signs out?,0.5,0.5,0.5,1.0,1.0,1.0,7,4272,26.86159999575466
+coderag,v9,cross-language,Where does the add-repo dialog get the user's GitHub repositories from?,0.5,0.5,0.1437841530054645,0.0,1.0,0.5,12,8682,49.67789998045191
+coderag,v9,cross-language,How are the user's repository tabs loaded when the app starts?,0.5,0.5,0.5,1.0,1.0,1.0,12,9243,28.398800001014024
+coderag,v9,cross-language,What happens on the server when a question is asked in the chat?,0.5,0.5,0.17410714285714285,1.0,1.0,1.0,12,8548,37.74100000737235
+coderag,v9,cross-language,How does the code viewer load a whole source file?,0.5,0.5,0.5,0.0,0.0,0.14285714285714285,12,12159,28.704099997412413
+coderag,v9,cross-language,How is the progress of an indexing job shown while a repository is being added?,0.0,0.0,0.0,0.0,0.0,0.0,12,10820,30.37439996842295
+coderag,v9,cross-language,How does the app load a repository's call graph when the repository is selected?,0.0,0.0,0.016129032258064516,0.0,0.0,0.0,6,5634,28.58759998343885
+coderag,v9,cross-language,What happens when the user closes a repository tab?,0.0,0.0,0.07142857142857142,0.0,0.0,0.0,12,6367,25.87020001374185
+coderag,v9,cross-language,How is an opened repository added to the user's list on the server?,0.0,0.0,0.0,0.0,0.0,0.0,12,7056,29.44100002059713
+coderag,v9,cross-language,What happens when the Re-index button is clicked?,0.5,0.5,0.5,0.0,1.0,0.5,12,10004,27.290300000458956
+coderag,v9,cross-language,What does the Check if live button ask the server to do?,0.0,0.0,0.038461538461538464,0.0,0.0,0.0,9,6114,26.76799998153001
+coderag,v9,cross-language,How does the home page load the list of demo repositories?,0.0,0.0,0.047619047619047616,0.0,0.0,0.0,12,8630,27.982499974314123
+coderag,v9,cross-language,How does the app fetch a repository's details when it is opened from a link?,0.5,0.5,0.5,0.0,1.0,0.5,12,8355,29.27220001583919
+coderag,v10,cross-language,What happens when the Add repo button is clicked?,1.0,0.5,0.2835820895522388,0.0,1.0,0.5,12,10190,40.66749999765307
+coderag,v10,cross-language,How does the page find out who is signed in?,0.5,0.0,0.05,0.0,0.0,0.1111111111111111,12,6596,32.85740001592785
+coderag,v10,cross-language,What does the server do when the user signs out?,1.0,0.5,0.5833333333333334,1.0,1.0,1.0,12,6875,31.056900043040514
+coderag,v10,cross-language,Where does the add-repo dialog get the user's GitHub repositories from?,1.0,0.5,0.1646174863387978,0.0,1.0,0.5,12,9258,44.228400045540184
+coderag,v10,cross-language,How are the user's repository tabs loaded when the app starts?,1.0,0.5,0.5,1.0,1.0,1.0,12,9744,33.63079996779561
+coderag,v10,cross-language,What happens on the server when a question is asked in the chat?,0.5,0.5,0.17410714285714285,1.0,1.0,1.0,12,8548,28.219800035003573
+coderag,v10,cross-language,How does the code viewer load a whole source file?,0.5,0.5,0.5,0.0,0.0,0.14285714285714285,12,12159,37.37330000149086
+coderag,v10,cross-language,How is the progress of an indexing job shown while a repository is being added?,0.0,0.0,0.0,0.0,0.0,0.0,12,10820,36.21290001319721
+coderag,v10,cross-language,How does the app load a repository's call graph when the repository is selected?,0.0,0.0,0.016129032258064516,0.0,0.0,0.0,6,5634,36.05529997730628
+coderag,v10,cross-language,What happens when the user closes a repository tab?,0.5,0.0,0.07142857142857142,0.0,0.0,0.16666666666666666,12,7446,61.88809999730438
+coderag,v10,cross-language,How is an opened repository added to the user's list on the server?,0.0,0.0,0.0,0.0,0.0,0.0,12,7056,65.84270001621917
+coderag,v10,cross-language,What happens when the Re-index button is clicked?,0.5,0.5,0.5,0.0,1.0,0.5,12,10004,62.582299986388534
+coderag,v10,cross-language,What does the Check if live button ask the server to do?,0.0,0.0,0.038461538461538464,0.0,0.0,0.0,9,6114,68.07259999914095
+coderag,v10,cross-language,How does the home page load the list of demo repositories?,0.5,0.0,0.047619047619047616,0.0,0.0,0.16666666666666666,12,8862,36.69020003871992
+coderag,v10,cross-language,How does the app fetch a repository's details when it is opened from a link?,1.0,0.5,0.5,0.0,1.0,0.5,12,8424,38.177299953531474
+fastapi_react,v9,cross-language,What happens when a new todo is submitted?,0.5,0.5,0.5185185185185185,1.0,1.0,1.0,4,1365,58.96379996556789
+fastapi_react,v9,cross-language,How does the app load the list of todos?,0.5,0.5,0.5217391304347826,1.0,1.0,1.0,4,821,42.2470000339672
+fastapi_react,v9,cross-language,What happens when a todo is edited and saved in the update dialog?,1.0,1.0,0.9905660377358491,1.0,1.0,1.0,4,2851,39.21360004460439
+fastapi_react,v9,cross-language,What happens when the Delete Todo button is clicked?,1.0,1.0,1.0,1.0,1.0,1.0,4,1953,39.93849997641519
+fastapi_react,v9,cross-language,How does the backend respond when the frontend asks to update a todo that doesn't exist?,1.0,1.0,0.9811320754716981,1.0,1.0,1.0,4,2802,36.88750002766028
+fastapi_react,v9,cross-language,"After a todo is deleted, how does the list on the page get refreshed?",0.6666666666666666,0.6666666666666666,0.7101449275362319,1.0,1.0,1.0,4,1953,38.94880000734702
+fastapi_react,v9,cross-language,"Which server endpoint does the todo input form post to, and what does it return?",1.0,1.0,1.0,1.0,1.0,1.0,4,1909,41.41689999960363
+fastapi_react,v9,cross-language,"What does the page show when it first loads, and where does that data come from on the server?",1.0,1.0,1.0,1.0,1.0,1.0,4,1436,40.57369998190552
+fastapi_react,v9,cross-language,"Which HTTP method does the Save button in the update dialog use, and which handler receives it?",0.5,0.5,0.5461215932914046,1.0,1.0,1.0,4,3322,41.9912000070326
+fastapi_react,v9,cross-language,"How does the frontend send a deletion to the server, and how does the server find the todo to remove?",1.0,1.0,1.0,1.0,1.0,1.0,4,1953,43.60410000663251
+fastapi_react,v10,cross-language,What happens when a new todo is submitted?,1.0,1.0,0.9074074074074074,1.0,1.0,1.0,8,4502,30.87189997313544
+fastapi_react,v10,cross-language,How does the app load the list of todos?,1.0,1.0,1.0,1.0,1.0,1.0,6,2543,30.092099972534925
+fastapi_react,v10,cross-language,What happens when a todo is edited and saved in the update dialog?,1.0,1.0,0.9905660377358491,1.0,1.0,1.0,5,3740,32.56429999601096
+fastapi_react,v10,cross-language,What happens when the Delete Todo button is clicked?,1.0,1.0,1.0,1.0,1.0,1.0,5,2833,30.179900000803173
+fastapi_react,v10,cross-language,How does the backend respond when the frontend asks to update a todo that doesn't exist?,1.0,1.0,0.9905660377358491,1.0,1.0,1.0,6,4226,57.085400039795786
+fastapi_react,v10,cross-language,"After a todo is deleted, how does the list on the page get refreshed?",0.6666666666666666,0.6666666666666666,0.7101449275362319,1.0,1.0,1.0,5,2833,49.566400004550815
+fastapi_react,v10,cross-language,"Which server endpoint does the todo input form post to, and what does it return?",1.0,1.0,1.0,1.0,1.0,1.0,6,3622,75.7545999949798
+fastapi_react,v10,cross-language,"What does the page show when it first loads, and where does that data come from on the server?",1.0,1.0,1.0,1.0,1.0,1.0,4,1436,35.71259998716414
+fastapi_react,v10,cross-language,"Which HTTP method does the Save button in the update dialog use, and which handler receives it?",1.0,1.0,0.9905660377358491,1.0,1.0,1.0,7,4497,32.247799972537905
+fastapi_react,v10,cross-language,"How does the frontend send a deletion to the server, and how does the server find the todo to remove?",1.0,1.0,1.0,1.0,1.0,1.0,5,2833,47.484799986705184

@@ -147,3 +147,57 @@ test("avatar picture: GitHub's https URL at the asked size, nothing otherwise", 
     assert.equal(avatarSrc(user), null, JSON.stringify(user));
   }
 });
+
+import { bridgeCounts, formatDate, middleTruncateName, moduleGraph, plural, questionsPerDay, repoStatus } from "../lib.js";
+
+test("counts in people's words, with correct plurals", () => {
+  assert.equal(plural(1, "file"), "1 file");
+  assert.equal(plural(2, "file"), "2 files");
+  assert.equal(plural(1, "class", "classes"), "1 class");
+  assert.equal(plural(3, "class", "classes"), "3 classes");
+  assert.equal(plural(undefined, "file"), "0 files");
+});
+
+test("long names shorten in the middle; dates never render raw", () => {
+  assert.equal(middleTruncateName("short"), "short");
+  const long = "a_very_long_function_name_indeed";
+  assert.ok(middleTruncateName(long, 20).includes("…"));
+  assert.equal(middleTruncateName(long, 20).length, 20);
+  assert.equal(formatDate("not a date"), "");
+  assert.equal(formatDate(null), "");
+  assert.match(formatDate("2026-11-03T13:11:00+00:00", "en-GB"), /2026/);
+});
+
+test("questions per day: today last, older days first, bad entries skipped", () => {
+  const now = new Date(2026, 10, 17, 12);
+  const times = ["2026-11-17T01:00:00", "2026-11-17T09:00:00", "2026-11-16T23:00:00", { t: "2026-11-11T12:00:00" }, "2026-11-01", "nope"];
+  assert.deepEqual(questionsPerDay(times, 7, now), [1, 0, 0, 0, 0, 1, 2]);
+  assert.deepEqual(questionsPerDay([], 3, now), [0, 0, 0]);
+});
+
+test("bridges are counted by mechanism", () => {
+  const links = [{ type: "calls" }, { type: "bridge", mechanism: "http" }, { type: "bridge", mechanism: "http" }, { type: "bridge", mechanism: "jni" }];
+  assert.deepEqual(bridgeCounts(links), { total: 3, byMechanism: { http: 2, jni: 1 } });
+  assert.deepEqual(bridgeCounts([]), { total: 0, byMechanism: {} });
+});
+
+test("a repository's status: job first, then an older preset, else indexed", () => {
+  assert.equal(repoStatus({}, { status: "running", progress: 0.4 }).key, "indexing");
+  assert.equal(repoStatus({}, { status: "queued" }).label, "Queued");
+  assert.equal(repoStatus({}, { status: "failed" }).tone, "bad");
+  assert.equal(repoStatus({ reindex_to: "v10" }, null).key, "update");
+  assert.deepEqual(repoStatus({ id: "x" }, undefined), { key: "indexed", label: "Indexed", tone: "ok" });
+});
+
+test("a large graph collapses to one node per file, links counted between files", () => {
+  const g = {
+    nodes: [{ id: 0, file: "a.py", language: "python" }, { id: 1, file: "a.py" }, { id: 2, file: "b/c.py" }, { id: 3, file: "web.js", language: "javascript" }],
+    links: [{ source: 0, target: 1, type: "calls" }, { source: 0, target: 2, type: "calls" }, { source: 1, target: 2, type: "calls" },
+            { source: 3, target: 2, type: "bridge", mechanism: "http", label: "HTTP POST /x" }, { source: 2, target: 0, type: "member" }],
+  };
+  const m = moduleGraph(g);
+  assert.deepEqual(m.nodes.map((n) => [n.id, n.name, n.members]), [["m:a.py", "a.py", 2], ["m:b/c.py", "c.py", 1], ["m:web.js", "web.js", 1]]);
+  assert.deepEqual(m.links.map((l) => [l.source, l.target, l.type, l.count]),
+    [["m:a.py", "m:b/c.py", "calls", 2], ["m:web.js", "m:b/c.py", "bridge", 1]]);
+  assert.equal(m.links[1].label, "HTTP POST /x");
+});

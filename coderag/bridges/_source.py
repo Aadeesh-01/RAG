@@ -166,3 +166,35 @@ def keyword_literal(args, *names):
             if value is not None:
                 return value
     return None
+
+
+_FORMAT_CALL = re.compile(r"""^\s*(?P<lit>[rRuU]?(?P<q>"|')(?:\\.|(?!(?P=q)).)*(?P=q))\s*\.format\s*\(.*\)\s*$""", re.S)
+
+
+def url_template(expr):
+    """
+    (url, interpolated) for a URL argument: a literal (or literals joined with
+    "+") is (value, False); a single JS template literal `/api/x/${id}`, a
+    Python f-string f"/items/{pk}" or a literal "/items/{}".format(pk) gives
+    the text with each interpolation as {} and True. None for anything else:
+    a variable, a call, `base + path`, concatenation with a value.
+    """
+    value = literal(expr)
+    if value is not None:
+        return value, False
+    text = (expr or "").strip()
+    if len(text) >= 2 and text[0] == text[-1] == "`" and _skip_string(text, 0) == len(text):
+        body = text[1:-1]
+        if "${" in body and "`" not in body:
+            return re.sub(r"\$\{[^}]*\}", "{}", body), True
+        return None
+    f_string = re.match(r"""^(?:[rR]?[fF]|[fF][rR])(?P<q>"|')(?P<body>.*)(?P=q)$""", text, re.S)
+    if f_string and _skip_string(text, len(text) - len(text.lstrip("rRfF"))) == len(text):
+        body = f_string.group("body").replace("{{", "\0").replace("}}", "\1")
+        return re.sub(r"\{[^{}]*\}", "{}", body).replace("\0", "{").replace("\1", "}"), True
+    fmt = _FORMAT_CALL.match(text)
+    if fmt:
+        base = literal(fmt.group("lit"))
+        if base is not None:
+            return re.sub(r"\{[^{}]*\}", "{}", base), True
+    return None

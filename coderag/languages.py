@@ -200,6 +200,10 @@ LANGUAGES = {lang.name: lang for lang in (
 )}
 
 PYTHON_EXTENSIONS = (".py",)
+# HTML templates are not a language here: with HTTP bridges (v10) a template holding a form
+# action or an htmx request becomes one "template" chunk, the source node of those requests.
+TEMPLATE = "html"
+TEMPLATE_EXTENSIONS = (".html", ".htm")
 _BY_EXTENSION = {ext: lang for lang in LANGUAGES.values() for ext in lang.extensions}
 _PARSERS = {}
 
@@ -229,12 +233,26 @@ def language_of(meta):
     return lang.name if lang else "python"
 
 
+_CONFIG_FENCES = {".md": "markdown", ".toml": "toml", ".yaml": "yaml", ".yml": "yaml", ".json": "json",
+                  ".txt": "text", ".example": "sh"}
+
+
 def label_of(name):
+    if name == "config":
+        return "Config"
+    if name == TEMPLATE:
+        return "HTML"
     return "Python" if name == "python" else LANGUAGES[name].label if name in LANGUAGES else name
 
 
 def fence_of(meta):
     name = language_of(meta)
+    if name == "config":
+        base = os.path.basename(meta.get("file") or meta.get("name") or "")
+        return "dockerfile" if base.startswith("Dockerfile") else _CONFIG_FENCES.get(
+            os.path.splitext(base)[1].lower(), "text")
+    if name == TEMPLATE:
+        return "html"
     return LANGUAGES[name].fence if name in LANGUAGES else "python"
 
 

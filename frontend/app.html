@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>coderag</title>
-  <meta name="description" content="Ask questions about a Python codebase. Answers cite the exact source code, retrieved with a call graph.">
+  <meta name="description" content="Ask questions about a codebase. Answers cite the exact source code, retrieved with a call graph.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%231c2026'/><circle cx='11' cy='12' r='3.5' fill='%23eef1f5'/><circle cx='22' cy='9' r='2.5' fill='%23eef1f5'/><circle cx='20' cy='22' r='3.5' fill='%23eef1f5'/><path d='M11 12L22 9M11 12L20 22' stroke='%23eef1f5' stroke-width='1.6'/></svg>">
   <script>
     // the colourway before the first paint: paper unless the visitor chose dark,
@@ -30,117 +30,236 @@
           integrity="sha384-F/bZzf7p3Joyp5psL90p/p89AZJsndkSoGwRpXcZhleCWhd8SnRuoYo4d0yirjJp" crossorigin="anonymous"></script>
   <script type="module" src="app.js"></script>
 </head>
-<body>
+<body class="app-body" data-view="overview">
   <a class="skip-link" href="#question">Skip to the question</a>
+  <div class="app">
   <header class="topbar">
     <a class="brand" href="/" aria-label="coderag home">
       <svg viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="7"/><circle cx="11" cy="12" r="3.5"/><circle cx="22" cy="9" r="2.5"/><circle cx="20" cy="22" r="3.5"/><path d="M11 12L22 9M11 12L20 22"/></svg>
       <span>coderag</span>
     </a>
-    <nav id="repo-tabs" class="repo-tabs" aria-label="Repositories"></nav>
-    <button id="add-repo-button" class="add-repo" type="button" title="Index a GitHub repository">Add repo</button>
-    <button id="saved-button" class="icon-button saved-button" type="button" aria-label="Saved answers" title="Saved answers">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1Z"/></svg>
-      <span id="saved-count" class="badge" hidden></span>
-    </button>
-    <button id="settings-button" class="icon-button" type="button" aria-label="Settings" title="Settings">
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
-    </button>
-    <a id="sign-in-link" class="ghost" href="/login" hidden>Sign in</a>
-    <button id="user-button" class="avatar" type="button" popovertarget="user-menu" aria-label="Account" hidden>
-      <span id="user-initials" aria-hidden="true"></span>
-    </button>
-    <div id="user-menu" class="user-menu" popover>
-      <p class="who"><span id="user-name"></span> <small id="user-provider"></small></p>
-      <button id="sign-out" type="button" class="link-button">Sign out</button>
+
+    <nav class="pill-nav" aria-label="Sections">
+      <button type="button" data-view="overview" aria-current="page">Overview</button>
+      <button type="button" data-view="ask">Ask</button>
+      <button type="button" data-view="graph">Graph</button>
+      <button type="button" data-view="repos">Repos</button>
+    </nav>
+
+    <div class="repo-switch">
+      <button id="repo-button" class="switcher" type="button" aria-haspopup="dialog" aria-expanded="false" aria-controls="repo-menu" title="Switch repository">
+        <span class="switcher-dot" aria-hidden="true"></span>
+        <span id="repo-current" class="switcher-name">Loading…</span>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 10l5 5 5-5"/></svg>
+      </button>
+      <div id="repo-menu" class="repo-menu" role="dialog" aria-label="Switch repository" hidden>
+        <input id="repo-filter" type="search" placeholder="Search repositories" aria-label="Search repositories" autocomplete="off" spellcheck="false">
+        <div class="repo-group">
+          <h3>Demos</h3>
+          <ul id="repo-demos" class="repo-list" role="listbox" aria-label="Demo repositories"></ul>
+        </div>
+        <div class="repo-group" id="repo-mine-group">
+          <h3>Your repos</h3>
+          <ul id="repo-mine" class="repo-list" role="listbox" aria-label="Your repositories"></ul>
+          <p id="repo-mine-empty" class="menu-note"></p>
+        </div>
+        <button id="add-repo-button" class="primary small" type="button" title="Index a GitHub repository">+ Add repo</button>
+      </div>
+    </div>
+
+    <div class="topbar-end">
+      <button id="saved-button" class="icon-button saved-button" type="button" aria-label="Saved answers" title="Saved answers">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3h12a1 1 0 0 1 1 1v17l-7-4.5L5 21V4a1 1 0 0 1 1-1Z"/></svg>
+        <span id="saved-count" class="badge" hidden></span>
+      </button>
+      <button id="settings-button" class="icon-button" type="button" aria-label="Settings" title="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg>
+      </button>
+      <a id="sign-in-link" class="secondary small" href="/login" hidden>Sign in</a>
+      <button id="user-button" class="avatar" type="button" popovertarget="user-menu" aria-label="Account" hidden>
+        <span id="user-initials" aria-hidden="true"></span>
+      </button>
+      <div id="user-menu" class="user-menu" popover>
+        <p class="who"><span id="user-name"></span> <small id="user-provider"></small></p>
+        <button id="sign-out" type="button" class="link-button">Sign out</button>
+      </div>
     </div>
   </header>
 
   <div id="banner" class="banner" hidden></div>
+  <p id="announce" class="visually-hidden" role="status" aria-live="polite"></p>
 
-  <div class="panel-tabs" role="tablist">
-    <button type="button" role="tab" data-panel="chat" aria-selected="true">Chat</button>
-    <button type="button" role="tab" data-panel="code" aria-selected="false">Code</button>
-    <button type="button" role="tab" data-panel="graph" aria-selected="false">Graph</button>
-  </div>
+  <main class="main">
+    <!-- ── the workspace: tiles, then Ask · Graph · Node ─────────────────── -->
+    <section id="view-work" class="workspace" aria-label="Workspace">
+      <header id="repo-head" class="repo-head" data-col="overview">
+        <div class="repo-head-skeleton" aria-hidden="true"><span></span><span></span></div>
+      </header>
 
-  <main class="layout">
-    <section class="chat-panel" data-panel="chat" aria-label="Chat">
-      <div id="jobs" class="jobs" aria-live="polite"></div>
-      <p id="announce" class="visually-hidden" role="status" aria-live="polite"></p>
-      <div id="conversation" class="conversation">
-        <div id="repo-card" class="repo-card"></div>
+      <div id="tiles" class="tiles" data-col="overview" aria-label="Repository at a glance"></div>
+
+      <div class="columns">
+        <section class="card ask-panel" data-col="ask" aria-label="Ask">
+          <div id="jobs" class="jobs" aria-live="polite"></div>
+          <div id="conversation" class="conversation">
+            <div id="repo-card" class="repo-card"></div>
+          </div>
+          <div id="suggest" class="suggest" aria-label="Suggested questions"></div>
+          <form id="ask-form" class="ask-form">
+            <div class="ask-field">
+              <textarea id="question" rows="1" maxlength="500" placeholder="Ask about this code" aria-label="Question" required
+                        aria-keyshortcuts="/" data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false" spellcheck="true"></textarea>
+              <button id="ask-button" type="submit" class="send" aria-label="Send" title="Send (Enter)">
+                <svg class="send-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+                <svg class="stop-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="2"/></svg>
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section id="graph-panel" class="card graph-card" data-col="graph" aria-label="Call graph">
+          <div class="graph-toolbar">
+            <h2 class="card-title">Graph <span id="graph-subtitle" class="card-subtitle"></span></h2>
+            <div class="toolbar" role="group" aria-label="Graph tools">
+              <button id="layout-toggle" type="button" class="icon-button" aria-pressed="false" aria-label="Lay out by call distance" title="Lay out by call distance (rings)" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/></svg></button>
+              <button id="zoom-out" type="button" class="icon-button" aria-label="Zoom out" title="Zoom out (-)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+              <button id="zoom-in" type="button" class="icon-button" aria-label="Zoom in" title="Zoom in (+)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg></button>
+              <button id="zoom-fit" type="button" class="icon-button" aria-label="Fit the graph to the view" title="Fit (0, or double-click the background)">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
+              <button id="graph-toggle" type="button" class="icon-button" aria-pressed="false" aria-label="Show the full graph" title="Show the full graph" hidden>
+                <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="6" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="12" cy="18" r="2"/><circle cx="12" cy="10" r="2"/><path d="M5 6l7 4 7-4M12 10v8"/></svg></button>
+            </div>
+          </div>
+          <div class="graph-stage">
+            <div id="thumbs" class="thumbs" aria-label="Recent answers" role="group"></div>
+            <div class="graph-wrap">
+              <svg id="graph" role="group" aria-label="Call graph. Use the arrow keys to move between functions and Enter to open one." aria-describedby="graph-hint"></svg>
+              <p id="graph-hint" class="graph-hint"></p>
+            </div>
+            <div class="hop-scale" aria-label="Hop distance from a direct match">
+              <span class="scale-title">Hops</span>
+              <ol class="scale">
+                <li data-hop="0"><i aria-hidden="true"></i><span>Direct match</span></li>
+                <li data-hop="1"><i aria-hidden="true"></i><span>1</span></li>
+                <li data-hop="2"><i aria-hidden="true"></i><span>2</span></li>
+                <li data-hop="3"><i aria-hidden="true"></i><span>3+</span></li>
+                <li data-hop="none"><i aria-hidden="true"></i><span>Neighbour</span></li>
+              </ol>
+            </div>
+          </div>
+          <details id="tray" class="tray" hidden>
+            <summary><span id="tray-title">Unconnected</span></summary>
+            <div id="tray-list" class="tray-list"></div>
+          </details>
+          <ul class="legend" aria-label="Graph key">
+            <li id="legend-cited" title="Code the answer cites"><i class="dot dot--cited" aria-hidden="true"></i>Cited <b id="count-cited"></b></li>
+            <li id="legend-retrieved" title="Sent to the model as context, but not cited in the answer"><i class="dot dot--retrieved" aria-hidden="true"></i>Also retrieved <b id="count-retrieved"></b></li>
+            <li id="legend-neighbour" title="Connected to the answer’s code, but not sent to the model"><i class="dot dot--neighbour" aria-hidden="true"></i>Neighbour</li>
+            <li><i class="key-line" aria-hidden="true"></i>Calls</li>
+            <li id="legend-inherits"><i class="key-line key-line--inherits" aria-hidden="true"></i>Inherits</li>
+            <li id="legend-trail" title="The call-graph path that pulled a source into the answer" hidden><i class="key-line key-line--trail" aria-hidden="true"></i>Path to a source</li>
+            <li class="legend-relation" data-relation="match" hidden><button type="button" class="filter-pill tiny" aria-pressed="true" title="Found by searching the code for the question. Click to hide or show these.">Direct match</button></li>
+            <li class="legend-relation" data-relation="callee" hidden><button type="button" class="filter-pill tiny" aria-pressed="true" title="Called by a source on its path. Click to hide or show these.">Called</button></li>
+            <li class="legend-relation" data-relation="caller" hidden><button type="button" class="filter-pill tiny" aria-pressed="true" title="Calls a source on its path. Click to hide or show these.">Caller</button></li>
+            <li class="legend-relation" data-relation="parent" hidden><button type="button" class="filter-pill tiny" aria-pressed="true" title="A base class of a source on its path. Click to hide or show these.">Base class</button></li>
+            <li class="legend-relation" data-relation="child" hidden><button type="button" class="filter-pill tiny" aria-pressed="true" title="A subclass of a source on its path. Click to hide or show these.">Subclass</button></li>
+            <li class="legend-relation" data-relation="method" hidden><button type="button" class="filter-pill tiny" aria-pressed="true" title="The class of a matched method, or a method of a matched class. Click to hide or show these.">Member</button></li>
+          </ul>
+        </section>
+
+        <aside id="node-panel" class="card node-panel" data-col="graph" aria-label="Selected node" aria-live="polite">
+          <div class="node-empty">
+            <h2 class="card-title">Selected node</h2>
+            <p>Select a node in the graph, or a source under an answer, to see what it is, who calls it, and its code.</p>
+          </div>
+        </aside>
       </div>
-      <form id="ask-form" class="ask-form">
-        <div class="ask-field">
-          <textarea id="question" rows="1" maxlength="500" placeholder="Ask about this code" aria-label="Question" required
-                    aria-keyshortcuts="/" data-gramm="false" data-gramm_editor="false" data-enable-grammarly="false" spellcheck="true"></textarea>
-          <kbd class="shortcut" aria-hidden="true" title="Press / to type a question">/</kbd>
-        </div>
-        <button id="ask-button" type="submit" class="primary">Ask</button>
-      </form>
     </section>
 
-    <div class="pane-tabs" role="tablist" aria-label="Evidence">
-      <button type="button" role="tab" id="tab-code" data-panel="code" aria-controls="code-panel" aria-selected="false" tabindex="-1">Code</button>
-      <button type="button" role="tab" id="tab-graph" data-panel="graph" aria-controls="graph-panel" aria-selected="true">Call graph</button>
-    </div>
-
-    <section id="code-panel" class="code-panel" data-panel="code" role="tabpanel" aria-labelledby="tab-code">
-      <div class="code-toolbar">
-        <nav id="code-files" class="code-files" aria-label="Files this answer used" hidden></nav>
-        <a id="code-github" class="open" target="_blank" rel="noopener" hidden>Open on GitHub</a>
-      </div>
-      <h2 id="code-title" class="code-title"></h2>
-      <div id="code-view" class="code-view" tabindex="0" role="region" aria-labelledby="code-title"></div>
-    </section>
-
-    <section id="graph-panel" class="graph-panel" data-panel="graph" role="tabpanel" aria-labelledby="tab-graph">
-      <div class="graph-toolbar">
-        <ul class="legend" aria-label="Graph key">
-          <li id="legend-cited" title="Code the answer cites"><i class="key key--cited" aria-hidden="true"></i>Cited <b id="count-cited"></b></li>
-          <li id="legend-retrieved" title="Sent to the model as context, but not cited in the answer"><i class="key" aria-hidden="true"></i>Also retrieved <b id="count-retrieved"></b></li>
-          <li id="legend-neighbour" title="Connected to the answer’s code, but not sent to the model"><i class="key key--neighbour" aria-hidden="true"></i>Neighbour</li>
-          <li class="legend-relation" data-relation="match" hidden><button type="button" aria-pressed="true" title="Found by searching the code for the question. Click to hide or show these."><i class="key key--rel" aria-hidden="true"></i>Direct match</button></li>
-          <li class="legend-relation" data-relation="callee" hidden><button type="button" aria-pressed="true" title="Called by a source on its path. Click to hide or show these."><i class="key key--rel" aria-hidden="true"></i>Called</button></li>
-          <li class="legend-relation" data-relation="caller" hidden><button type="button" aria-pressed="true" title="Calls a source on its path. Click to hide or show these."><i class="key key--rel" aria-hidden="true"></i>Caller</button></li>
-          <li class="legend-relation" data-relation="parent" hidden><button type="button" aria-pressed="true" title="A base class of a source on its path. Click to hide or show these."><i class="key key--rel" aria-hidden="true"></i>Base class</button></li>
-          <li class="legend-relation" data-relation="child" hidden><button type="button" aria-pressed="true" title="A subclass of a source on its path. Click to hide or show these."><i class="key key--rel" aria-hidden="true"></i>Subclass</button></li>
-          <li class="legend-relation" data-relation="method" hidden><button type="button" aria-pressed="true" title="The class of a matched method, or a method of a matched class. Click to hide or show these."><i class="key key--rel" aria-hidden="true"></i>Member</button></li>
-          <li><i class="key-line" aria-hidden="true"></i>Calls</li>
-          <li id="legend-trail" title="The call-graph path that pulled a source into the answer" hidden><i class="key-line key-line--trail" aria-hidden="true"></i>Path to a source</li>
-          <li id="legend-inherits"><i class="key-line key-line--inherits" aria-hidden="true"></i>Inherits</li>
-        </ul>
-      </div>
-      <div class="graph-wrap">
-        <svg id="graph" role="group" aria-label="Call graph. Use the arrow keys to move between functions and Enter to open one." aria-describedby="graph-hint"></svg>
-        <div class="graph-actions">
-          <div id="graph-layout" class="segmented" role="group" aria-label="Layout" hidden>
-            <button type="button" data-layout="free" aria-pressed="true" title="Let the graph find its own shape">Free</button>
-            <button type="button" data-layout="rings" aria-pressed="false"
-                    title="Rings by call distance: the closer to the centre, the more directly the code was found">By distance</button>
+    <!-- ── the repos page ──────────────────────────────────────────────── -->
+    <section id="view-repos" class="repos-page" aria-label="Repositories" hidden>
+      <div class="card repos-card">
+        <div class="repos-head">
+          <div>
+            <h2 class="section-title">Repositories</h2>
+            <p id="repos-lead" class="section-lead">The repositories you added, and where their indexes stand.</p>
           </div>
-          <div class="zoom" role="group" aria-label="Zoom">
-            <button id="zoom-out" type="button" class="icon-button" aria-label="Zoom out" title="Zoom out (-)">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
-            <button id="zoom-in" type="button" class="icon-button" aria-label="Zoom in" title="Zoom in (+)">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg></button>
-            <button id="zoom-fit" type="button" class="icon-button" aria-label="Fit the graph to the view" title="Fit (0, or double-click the background)">
-              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
-          </div>
-          <button id="graph-toggle" type="button" class="ghost" hidden>Show full graph</button>
+          <button id="repos-add" class="primary" type="button">+ Add repo</button>
         </div>
-        <p id="graph-hint" class="graph-hint"></p>
-        <aside id="node-card" class="node-card" hidden></aside>
+        <div class="repos-tools">
+          <div class="filter-pills" role="radiogroup" aria-label="Show">
+            <button type="button" class="filter-pill" role="radio" data-status="all" aria-checked="true">All</button>
+            <button type="button" class="filter-pill" role="radio" data-status="indexed" aria-checked="false" tabindex="-1">Indexed</button>
+            <button type="button" class="filter-pill" role="radio" data-status="indexing" aria-checked="false" tabindex="-1">Indexing</button>
+            <button type="button" class="filter-pill" role="radio" data-status="failed" aria-checked="false" tabindex="-1">Failed</button>
+            <button type="button" class="filter-pill" role="radio" data-status="update" aria-checked="false" tabindex="-1">Update available</button>
+          </div>
+          <input id="repos-search" class="search" type="search" placeholder="Search repos" aria-label="Search repositories" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="table-wrap">
+          <table class="repos-table" id="repos-table">
+            <thead><tr><th scope="col">Repo</th><th scope="col">Languages</th><th scope="col">Version</th><th scope="col">Indexed</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+            <tbody id="repos-rows"></tbody>
+          </table>
+        </div>
+        <p id="repos-empty" class="empty-state" hidden></p>
+      </div>
+      <div class="card repos-card demos-card">
+        <div class="repos-head">
+          <div>
+            <h2 class="section-title">Demos</h2>
+            <p class="section-lead">Open to everyone, no account needed.</p>
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="repos-table">
+            <thead><tr><th scope="col">Repo</th><th scope="col">Languages</th><th scope="col">Version</th><th scope="col">Indexed</th><th scope="col">Status</th><th scope="col"><span class="visually-hidden">Actions</span></th></tr></thead>
+            <tbody id="demos-rows"></tbody>
+          </table>
+        </div>
       </div>
     </section>
   </main>
+  </div>
+
+  <!-- ── the focus overlay: one node, enlarged ──────────────────────────── -->
+  <dialog id="focus" class="focus" aria-labelledby="focus-title">
+    <div class="focus-body">
+      <div class="focus-graph">
+        <svg id="focus-svg" role="img" aria-label="The selected node and its neighbours"></svg>
+        <p id="focus-caption" class="focus-caption"></p>
+      </div>
+      <div class="focus-details">
+        <div class="focus-head">
+          <div class="focus-heading">
+            <h2 id="focus-title" class="focus-title"></h2>
+            <p id="focus-where" class="focus-where"></p>
+          </div>
+          <button id="focus-close" type="button" class="icon-button" aria-label="Close" title="Close (Esc)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7l10 10M17 7L7 17"/></svg></button>
+        </div>
+        <dl id="focus-meta" class="focus-meta"></dl>
+        <section class="focus-section">
+          <h3>Code</h3>
+          <div id="focus-code" class="code-view" tabindex="0" role="region" aria-label="Code"></div>
+          <p id="focus-code-note" class="code-note"></p>
+        </section>
+        <section class="focus-section">
+          <h3 id="focus-edges-title">Edges</h3>
+          <ul id="focus-edges" class="edges"></ul>
+        </section>
+      </div>
+    </div>
+  </dialog>
 
   <dialog id="saved" class="settings saved-dialog">
     <div class="dialog-body">
       <div class="dialog-head">
         <h2>Saved answers</h2>
-        <button id="saved-close" type="button" class="ghost">Close</button>
+        <button id="saved-close" type="button" class="secondary small">Close</button>
       </div>
       <p class="note">Kept in this browser only. Other chats are cleared when you close or reload the page.</p>
       <div id="saved-list" class="saved-list"></div>
@@ -156,10 +275,10 @@
           <input id="repo-search" type="search" placeholder="Search by name" autocomplete="off" spellcheck="false"
                  role="combobox" aria-expanded="true" aria-controls="repo-options" aria-autocomplete="list"
                  aria-label="Search your repositories" data-gramm="false" data-enable-grammarly="false">
-          <div class="picker-filter" role="radiogroup" aria-label="Show">
-            <button type="button" role="radio" data-filter="all" aria-checked="true">All</button>
-            <button type="button" role="radio" data-filter="private" aria-checked="false" tabindex="-1">Private</button>
-            <button type="button" role="radio" data-filter="public" aria-checked="false" tabindex="-1">Public</button>
+          <div class="picker-filter filter-pills" role="radiogroup" aria-label="Show">
+            <button type="button" class="filter-pill" role="radio" data-filter="all" aria-checked="true">All</button>
+            <button type="button" class="filter-pill" role="radio" data-filter="private" aria-checked="false" tabindex="-1">Private</button>
+            <button type="button" class="filter-pill" role="radio" data-filter="public" aria-checked="false" tabindex="-1">Public</button>
           </div>
         </div>
         <ul id="repo-options" class="repo-options" role="listbox" aria-label="Your GitHub repositories" tabindex="-1"></ul>
@@ -173,7 +292,7 @@
         <span id="index-limits"></span></p>
       <p id="add-repo-error" class="form-error" hidden></p>
       <div class="dialog-actions">
-        <button value="cancel" type="button" class="ghost" id="add-repo-cancel">Cancel</button>
+        <button value="cancel" type="button" class="secondary" id="add-repo-cancel">Cancel</button>
         <button id="add-repo-submit" type="submit" class="primary">Add and index</button>
       </div>
     </form>
@@ -219,8 +338,8 @@
       </fieldset>
 
       <div class="dialog-actions">
-        <button id="settings-reset" type="button" class="ghost reset">Reset to defaults</button>
-        <button value="cancel" type="submit" class="ghost">Cancel</button>
+        <button id="settings-reset" type="button" class="link-button reset">Reset to defaults</button>
+        <button value="cancel" type="submit" class="secondary">Cancel</button>
         <button id="settings-save" value="save" type="submit" class="primary">Save</button>
       </div>
     </form>

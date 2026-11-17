@@ -1,42 +1,53 @@
 ---
 name: coderag
-description: Ask questions about a Python codebase; every answer cites the code it came from.
+description: Ask questions about a codebase; every answer cites the code it came from, and the graph shows how it got there.
 colors:
-  operator-amber: "oklch(54% 0.14 70)"
-  operator-amber-ink: "oklch(98.5% 0.006 85)"
-  operator-amber-soft: "oklch(92% 0.05 80)"
-  operator-amber-hover: "oklch(49% 0.13 70)"
-  readout-blue: "oklch(52% 0.14 250)"
-  readout-blue-soft: "oklch(92.5% 0.03 245)"
-  paper: "oklch(98% 0.006 85)"
-  paper-raised: "oklch(95.6% 0.008 85)"
-  paper-deep: "oklch(93.2% 0.009 85)"
-  ink: "oklch(19% 0.01 60)"
-  ink-soft: "oklch(31% 0.01 60)"
-  ink-muted: "oklch(45% 0.012 60)"
-  hairline: "oklch(87.5% 0.009 85)"
-  hairline-strong: "oklch(76% 0.011 85)"
-  diff-ok: "oklch(50% 0.13 150)"
-  diff-bad: "oklch(52% 0.17 25)"
-  diff-bad-soft: "oklch(93.5% 0.03 25)"
+  canvas: "oklch(96% 0.009 85)"
+  card: "oklch(99.2% 0.004 90)"
+  card-2: "oklch(94.2% 0.011 82)"
+  card-3: "oklch(91.6% 0.013 80)"
+  ink: "oklch(17% 0.012 60)"
+  ink-2: "oklch(32% 0.012 60)"
+  muted: "oklch(45% 0.014 60)"
+  rule: "oklch(89% 0.01 82)"
+  primary: "oklch(17% 0.012 60)"
+  primary-ink: "oklch(98.5% 0.004 90)"
+  secondary: "oklch(90.5% 0.012 80)"
+  accent: "oklch(50% 0.16 252)"
+  accent-soft: "oklch(93% 0.035 250)"
+  ok: "oklch(47% 0.13 150)"
+  bad: "oklch(50% 0.17 25)"
+  warn: "oklch(55% 0.14 70)"
+  cat-bridge: "oklch(56% 0.2 335)"
+  hop-1: "oklch(60% 0.12 252)"
+  hop-2: "oklch(70% 0.085 252)"
+  hop-3: "oklch(80% 0.05 252)"
+  hop-none: "oklch(72% 0.012 80)"
 typography:
+  hero:
+    fontFamily: "Host Grotesk, ui-sans-serif, system-ui, sans-serif"
+    fontSize: "clamp(2.4rem, 1.6rem + 3.2vw, 4.25rem)"
+    fontWeight: 500
+    lineHeight: 1.02
+    letterSpacing: "-0.03em"
   display:
     fontFamily: "Host Grotesk, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "1.728rem"
+    fontSize: "1.875rem"
     fontWeight: 500
-    lineHeight: 1.05
+    lineHeight: 1.02
     letterSpacing: "-0.03em"
-  headline:
+  stat:
     fontFamily: "Host Grotesk, ui-sans-serif, system-ui, sans-serif"
-    fontSize: "1.44rem"
+    fontSize: "2rem"
     fontWeight: 500
-    lineHeight: 1.05
+    lineHeight: 1
     letterSpacing: "-0.03em"
+    fontFeature: "\"tnum\" 1"
   title:
     fontFamily: "Host Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1rem"
     fontWeight: 500
-    lineHeight: 1.3
+    lineHeight: 1.25
   body:
     fontFamily: "Host Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "1rem"
@@ -46,7 +57,7 @@ typography:
     fontFamily: "Host Grotesk, ui-sans-serif, system-ui, sans-serif"
     fontSize: "0.875rem"
     fontWeight: 500
-    lineHeight: 1.3
+    lineHeight: 1.25
   measured:
     fontFamily: "Atkinson Hyperlegible Mono, ui-monospace, monospace"
     fontSize: "0.875rem"
@@ -54,9 +65,10 @@ typography:
     lineHeight: 1.4
     fontFeature: "\"tnum\" 1, \"zero\" 1"
 rounded:
-  chip: "4px"
-  control: "6px"
-  panel: "10px"
+  card: "18px"
+  inner: "12px"
+  code: "10px"
+  pill: "999px"
 spacing:
   3xs: "2px"
   2xs: "4px"
@@ -68,232 +80,230 @@ spacing:
   2xl: "64px"
 components:
   button-primary:
-    backgroundColor: "{colors.operator-amber}"
-    textColor: "{colors.operator-amber-ink}"
-    rounded: "{rounded.control}"
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.primary-ink}"
+    rounded: "{rounded.pill}"
+    padding: "0 20px"
+    height: "40px"
+    typography: "{typography.label}"
+  button-secondary:
+    backgroundColor: "{colors.secondary}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.pill}"
     padding: "0 16px"
     height: "40px"
     typography: "{typography.label}"
-  button-primary-hover:
-    backgroundColor: "{colors.operator-amber-hover}"
-  button-ghost:
-    backgroundColor: "{colors.paper-raised}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.control}"
-    padding: "0 12px"
+  filter-pill:
+    backgroundColor: "{colors.card-2}"
+    textColor: "{colors.ink-2}"
+    rounded: "{rounded.pill}"
+    padding: "0 14px"
     height: "32px"
     typography: "{typography.label}"
-  button-ghost-hover:
-    backgroundColor: "{colors.paper-deep}"
+  filter-pill-active:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.primary-ink}"
+  card:
+    backgroundColor: "{colors.card}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "20px"
+  stat-tile:
+    backgroundColor: "{colors.card-2}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "20px"
+  question-bubble:
+    backgroundColor: "{colors.primary}"
+    textColor: "{colors.primary-ink}"
+    rounded: "{rounded.card}"
+    padding: "10px 16px"
+  answer-card:
+    backgroundColor: "{colors.card-2}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.card}"
+    padding: "16px 20px"
   input:
-    backgroundColor: "{colors.paper-deep}"
+    backgroundColor: "{colors.card-3}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.control}"
-    padding: "8px 12px"
-    height: "40px"
+    rounded: "{rounded.pill}"
+    padding: "10px 20px"
+    height: "48px"
     typography: "{typography.body}"
-  question-entry:
-    backgroundColor: "{colors.operator-amber-soft}"
-    textColor: "{colors.ink}"
-    rounded: "{rounded.panel}"
-    padding: "8px 16px"
-  answer-panel:
-    backgroundColor: "{colors.paper-raised}"
-    textColor: "{colors.ink-soft}"
-    rounded: "{rounded.panel}"
   citation-chip:
-    backgroundColor: "{colors.readout-blue-soft}"
+    backgroundColor: "{colors.accent-soft}"
     textColor: "{colors.ink}"
-    rounded: "{rounded.chip}"
-    padding: "0 4px"
+    rounded: "{rounded.pill}"
+    padding: "0 7px"
     typography: "{typography.measured}"
   citation-chip-cited:
-    backgroundColor: "{colors.readout-blue}"
-    textColor: "{colors.paper-deep}"
+    backgroundColor: "{colors.accent}"
+    textColor: "{colors.primary-ink}"
+  status-pill:
+    backgroundColor: "{colors.ok-soft}"
+    textColor: "{colors.ink}"
+    rounded: "{rounded.pill}"
+    padding: "0 10px"
+    height: "24px"
 ---
 
 # Design System: coderag
 
 ## Overview
 
-**Creative North Star: "The Lab Notebook"**
+**Creative North Star: "The Console"**
 
-Every answer is a notebook entry that carries its evidence (the sources it cites, where they live, and how they were reached), and the interface recedes so that record can be read and checked.
+A calm instrument panel for reading code: warm paper by day, graphite by night. Cards float on the canvas without borders, every control is a pill, and one blue runs through everything the system found: citation chips, lit nodes, the active path, the highlighted lines. Nothing decorates; everything on screen is a readout or a control.
 
 **Key Characteristics:**
-- Three surface steps, depth by lightness, never by shadow.
-- Amber means the person; blue means the system. Never swapped.
-- Mono only for system-measured values: code, paths, line ranges, ids, counts, model names.
-- Show the code, not a picture of it: the right pane opens on the cited lines.
-- One filled primary action per view; everything else outlined or typographic.
-- Paper is the default colourway; graphite is the same tokens re-derived for dark, chosen in Settings or following the system.
+- Cards in two or three warm tones on an off-white canvas; no borders, at most a very soft shadow. Depth is the tone of the card, not a line around it.
+- Solid black pills for the one primary action, warm-grey pills for the rest, filter pills that turn black when active.
+- The dark colourway is a token swap: the same layout, the same hierarchy, black cards on a near-black ground with the primary pill inverted to white.
+- One accent, Readout Blue, for citations and the active path. Small coloured dots name categories (cited, retrieved, calls, bridge, one per language) and mean the same thing everywhere.
+- A chat on the left, the graph in the centre, the selected node on the right; selection is one state shared by all three.
+- Sans for the interface, mono only for code, paths, line ranges, ids and counts.
 
 ## Colors
 
-A warm paper ground (graphite when the visitor asks for dark) carrying two signals of equal weight and opposite meaning.
+### Surfaces
+- **Canvas** (`canvas`): the page ground, a warm off-white.
+- **Card** (`card`): the lightest card, for the chat, the graph viewer, the repos table and dialogs.
+- **Card 2** (`card-2`): a warmer tone one step down: stat tiles, the node panel, answer cards, the focus overlay's details.
+- **Card 3** (`card-3`): the deepest tone: inputs, code blocks, the graph ground, chart tracks.
+- Cards never carry a border. A card on a card is allowed only when the inner one is a deeper tone (code inside an answer, a tile inside the panel).
 
-### Primary
-- **Operator Amber** (`operator-amber`): the person. The Ask button, the user's question entry (as its soft tint), the current repository and pane tabs' underline, and focus rings. Never a highlight the system makes. Its hover and ink pair travel with it.
+### Ink
+- **Ink** (`ink`): near-black; headings, names, numbers, the primary pill's fill.
+- **Ink 2** (`ink-2`): prose.
+- **Muted** (`muted`): labels, meta, placeholders. Every pair of text and surface reaches WCAG AA.
 
-### Secondary
-- **Readout Blue** (`readout-blue`): the system. Citation chips in answers, source ids in the sources table, the answer's code in the graph and the code viewer, the row or node the system points at, names in highlighted code, indexing progress, commit hashes. The soft tint marks a reference at rest; the full blue marks one the answer actually cited.
+### Accent
+- **Readout Blue** (`accent`, `accent-soft`): what the system found. Citation chips (soft at rest, full when cited), the hop-0 node, the active path, the cited lines in code, the selected row. Never a button.
 
-### Tertiary
-- **Diff Green and Diff Red** (`diff-ok`, `diff-bad`, `diff-bad-soft`): status only. A finished indexing job, an error notice, an invalid citation. Never decoration, never the only signal (always paired with text).
+### Hop distance
+- `hop-0` is the accent; `hop-1`, `hop-2`, `hop-3` step lighter as the code gets further from a direct match; `hop-none` is a neighbour that never reached the model. The graph's nodes, the vertical scale beside the graph and the legend all use these four steps, so distance reads the same everywhere.
 
-### Neutral
-- **Paper** (`paper`): the page ground and the chat column.
-- **Paper Raised** (`paper-raised`): panels one step up: answers, dialogs, the saved list, the node card.
-- **Paper Deep** (`paper-deep`): the deepest step: the graph pane, the code viewer, code blocks, inputs, an expanded source.
-- **Ink** (`ink`), **Ink Soft** (`ink-soft`), **Ink Muted** (`ink-muted`): headings and names; answer prose; labels, meta and helper text.
-- **Hairline** (`hairline`) and **Hairline Strong** (`hairline-strong`): the 1px rules that cut panels from one surface; the strong rule edges controls and selected rows.
+### Categories
+Small dots, always beside a word: cited (accent), retrieved (hop-2), calls and inherits (grey), bridge (`cat-bridge`, magenta: the one edge that crosses a language), and one dot per language (`lang-python` green, `lang-javascript` yellow, `lang-typescript` indigo, `lang-java` brown, `lang-kotlin` purple, `lang-c` grey, `lang-cpp` pink, `lang-go` cyan, `lang-rust` orange, `lang-html` red, `lang-config` grey). They are identity marks, not decoration: a dot appears only where its word does.
 
-The dark colourway (graphite) re-derives every token with the same hues: ground `oklch(17% 0.008 250)`, ink `oklch(95% 0.005 250)`, amber `oklch(82% 0.15 80)`, blue `oklch(77% 0.12 245)`. Visitors choose it in Settings, or let it follow a dark system; the choice is applied before the first paint. Its full set lives in `frontend/tokens.css` and the sidecar.
+### Status
+- **Ok** (`ok`): Indexed, Completed; **Warn** (`warn`): Indexing, Update available; **Bad** (`bad`): Failed, an error notice, an invalid citation. Each is a pill with its word; never colour alone.
 
-### The Home Colourway
-The home page and sign-in (`body.site`, in `site.css`) carry their own tokens, light and dark: a cool paper with graphite ink, and one accent, **Citation Blue** (`--color-cool`), spent only on citations: the S-number chips, the matched and cited nodes, the traced call, the cited line. The primary action is graphite, not amber; amber belongs to the app, where the person's own state needs it. Focus rings are ink. Every text pair reaches AA in both colourways.
+### The dark colourway
+Graphite: ground `oklch(11.5% 0.006 250)`, cards at 17%, 21% and 13.5%, ink at 95%. The primary pill inverts to white with dark text; the accent lifts to `oklch(75% 0.13 245)`; shadows disappear. Chosen in Settings (or following the system), applied before the first paint.
 
 ### Named Rules
-**The Two Voices Rule.** Amber is the operator and blue is the readout, in every colourway. An amber citation or a blue Ask button is the system lying about who said what. Amber marks only the person's own state: their questions, the Ask button, the open repository tab, the keyboard focus ring. When the system points at something (a source row it opens, a node it pulses), that highlight is Readout Blue.
-
-**The Signal Budget Rule.** Amber covers under 5% of any viewport. Its rarity is how the eye finds the next action.
+**The One Blue Rule.** Blue means "the system found this". A blue button, a blue heading or a blue decoration is the interface lying.
+**The Dot Rule.** A category dot is never alone and never bigger than 8px. Colour identifies; the word says what.
 
 ## Typography
 
-**Display Font:** Host Grotesk (with ui-sans-serif, system-ui)
-**Body Font:** Host Grotesk
-**Label/Mono Font:** Atkinson Hyperlegible Mono (with ui-monospace), for measured values only
-
-**Character:** A calm, slightly technical grotesk at weights 400 and 500 for everything a person reads, beside a mono whose slashed zero and tailed one exist to make identifiers unambiguous.
+**Display and body:** Host Grotesk (ui-sans-serif fallback), weights 400 and 500 only.
+**Measured:** Atkinson Hyperlegible Mono, tabular and slashed-zero figures, for code, paths, line ranges, source ids, commit hashes and model names.
 
 ### Hierarchy
-- **Display** (500, 1.728rem, 1.05, -0.03em): the repository name heading the chat column.
-- **Headline** (500, 1.44rem, 1.05): dialog titles (Settings, Saved answers, Add a repository).
-- **Title** (500, 1rem, 1.3): headings inside answers; the sources table heading at label size.
-- **Body** (400, 1rem, 1.6): answer prose, at most 68ch per line; suggestions and the question field.
-- **Label** (500, 0.875rem, sentence case, untracked): field labels, legends, tab names, meta lines, button text.
-- **Measured** (400 or 500, 0.875rem, tabular and slashed-zero figures): symbol names, file paths and line ranges, source ids, citation chips, counts, the model that answered, commit hashes.
+- **Hero** (500, clamp 2.4 to 4.25rem, 1.02, -0.03em): the home page's two-line headline.
+- **Display** (500, 1.875rem): the repository name at the top of the app; the sign-in title.
+- **Stat** (500, 2rem, tabular): the big number in a stat tile.
+- **Section** (500, 1.5rem): dialog titles, the repos page title.
+- **Title** (500, 1rem): card headings and the selected node's name.
+- **Body** (400, 1rem, 1.6): answers, at most 66ch per line.
+- **Label** (500, 0.875rem, sentence case): pills, column headings, tile labels, meta.
+- **Measured** (400 or 500, 0.875rem): everything the mono carries; code at 0.8125rem.
 
 ### Named Rules
-**The Who-Wrote-It Rule.** Mono is reserved for what the system measured or the code contains. A label, heading or button in mono is costume.
-
-**The Two Weights Rule.** 400 and 500 only. Hierarchy past that comes from size, colour and the surface a line sits on.
+**The Who-Wrote-It Rule.** Mono is only for what the code contains or the system measured. A label, heading or button in mono is costume.
 
 ## Layout
 
-Three pages. The home page (`/`) makes the case with the product's own signature, then how an answer is made, then the repositories ready to ask. Its hero is one real answer about the sample repository (`hero-graph.js`, SVG): the sample's pipeline call graph above a card holding the question as a prompt line, the answer citing S3, and the cited lines. On load it plays once, in about two seconds: the question types, the functions that matched light, the call from `DataProcessor.transform` to `normalize_name` is traced, the answer and its source arrive; then it rests. Any pointer, key, wheel or touch skips to the end; Replay plays it again; under reduced motion it is the final state from the first paint. The markup is the final state, so nothing depends on the script. Pointing at S3 or S1 (chip, row or node, by pointer or focus) lights the same function in the graph and the card, and a node's Enter moves focus to its row. Under 440px the graph shows only the call chain, vertically; under 600px only the chain and matched functions keep their labels. The repository list says what is true in each state: placeholders while loading, a plain line when none are indexed, and an error with Try again.
+Three pages on one canvas.
 
-Sign-in (`/login`) is one centred panel: GitHub first (the coming way in), then the demo account. The demo repositories open without signing in; sign-in is needed only to add a repository or open one you added.
+**Home (`/`)** has one job: get the visitor to try a demo. A two-line headline, one sentence from the product, then the proof: a real answer card with its citation and the mini call graph that reached it. Two actions: "Try with psf/requests" (black pill) and "Sign in with GitHub" (grey pill). Nothing below the fold competes.
 
-The app is a full-height application shell: a 56px top bar (wordmark, repository tabs that scroll sideways, Add repo, Saved, Settings), an optional banner row, then two panes. The chat pane (about 53%) holds the repository header, the suggested questions as a ruled list, the conversation, and the question field pinned to its foot; its content column is capped at 46rem for reading. Once the first question is asked the header compacts to one ruled line (name, counts, commit, Clear chat) and the suggestions leave, so the answer owns the top of the pane; they return when the chat is cleared. The right pane (about 47%) is two readouts behind a Code | Call graph tab pair: the code viewer, which an answer opens at its first cited source, and the graph. Before any question the chat pane shows the repository's shape (packages, most called, entry points, deepest hierarchy) and the graph shows the whole call graph when the repository is small enough to read at once (otherwise it waits for a question, with the full graph one click away).
+**Sign in (`/login`)** is one card centred on the canvas: a small status badge, a big title, a one-line subtitle, "Continue with GitHub" as a black pill, and a short note about what GitHub will ask. The signed-in state replaces the form with a Continue pill.
 
-Under 60rem the panes become one, switched by a Chat / Code / Graph tab strip, and nothing switches the pane without being asked; the wordmark collapses to its mark, and the repository tab row fades at whichever edge has more tabs scrolled out of view. Under 40rem the question entry widens to 92% and source rows restack so the location stays visible.
+**App (`/app`)** at 1280px and above:
+- Top bar: the wordmark; a dark pill nav (Overview · Ask · Graph · Repos); a repo switcher with a search box (Demos / Your repos); Saved, Settings and the avatar.
+- A row of four stat tiles: Files, Functions, Bridges, Questions asked. A big number, a small subtitle, and a mini bar chart (files per language, functions per package, bridges per mechanism, questions per day).
+- Three columns. Left: the Ask panel as a chat (questions as black bubbles on the right, answers as cards with citations and "Also retrieved"; suggestion chips above a pill input with a black send button). Centre: the graph viewer with an icon toolbar on top, the last four answers' subgraphs as thumbnails down the left edge, a vertical hop-distance scale on the right edge, and an "Unconnected (n)" tray for isolated nodes. Right: the selected node's panel (name, file:line, a state pill, four tiles for Called by / Calls / Language / Lines, a code preview, "Ask about this" in black and "Open code" in grey).
+- Repos is a page of its own: filter pills (All / Indexed / Indexing / Failed / Update available), a search box, "+ Add repo" in black, and a table (repo with a Private badge, language dots, version, indexed date, a progress bar while indexing, a status pill, a row menu with Open / Re-index / Remove). Demos are a second, smaller table.
+- Clicking a node or a source opens the focus overlay: a centred card over the blurred, dimmed app, with the enlarged subgraph on the left and the details on the right (metadata, the file with the cited lines highlighted, and every edge's evidence, bridges included). Esc or a click outside closes it; focus stays inside while it is open.
 
-Spacing follows a fixed scale (2, 4, 8, 12, 16, 24, 40, 64px). Panels pad 16 to 24px; conversation turns sit 40px apart; controls sit 8px apart. Density is the design: controls are 32 to 40px tall with a 44px hit target.
+Under 1280px the node panel moves below the graph. At 390px everything is one column and the pill nav switches sections; the focus overlay fills the screen.
+
+Spacing follows 2, 4, 8, 12, 16, 24, 40, 64px. Cards pad 20px (16px on phones) and sit 16px apart; controls are 40px tall (32px for small pills) with a 44px hit area.
 
 ## Elevation & Depth
 
-Flat by construction. There are no shadows anywhere, in either colourway. Depth is three steps of lightness: the page ground, a raised panel one step lighter (dark) or darker (light), and a deepest step for code, inputs and the graph. A panel is a 1px hairline with the raised step inside; panels that belong together share one surface divided by hairlines rather than floating as separate cards. Dialogs are the raised step with a strong hairline over a dimmed backdrop, still without a shadow.
-
-### Named Rules
-**The No-Lamp Rule.** Nothing glows, blooms or casts a shadow. If something needs to stand forward, it moves one lightness step.
+Cards have no borders. On paper they carry a very soft shadow (1px and a long, faint 30px blur); on graphite they carry none and read by tone alone. Popovers and dialogs sit on the strongest shadow over a dimmed backdrop; the focus overlay also blurs the app behind it (not under reduced motion). Table rows are divided by 1px hairlines, the only lines in the system.
 
 ## Shapes
 
-Three radii, one per nesting level: 10px on panels and dialogs, 6px on controls (buttons, inputs, fieldsets, code blocks), 4px on chips and citation keys. Rules are always 1px. Graph glyphs are the system's one recurring geometry, and they say what the answer did with the code: a filled, ringed circle for code the answer cites, a hollow ring for code that was retrieved but not cited, a small grey dot for a neighbour that never reached the model. The legend keys are the same glyphs, and the sources table repeats the meaning with its filled or soft S-badge. Hubs read larger (a node's size follows how many calls touch it); calls are gently curved lines, a call each way bowing apart; files are soft regions named at their top edge; the call-graph paths that reached the answer's sources are Readout Blue lines.
+Cards 18px (16px on phones), inner cards 12px, code 10px, every control, chip, pill and badge fully round. Graph glyphs say what a node is: circle for a function or method, square for a module, diamond for a class, triangle for a template, wye for a config file. A cited node is filled and ringed; a retrieved one filled in its hop colour; a neighbour small and grey. Bridges are the most distinct edge: thicker, magenta, dash-dot.
 
 ## Components
 
 ### Buttons
-Quiet and exact: one filled action, the rest step back.
-- **Shape:** gently squared (6px).
-- **Primary:** Operator Amber fill with its dark ink, 40px tall, 16px side padding, label weight. One per view (Ask; in a dialog, its confirm).
-- **Hover / Focus:** hover steps the amber one notch; focus is a 2px amber outline offset 2px, shown instantly; pressed drops 1px; disabled is 55% opacity with a not-allowed cursor and the native attribute.
-- **Ghost:** raised-surface fill, strong hairline edge, 32px tall (Add repo, Show full graph, dialog secondaries). Hover deepens the surface.
-- **Link button:** underlined text in ink-soft that turns amber on hover (Copy answer, Save, Clear chat, Open repo).
-- **Icon button:** 32px square, transparent until hover, 44px hit area (Saved, Settings).
+- **Primary:** black pill, 40px, 20px side padding, label weight. One per view: Send, Ask about this, + Add repo, Try with psf/requests, Continue with GitHub.
+- **Secondary:** warm-grey pill, same size: Open code, Sign in with GitHub, dialog secondaries.
+- **Filter pill:** 32px, card-2 fill, black when active.
+- **Icon button:** 32px round, transparent until hover, 44px hit area; the graph toolbar, Saved, Settings.
+- **Link button:** underlined text in ink-2: Copy answer, Save, Dismiss.
+- **States:** hover deepens the fill one notch; focus is a 2px ring offset 2px, instant; pressed drops 1px; disabled is 50% with a not-allowed cursor; loading shows a skeleton, never a spinner.
 
-### Chips
-- **Style:** citation and source-id chips are mono at 0.75rem on Readout Blue soft, 4px radius.
-- **State:** a source the answer cited turns full Readout Blue with deep-paper text; an out-of-range citation turns the soft red.
+### Pill nav
+A dark pill (ink) holding four text buttons; the active one is a lighter pill inside it. On a phone it is the only navigation.
 
-### Cards / Containers
-- **Corner Style:** 10px.
-- **Background:** Paper Raised for answers, dialogs, saved items and the node card; Paper Deep inside them for code.
-- **Shadow Strategy:** none (see Elevation & Depth).
-- **Border:** 1px hairline; strong hairline on dialogs and the node card.
-- **Internal Padding:** 16 to 24px; table rows 8px by 24px.
+### Stat tile
+Card-2, 18px radius. Label (sentence case), the big number in Stat type, a muted subtitle, and a mini bar chart: thin bars with 4px rounded tops on a card-3 track, one series, the current bar in the accent. Hover names each bar.
 
-### Inputs / Fields
-- **Style:** Paper Deep fill, 1px muted edge (it needs 3:1, so never the hairline), 6px radius, 40px tall.
-- **Focus:** a 2px amber outline inset 3px, with the edge deepening to ink-soft at the same width. The border never changes width.
-- **Error / Disabled:** error edge in red with the message in a bordered soft-red line below; disabled at 55% with a not-allowed cursor.
+### Chat
+A question is a black bubble aligned right, at most 86% wide, 18px radius with a 6px corner at the tail. An answer is a card-2 card aligned left holding the prose with inline citation chips, a meta line (model, time, Copy, Save), the cited source rows, and "Also retrieved (n)" folded. Suggestion chips are grey pills above the input; the input is a 48px pill with a round black send button inside it.
 
-### Navigation
-- **Style:** repository tabs are text at label size in muted ink; the current tab turns ink with a 2px amber underline. Hover lifts the text to ink on the raised surface. The row scrolls sideways and keeps the current tab in view. Visitor-added repositories carry a small close control.
-- **Pane tabs:** Code | Call graph above the right pane use the same underline language; they are a real tablist (arrow keys move between them).
-- **Mobile:** the Chat / Code / Graph strip uses the same underline language at full width, 44px tall.
+### Source row
+Id chip, name, language dot, `file:start-end` in mono (shortened in the middle, the file name kept), and the relation word when the source was reached through the graph. The row is a button: it selects the node, opens its panel and the focus overlay. The row the graph points at is tinted accent-soft.
 
-### The Code Viewer
-The right pane's first readout: the whole file at the indexed commit, syntax-coloured in the system's two voices (names in Readout Blue, strings a quiet green, comments muted, amber nowhere), with real line numbers drawn in a gutter that copying leaves out. The answer's sources are tinted: cited lines Readout Blue soft, retrieved lines half that, each range tagged with its S-number at its first line, and the range in focus marked by a 2px blue rule in the gutter. A strip above lists the files the answer used. A newly opened file jumps to its range; moving within a file scrolls smoothly.
+### Node panel
+Card-2. Name in Title type, `file:line` in mono, a state pill (Cited / Retrieved / Neighbour / Selected), four small tiles (Called by, Calls, Language with its dot, Lines), the node's own code in a card-3 block, then the two pills. Empty state: "Select a node or a source to see it here."
 
-### The Call Graph
-A live force layout on the deepest surface, and the system's one place for motion.
-- **Continuity:** the graph remembers where every node was. A new view (an answer arriving, the full graph, another layout) is laid out from those positions and glides there (560ms, exponential ease-out) while the old view steps back; new nodes grow out of a neighbour that was already on screen.
-- **Structure:** files are soft regions (a pull keeps each file's code together); once there is an answer they become hairline outlines so the evidence leads. Hubs read larger; calls curve.
-- **Evidence:** the paths that pulled sources into the answer are drawn in Readout Blue, and the first time a written answer's graph is on screen, dots travel each path the way retrieval walked it, once (about 2.4s), then rest.
-- **Pointing:** pointing at a node (or focusing it, or pointing at its row in the sources table) keeps it, its calls and its path; everything else steps back to 18%, and the names of what stays are shown at a readable size.
-- **Layouts:** Free (the force finds the shape) or By distance: rings whose distance from the centre is the call distance from the question (direct match, 1 call away, 2+ calls away, neighbours), each ring named.
-- **Camera:** drag nodes, wheel or pinch to zoom, drag the background to pan; − + and Fit buttons; double-click a node to zoom to its neighbourhood, the background to fit.
-- **Keyboard:** one tab stop; the arrow keys move between nodes in S-number order; Enter opens a node's card, Esc closes it; + and − zoom, 0 fits.
-- **Reduced motion:** views change in place and nothing flows; pointing, dimming and every state still show.
+### Focus overlay
+A centred card (up to 76rem wide, full screen on a phone) over the dimmed, blurred app. Left: the subgraph around the node, enlarged, with its edges labelled. Right: metadata, the file with the cited lines highlighted, and the evidence for every edge ("HTTP POST /api/repos ← app.js:412"). Close with Esc, the close button or a click outside.
 
-### The Evidence Entry (signature)
-A conversation turn is one notebook entry: the person's question as an amber-tinted note aligned right, then one raised panel holding the answer prose with inline blue citation chips, a meta line (who answered, in mono, and how long it took) with Copy and Save, and the sources table cut from the same surface. Each source row shows its id chip, the symbol and its `file:start-end` in mono (shortened in the middle so the file name survives), and, only when it isn't a direct match, the call-graph path that reached it ("via Session.send"). Once the answer is written the table splits: the cited rows under "Cited (n)", the rest folded closed under "Also retrieved (n)". Every retrieved graph node is labelled with the same S-number, so chip, row and node are one key. Following a citation opens that row and, on a wide screen, the file at the cited lines; choosing a graph node opens its row in turn. Source code always shows its real line numbers.
+### Repos table
+Hairline rows, 48px tall; the repo name with its owner muted; language dots; version in mono; the indexed date; a 6px progress bar while indexing; a status pill; a round "⋯" menu button opening Open / Re-index / Remove.
+
+### Inputs
+Card-3 fill, no border, pill shape, 48px for the question field and 40px elsewhere; focus is a 2px ring. Errors show the message in a soft-red line under the field.
+
+### Code
+Card-3 ground, 10px radius, real line numbers in a gutter copying leaves out; the answer's sources tinted (cited in accent-soft, retrieved fainter), each range tagged with its S-number; names in accent, strings quiet green, comments muted.
 
 ## Content
 
-The rules above are about looks; these are about what is shown, which matters more.
+### Real data
+- Long names truncate in the middle with the full name in a tooltip; the file name is never cut.
+- Large repositories collapse to modules in the overview graph; the full graph is one click away.
+- Every card has a designed empty state that says what will appear and how to make it appear.
+- Null and undefined are never rendered: a missing value is left out or shown as an em-dash-free word ("none", "unknown").
+- Plurals are correct: 1 file, 2 files, 1 class, 2 classes.
+- Loading states are skeletons the shape of the content, never spinners.
 
 ### Graph
-- The answer graph shows the retrieved code and its direct neighbours as a live force layout: interactive first, not a static diagram.
-- Motion explains: a view becomes the next one by moving what's already there, and the answer's paths flow once to show how the evidence was reached. Nothing loops while you read.
-- Pointing at a node lights its calls and inheritance, not every member of its class.
-- File regions, ring guides and their names are obstacles: node labels are placed around them.
-- Labels keep at least 12px on screen at any zoom: the answer's labels (or, before a question, every label) hold their size while the graph shrinks, and the fit never zooms out past the point where that stops working. Past it, the view centres on what the answer cites, whole.
-- A label that would cover another moves to the free side of its node (below, above, right, left), cited code first.
-- The fit keeps the button row and the caption clear of the graph.
-- Small repositories show their whole graph before any question; large ones show it on request. Above 600 nodes views change without movement, and above 150 files aren't outlined: the graph stays responsive.
-- Calls on an object of unknown type are only drawn when they can't be a builtin (`path.append` is a list, not the repo's one class with `append`).
-
-### Sources
-- Show only exceptions: a direct match carries no annotation; a source reached through the call graph names its path ("via A → B").
-- Paths shorten in the middle; the file name is never cut. Whole-file chunks are named "<module> (module)", not "__init__.py".
-- Once an answer is written, the cited sources come first and the rest fold under "Also retrieved".
-
-### Empty State
-- Always shows the repository's shape: packages, the most called code, entry points and the deepest class hierarchy, each one click from its code.
-- Suggested questions come from those facts, so they differ for every repository; curated ones win where they exist.
-
-### Numbers and Words
-- Counts use people's words (files, functions, classes), never internal ones (chunks, resolved calls).
-- Nothing is shown as "(0)": an empty legend entry or count is hidden.
-- Questions about the whole project get a map of every area in the model's context, and the answer says so.
+- Modules, cited sources and the hovered or selected node are labelled by default; function labels appear when zoomed in, placed to avoid collisions.
+- Isolated nodes go to the "Unconnected (n)" tray instead of floating in the layout.
+- The answer's paths flow once when the answer is written; nothing loops while you read.
 
 ## Do's and Don'ts
 
 ### Do:
-- **Do** keep amber for the person and blue for the system in every new component and in both colourways.
-- **Do** set code, paths, line ranges, ids, counts and model names in the measured mono with tabular figures; set everything else in Host Grotesk.
-- **Do** separate panels that belong together with 1px hairlines on one surface, and step lightness for depth.
-- **Do** give every control all its states: hover, instant 2px focus ring, pressed, disabled (opacity, cursor and attribute together), loading, error.
-- **Do** key anything that refers to retrieved code like the graph: filled and ringed when the answer cites it, hollow when it was only retrieved, and label it with its S-number.
-- **Do** keep the graph's labels at 12px or more on screen: the fit stops zooming out where they would shrink, and labels that can't hold that size give way to the answer's.
+- **Do** use the hop colours for nodes and the scale, and the category dots beside their words, in both colourways.
+- **Do** keep one black pill per view and make everything else a grey pill or text.
+- **Do** keep every control reachable and visibly focused from the keyboard, including graph nodes and table menus.
+- **Do** disable the blur and zoom transitions under prefers-reduced-motion.
 
 ### Don't:
-- **Don't** add shadows, glows or gradients to any surface.
-- **Don't** use mono for labels, headings or buttons.
-- **Don't** put a second filled button beside the primary.
-- **Don't** join meta with middle dots or decorate labels with coloured dots; use columns, rules or separate elements.
-- **Don't** set labels in tracked capitals; labels are sentence case at 0.875rem, untracked.
-- **Don't** animate width, height or position; only transform and opacity, with a reduced-motion fallback. The one exception is the evidence flow on the answer's paths (a dash offset, on a handful of lines, briefly).
+- **Don't** put a border on a card, or a card inside a card of the same tone.
+- **Don't** use blue for a control, or any colour for decoration.
+- **Don't** show a spinner where a skeleton fits.
+- **Don't** render "(0)", "undefined" or a raw ISO date.
+- **Don't** animate width, height or position; only transform, opacity and (for the overlay) filter.

@@ -227,10 +227,10 @@ def test_unknown_or_disabled_languages_are_not_indexed(tmp_path):
 
 
 # ── web: indexing a repository that isn't (only) Python ─────────────────────
-def test_web_indexes_other_languages_with_v9(tmp_path):
+def test_web_indexes_other_languages(tmp_path):
     pytest.importorskip("fastapi")
     from coderag.gitfetch import _source_patterns
-    from coderag.web.jobs import check_limits, version_for
+    from coderag.web.jobs import check_limits
     from test_indexing import FakeGitHub, make_app, wait
 
     assert {"*.py", "*.go", "*.rs", "*.ts", "*.java", "*.kt", "*.cpp", "*.c", "*.js"} <= set(_source_patterns())
@@ -246,15 +246,14 @@ def test_web_indexes_other_languages_with_v9(tmp_path):
             shutil.copy(os.path.join(SAMPLE_REPO, "test_inheritance.py"), os.path.join(dest, "zoo_py.py"))
             return dest
 
-    found = check_limits(FIXTURES, 1000, 25)
-    assert found["languages"]["go"] == 1 and found["files"] == sum(found["languages"].values())
-    assert version_for({"python": 3}) == "v8" and version_for({"python": 3, "go": 1}) == "v9"
+    found = check_limits(os.path.join(FIXTURES, "go"), 1000, 25)       # only the Go fixture's own folder
+    assert found["languages"] == {"go": 1} and found["files"] == 1
 
     client, _, _ = make_app(tmp_path, github=PolyglotGitHub())
     job = wait(client, client.post("/api/repos", json={"url": "someone/pkg"}).json()["job_id"])
     assert job["status"] == "ready", job
     info = client.get(f"/api/repos/{job['repo_id']}").json()
-    assert info["versions"] == ["v9"]
+    assert info["versions"] == ["v10"]                                  # the server's default version
     assert info["languages"] == {"Go": 1, "Python": 1, "Rust": 1}
     graph = client.get(f"/api/repos/{job['repo_id']}/graph").json()
     assert {n["language"] for n in graph["nodes"]} == {"go", "rust", "python"}

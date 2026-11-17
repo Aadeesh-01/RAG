@@ -1,113 +1,124 @@
 /* coderag tokens: every colour, size, space, type and motion value lives here.
-   Two colourways for the app (paper, graphite) and two for the home and sign-in pages (body.site). */
+   Two colourways: warm paper (light, the default) and graphite (dark), swapped on html[data-mode].
+   The home and sign-in pages share them: one world, one set of tokens. */
 
 :root {
-  /* type */
+  /* type: a sans for everything a person reads, a mono for what the system measured */
   --font-body: "Host Grotesk", ui-sans-serif, system-ui, sans-serif;
   --font-display: var(--font-body);
   --font-measured: "Atkinson Hyperlegible Mono", ui-monospace, monospace;
-  --font-outlier: var(--font-measured);
   --text-2xs: 0.6875rem; --text-xs: 0.75rem; --text-code: 0.8125rem; --text-sm: 0.875rem; --text-md: 1rem; --text-lead: 1.125rem;
-  --text-lg: 1.2rem; --text-xl: 1.44rem; --text-2xl: 1.728rem; --text-3xl: 2.074rem;
-  --text-hero: clamp(1.9rem, 1.3rem + 1.6vw, 2.5rem);
+  --text-lg: 1.25rem; --text-xl: 1.5rem; --text-2xl: 1.875rem; --text-3xl: 2.25rem; --text-stat: 2rem;
+  --text-hero: clamp(2.4rem, 1.6rem + 3.2vw, 4.25rem);
   --text-display: var(--text-2xl); --text-section: var(--text-xl); --text-title: var(--text-md); --text-measured: var(--text-sm);
-  --leading-tight: 1.05; --leading-snug: 1.3; --leading-base: 1.45; --leading-body: 1.6; --leading-code: 1.65;
-  --tracking-display: -0.025em; --tracking-tight: -0.01em; --display-weight: 500;
+  --leading-tight: 1.02; --leading-snug: 1.25; --leading-base: 1.45; --leading-body: 1.6; --leading-code: 1.65;
+  --tracking-display: -0.03em; --tracking-tight: -0.015em; --display-weight: 500;
   --underline-offset: 0.2em; --underline-weight: 1px;
 
   /* measures */
-  --measure: 68ch; --measure-narrow: 42ch; --measure-note: 60ch; --measure-hint: 34ch;
-  --column: 46rem; --site-width: 72rem; --dialog-w: 30rem; --dialog-w-l: 48rem; --login-w: 24rem; --menu-w: 14rem; --card-w: 320px;
+  --measure: 66ch; --measure-narrow: 44ch; --measure-note: 56ch; --measure-hint: 32ch;
+  --site-width: 76rem; --app-width: 110rem; --dialog-w: 30rem; --dialog-w-l: 48rem; --login-w: 26rem; --menu-w: 20rem; --focus-w: 76rem;
+  --col-ask: minmax(22rem, 0.9fr); --col-graph: minmax(26rem, 1.4fr); --col-node: minmax(17rem, 0.65fr);
 
   /* space */
   --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px;
-  --gutter: var(--space-lg);
+  --gutter: var(--space-lg); --card-pad: 20px; --card-gap: var(--space-md);
 
   /* sizes */
-  --bar-height: 52px; --control: 36px; --control-s: 30px; --control-xs: 26px; --hit: 44px; --row: 44px;
-  --icon: 18px; --icon-s: 16px; --icon-xs: 14px; --mark: 20px; --badge: 18px;
+  --bar-height: 64px; --control: 40px; --control-s: 32px; --control-xs: 26px; --hit: 44px; --row: 48px;
+  --icon: 18px; --icon-s: 16px; --icon-xs: 14px; --mark: 22px; --badge: 18px; --dot: 8px; --avatar: 36px; --avatar-s: 28px;
   --rule: 1px; --rule-strong: 2px; --ring: 2px; --ring-offset: 2px; --ring-inset: -3px;
-  --hero-graph-h: 280px; --hero-graph-h-s: 220px; --code-max-h: 320px; --field-max-h: 160px; --progress-h: 3px; --skeleton-h: 0.9em;
-  --graph-label: 12px; --graph-stroke: 1px; --graph-stroke-2: 1.5px; --graph-stroke-3: 2px; --graph-halo: 3px;
-  --gutter-digits: 5.5ch; --gutter-digits-s: 4ch; --gutter-digits-xs: 3.5ch; --gutter-gap: 1.5ch; --sid-col: 2.5rem; --sid-col-s: 2.25rem;
+  --hero-graph-h: 300px; --hero-graph-h-s: 220px; --code-max-h: 320px; --field-max-h: 160px; --progress-h: 6px; --skeleton-h: 0.9em;
+  --graph-label: 12px; --graph-stroke: 1px; --graph-stroke-2: 1.5px; --graph-stroke-3: 2.5px; --graph-halo: 3px;
+  --gutter-digits: 5.5ch; --gutter-digits-s: 4ch; --gutter-digits-xs: 3.5ch; --gutter-gap: 1.5ch; --sid-col: 2.75rem;
+  --thumb-w: 64px; --thumb-h: 48px; --scale-w: 14px; --tile-chart-h: 28px; --bubble-max: 86%;
   --fade: 32px; --scrollbar: 10px; --scrollbar-pad: 3px;
 
-  /* shape */
-  --radius-panel: 10px; --radius-control: 6px; --radius-chip: 4px; --radius-round: 50%;
-  --radius-card: var(--radius-panel); --radius-pill: var(--radius-control);
+  /* shape: cards are soft, controls are pills */
+  --radius-card: 18px; --radius-inner: 12px; --radius-control: 999px; --radius-pill: 999px; --radius-chip: 999px; --radius-code: 10px; --radius-small: 6px; --radius-round: 50%;
 
   /* motion */
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1); --ease-in: cubic-bezier(0.7, 0, 0.84, 0); --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1); --ease: var(--ease-out);
   --dur-micro: 120ms; --dur-short: 220ms; --dur-long: 420ms; --dur-trace: 450ms; --dur-caret: 0.9s; --dur-spin: 0.8s; --dur-flow: 0.8s; --step-delay: 60ms;
   --press: translateY(1px); --press-scale: scale(0.98); --cite-lift: scale(1.08); --cite-small: scale(0.85); --ring-grow: scale(1.4); --rise: translateY(4px);
-  --dim: 0.18; --dim-link: 0.08; --dim-hull: 0.3; --dim-hero: 0.28; --disabled: 0.55;
+  --dim: 0.18; --dim-link: 0.08; --dim-hull: 0.3; --dim-hero: 0.28; --disabled: 0.5; --blur: 6px;
 
   /* layers */
   --z-base: 1; --z-raised: 10; --z-dropdown: 100; --z-sticky: 200; --z-modal: 400; --z-toast: 500;
 
-  /* graphite (dark) colourway: the app when the visitor asks for dark */
-  color-scheme: dark;
-  --color-paper: oklch(17% 0.008 250); --color-paper-2: oklch(21% 0.009 250); --color-paper-3: oklch(13.5% 0.007 250);
-  --color-ink: oklch(95% 0.005 250); --color-ink-2: oklch(83% 0.008 250); --color-muted: oklch(71% 0.01 250);
-  --color-rule: oklch(31% 0.01 250); --color-rule-2: oklch(42% 0.012 250);
-  --color-accent: oklch(82% 0.15 80); --color-accent-ink: oklch(18% 0.04 75); --color-accent-soft: oklch(29% 0.05 80); --color-accent-hover: oklch(86% 0.13 80);
-  --color-focus: var(--color-accent);
-  --color-cool: oklch(77% 0.12 245); --color-cool-soft: oklch(29% 0.05 245); --color-cool-hover: oklch(82% 0.1 245); --color-cool-ink: var(--color-paper-3);
-  --color-ok: oklch(76% 0.15 150); --color-ok-soft: oklch(24.5% 0.03 150); --color-bad: oklch(70% 0.17 25); --color-bad-soft: oklch(24.5% 0.035 25);
-  --color-error: var(--color-bad); --color-success: var(--color-ok);
-  --color-string: color-mix(in oklab, var(--color-ok) 60%, var(--color-ink-2));
-  --color-selection: color-mix(in oklab, var(--color-accent) 25%, transparent);
-  --color-backdrop: color-mix(in oklab, var(--color-paper-3) 70%, transparent);
-  --color-hull: color-mix(in oklab, var(--color-ink) 4%, transparent);
-  --color-retrieved-line: color-mix(in oklab, var(--color-cool-soft) 45%, transparent);
-  --color-code-inline: color-mix(in oklab, var(--color-paper-3) 55%, var(--color-paper-2));
-  --color-cool-dim: color-mix(in oklab, var(--color-cool) 50%, var(--color-paper-3));
-
-  /* relations: how a source relates to the code that reached it. Six hues spread for
-     colour-blind safety (blue, green, purple, vermilion, magenta, olive); always paired with a word or glyph. */
-  --rel-match: var(--color-cool); --rel-match-soft: var(--color-cool-soft);
-  --rel-callee: oklch(76% 0.13 160); --rel-callee-soft: oklch(27% 0.045 160);
-  --rel-caller: oklch(77% 0.13 310); --rel-caller-soft: oklch(28% 0.05 310);
-  --rel-parent: oklch(76% 0.15 35); --rel-parent-soft: oklch(28% 0.05 35);
-  --rel-child: oklch(78% 0.14 350); --rel-child-soft: oklch(28% 0.05 350);
-  --rel-method: oklch(80% 0.12 105); --rel-method-soft: oklch(28% 0.04 105);
-  --rel-ink: var(--color-paper-3);
-}
-
-/* paper (light) colourway: the app's default */
-:root:not([data-mode="dark"]) {
+  /* ── warm paper (light): the default ─────────────────────────────────── */
   color-scheme: light;
-  --color-paper: oklch(98% 0.006 85); --color-paper-2: oklch(95.6% 0.008 85); --color-paper-3: oklch(93.2% 0.009 85);
-  --color-ink: oklch(19% 0.01 60); --color-ink-2: oklch(31% 0.01 60); --color-muted: oklch(45% 0.012 60);
-  --color-rule: oklch(87.5% 0.009 85); --color-rule-2: oklch(76% 0.011 85);
-  --color-accent: oklch(54% 0.14 70); --color-accent-ink: oklch(98.5% 0.006 85); --color-accent-soft: oklch(92% 0.05 80); --color-accent-hover: oklch(49% 0.13 70);
-  --color-cool: oklch(52% 0.14 250); --color-cool-soft: oklch(92.5% 0.03 245); --color-cool-hover: oklch(46% 0.13 250);
-  --color-ok: oklch(50% 0.13 150); --color-ok-soft: oklch(93% 0.035 150); --color-bad: oklch(52% 0.17 25); --color-bad-soft: oklch(93.5% 0.03 25);
-  --rel-callee: oklch(50% 0.13 160); --rel-callee-soft: oklch(93% 0.04 160);
-  --rel-caller: oklch(50% 0.15 310); --rel-caller-soft: oklch(93% 0.04 310);
-  --rel-parent: oklch(53% 0.17 35); --rel-parent-soft: oklch(93% 0.04 35);
-  --rel-child: oklch(54% 0.17 350); --rel-child-soft: oklch(93.5% 0.04 350);
-  --rel-method: oklch(50% 0.12 105); --rel-method-soft: oklch(93% 0.05 105);
+  --color-canvas: oklch(96% 0.009 85);
+  --color-card: oklch(99.2% 0.004 90);            /* the lightest card */
+  --color-card-2: oklch(94.2% 0.011 82);          /* a warmer tone: tiles, the node panel */
+  --color-card-3: oklch(91.6% 0.013 80);          /* the deepest tone: code, inputs, the graph ground */
+  --color-ink: oklch(17% 0.012 60); --color-ink-2: oklch(32% 0.012 60); --color-muted: oklch(45% 0.014 60);
+  --color-rule: oklch(89% 0.01 82); --color-rule-2: oklch(78% 0.012 80);
+  --color-primary: var(--color-ink); --color-primary-ink: oklch(98.5% 0.004 90); --color-primary-hover: oklch(27% 0.012 60);
+  --color-secondary: oklch(90.5% 0.012 80); --color-secondary-hover: oklch(87% 0.014 80); --color-secondary-ink: var(--color-ink);
+  --color-accent: oklch(50% 0.16 252); --color-accent-ink: oklch(98.5% 0.004 250); --color-accent-soft: oklch(93% 0.035 250); --color-accent-hover: oklch(44% 0.15 252);
+  --color-focus: var(--color-ink);
+  --color-ok: oklch(47% 0.13 150); --color-ok-soft: oklch(92% 0.06 150);
+  --color-bad: oklch(50% 0.17 25); --color-bad-soft: oklch(93% 0.035 25);
+  --color-warn: oklch(55% 0.14 70); --color-warn-soft: oklch(93% 0.05 80);
+  --color-error: var(--color-bad); --color-success: var(--color-ok);
+  --color-string: oklch(45% 0.1 150);
+  --color-selection: var(--color-accent-soft);
+  --color-backdrop: oklch(20% 0.01 60 / 0.45);
+  --color-hull: oklch(17% 0.012 60 / 0.035);
+  --color-retrieved-line: color-mix(in oklab, var(--color-accent-soft) 50%, transparent);
+  --color-code-inline: var(--color-card-3);
+  --color-bubble: var(--color-ink); --color-bubble-ink: var(--color-primary-ink);
+  --shadow-card: 0 1px 2px oklch(20% 0.02 60 / 0.03), 0 10px 30px -12px oklch(20% 0.02 60 / 0.08);
+  --shadow-pop: 0 4px 12px oklch(20% 0.02 60 / 0.06), 0 24px 48px -16px oklch(20% 0.02 60 / 0.18);
+
+  /* hop distance: how far from a direct match the code was reached (also the node colours) */
+  --hop-0: var(--color-accent); --hop-1: oklch(60% 0.12 252); --hop-2: oklch(70% 0.085 252); --hop-3: oklch(80% 0.05 252);
+  --hop-none: oklch(72% 0.012 80);                /* a neighbour that never reached the model */
+  --hop-ink: var(--color-accent-ink);
+
+  /* category dots, the same everywhere a category is named */
+  --cat-cited: var(--color-accent); --cat-retrieved: var(--hop-2); --cat-calls: oklch(55% 0.012 60); --cat-inherits: oklch(55% 0.012 60);
+  --cat-bridge: oklch(56% 0.2 335);
+  --lang-python: oklch(55% 0.12 165); --lang-javascript: oklch(70% 0.14 88); --lang-typescript: oklch(50% 0.13 280);
+  --lang-java: oklch(55% 0.11 55); --lang-kotlin: oklch(55% 0.16 305); --lang-c: oklch(50% 0.01 60); --lang-cpp: oklch(58% 0.18 350);
+  --lang-go: oklch(62% 0.12 215); --lang-rust: oklch(60% 0.13 40); --lang-html: oklch(58% 0.17 22); --lang-config: oklch(65% 0.012 60); --lang-other: oklch(65% 0.012 60);
 }
 
-/* the home and sign-in colourway: cool paper, graphite ink, graphite primary; blue only for citations */
-body.site {
-  --color-paper: oklch(98.4% 0.002 250); --color-paper-2: oklch(96.2% 0.003 250); --color-paper-3: oklch(93.6% 0.004 250);
-  --color-ink: oklch(22% 0.012 255); --color-ink-2: oklch(33% 0.012 255); --color-muted: oklch(47% 0.012 255);
-  --color-rule: oklch(89% 0.005 255); --color-rule-2: oklch(79% 0.006 255);
-  --color-accent: var(--color-ink); --color-accent-ink: var(--color-paper); --color-accent-hover: oklch(32% 0.014 255);
-  --color-accent-soft: var(--color-paper-3); --color-focus: var(--color-ink);
-  --color-cool: oklch(50% 0.17 258); --color-cool-soft: oklch(93.5% 0.035 255); --color-cool-ink: var(--color-paper);
-  --color-selection: var(--color-cool-soft);
-}
-[data-mode="dark"] body.site {
-  --color-paper: oklch(15.5% 0.008 255); --color-paper-2: oklch(19.5% 0.01 255); --color-paper-3: oklch(23% 0.011 255);
-  --color-ink: oklch(94% 0.005 255); --color-ink-2: oklch(84% 0.007 255); --color-muted: oklch(71% 0.012 255);
-  --color-rule: oklch(29% 0.01 255); --color-rule-2: oklch(40% 0.012 255);
-  --color-accent-hover: oklch(84% 0.007 255);
-  --color-cool: oklch(75% 0.13 252); --color-cool-soft: oklch(30% 0.06 258);
+/* ── graphite (dark): the same layout as a token swap ─────────────────── */
+:root[data-mode="dark"] {
+  color-scheme: dark;
+  --color-canvas: oklch(11.5% 0.006 250);
+  --color-card: oklch(17% 0.007 250);
+  --color-card-2: oklch(21% 0.008 250);
+  --color-card-3: oklch(13.5% 0.007 250);
+  --color-ink: oklch(95% 0.004 250); --color-ink-2: oklch(83% 0.006 250); --color-muted: oklch(70% 0.01 250);
+  --color-rule: oklch(27% 0.008 250); --color-rule-2: oklch(38% 0.01 250);
+  --color-primary: var(--color-ink); --color-primary-ink: oklch(14% 0.006 250); --color-primary-hover: oklch(86% 0.006 250);
+  --color-secondary: oklch(26% 0.009 250); --color-secondary-hover: oklch(31% 0.01 250); --color-secondary-ink: var(--color-ink);
+  --color-accent: oklch(75% 0.13 245); --color-accent-ink: oklch(14% 0.03 245); --color-accent-soft: oklch(29% 0.06 245); --color-accent-hover: oklch(81% 0.11 245);
+  --color-focus: var(--color-accent);
+  --color-ok: oklch(76% 0.15 150); --color-ok-soft: oklch(25% 0.04 150);
+  --color-bad: oklch(72% 0.17 25); --color-bad-soft: oklch(25% 0.04 25);
+  --color-warn: oklch(80% 0.14 80); --color-warn-soft: oklch(27% 0.05 80);
+  --color-string: oklch(78% 0.1 150);
+  --color-selection: color-mix(in oklab, var(--color-accent) 30%, transparent);
+  --color-backdrop: oklch(5% 0.005 250 / 0.6);
+  --color-hull: oklch(95% 0.004 250 / 0.04);
+  --color-retrieved-line: color-mix(in oklab, var(--color-accent-soft) 55%, transparent);
+  --color-code-inline: oklch(24% 0.009 250);
+  --color-bubble: oklch(95% 0.004 250); --color-bubble-ink: oklch(14% 0.006 250);
+  --shadow-card: none;
+  --shadow-pop: 0 24px 48px -16px oklch(0% 0 0 / 0.6);
+  --hop-0: var(--color-accent); --hop-1: oklch(64% 0.11 245); --hop-2: oklch(52% 0.085 245); --hop-3: oklch(42% 0.055 245);
+  --hop-none: oklch(40% 0.01 250);
+  --cat-calls: oklch(62% 0.01 250); --cat-inherits: oklch(62% 0.01 250);
+  --cat-bridge: oklch(72% 0.19 335);
+  --lang-python: oklch(72% 0.13 165); --lang-javascript: oklch(84% 0.15 92); --lang-typescript: oklch(72% 0.12 280);
+  --lang-java: oklch(74% 0.11 55); --lang-kotlin: oklch(74% 0.14 305); --lang-c: oklch(68% 0.01 250); --lang-cpp: oklch(74% 0.16 350);
+  --lang-go: oklch(76% 0.12 215); --lang-rust: oklch(76% 0.12 40); --lang-html: oklch(72% 0.16 22); --lang-config: oklch(60% 0.01 250); --lang-other: oklch(60% 0.01 250);
 }
 
 @media (max-width: 40rem) {
-  :root { --gutter: var(--space-md); }
+  :root { --gutter: var(--space-md); --card-pad: var(--space-md); --radius-card: 16px; }
 }

@@ -31,15 +31,16 @@
   </header>
 
   <main class="login" id="main">
-    <section class="login-panel" aria-labelledby="login-title">
-      <h1 id="login-title">Sign in</h1>
-      <p id="login-why" class="login-why">to ask questions about a codebase.</p>
+    <section class="login-panel card" aria-labelledby="login-title">
+      <span class="status-pill login-badge" data-tone="ok">Demos open without an account</span>
+      <h1 id="login-title">Sign in to coderag</h1>
+      <p id="login-why" class="login-why">to index your own repositories and ask about them.</p>
 
       <div id="signed-in" class="signed-in" hidden>
         <p>Signed in as <strong id="signed-in-name"></strong><span id="signed-in-login"></span>.</p>
         <div class="login-actions">
           <a id="continue" class="primary" href="/app">Continue</a>
-          <button id="switch" type="button" class="ghost">Sign out</button>
+          <button id="switch" type="button" class="secondary">Sign out</button>
         </div>
       </div>
 
