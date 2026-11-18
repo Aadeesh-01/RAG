@@ -35,6 +35,8 @@ const state = {
   debug: new URLSearchParams(window.location.search).get("debug") === "1",
   userRepos: [],                       // the signed-in user's repositories (server summaries)
   jobs: new Map(),                     // repo id -> its latest indexing job (GET /api/jobs)
+  freshness: new Map(),                // repo id -> {at, promise} of GET /api/repos/{id}/freshness (once per view)
+  replacing: new Map(),                // new repo id -> the repo id it updates ("Update to latest")
   chats: new Map(),                    // repo id -> {turns, evidence} while another repo is open
   reposFilter: "all",
 };
@@ -53,6 +55,7 @@ function setEvidence(e = {}) {
 }
 const settings = loadSettings();
 
+const WEEKDAY = new Intl.DateTimeFormat(undefined, { weekday: "short" });   // one formatter, not one per call
 // ── small DOM helpers ───────────────────────────────────────────────────────
 function el(tag, attrs = {}, ...children) {
   const node = document.createElement(tag);
@@ -64,18 +67,31 @@ function el(tag, attrs = {}, ...children) {
     else if (key === "href") {                 // http(s) and relative links only (repo facts are owner-set)
       const href = safeHref(value);
       if (href !== null) node.setAttribute("href", href);
+    } else if (key === "title" && !String(value).trim()) {
+      continue;                                // a blank title would show an empty tooltip
     } else node.setAttribute(key, value === true ? "" : value);
   }
-  for (const child of children.flat()) {
-    if (child === null || child === undefined || child === false) continue;
-    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
-  }
+  node.append(...renderable(children));
   return node;
 }
 
-/** replaceChildren that skips null, undefined and false (never renders the word "null"). */
+/**
+ * Children for append(): nested arrays flattened all the way ([dt, dd] pairs from a map), Nodes kept,
+ * strings and numbers as text; null, undefined, false and any other object dropped, so nothing ever
+ * renders as "[object HTMLElement]", "undefined" or "null".
+ */
+function renderable(children) {
+  const out = [];
+  for (const child of children.flat(Infinity)) {
+    if (child instanceof Node) out.push(child);
+    else if (typeof child === "string" || (typeof child === "number" && Number.isFinite(child))) out.push(child);
+  }
+  return out;
+}
+
+/** replaceChildren with the same rules as el()'s children. */
 function fill(node, ...children) {
-  node.replaceChildren(...children.flat().filter((c) => c !== null && c !== undefined && c !== false));
+  node.replaceChildren(...renderable(children));
 }
 
 function escapeHtml(text) {
@@ -646,12 +662,85 @@ function renderJobCard(j) {
 }
 
 function jobFinished(j) {
-  for (const cache of [state.graphs, state.overviews, state.positions, state.history]) cache?.delete?.(j.repo_id);
+  for (const cache of [state.graphs, state.overviews, state.positions, state.history, state.freshness]) cache?.delete?.(j.repo_id);
   rememberUserRepo(j.repo_id, j.name);
+  const old = state.replacing.get(j.repo_id);
+  if (old) {                                    // "Update to latest" done: the server moved the link to the new index
+    state.replacing.delete(j.repo_id);
+    state.userRepos = state.userRepos.filter((r) => r.id !== old);
+    state.freshness.delete(old);
+    if (state.view === "repos") renderRepos();
+    if (state.view === "home") renderHome();
+  }
   const card = state.jobCards.get(j.job_id);
   if (card) {                                   // started on this page: open it
     selectRepo(j.repo_id);
     setTimeout(() => { card.remove(); state.jobCards.delete(j.job_id); }, 4000);
+  }
+}
+
+// ── new commits on a repo's branch: fetched once per view (the server caches each answer 10 min) ──
+const FRESH_MS = 10 * 60 * 1000;
+const isMine = (id) => Boolean(currentUser()) && state.userRepos.some((r) => r.id === id);
+
+function freshnessOf(repoId) {
+  const hit = state.freshness.get(repoId);
+  if (hit && Date.now() - hit.at < FRESH_MS) return hit.promise;
+  const promise = fetchJSON(`/api/repos/${encodeURIComponent(repoId)}/freshness`).catch(() => null);
+  state.freshness.set(repoId, { at: Date.now(), promise });
+  return promise;
+}
+
+/** "3 new commits · Update to latest" for one of your repos when its branch has moved on; empty otherwise. */
+function freshnessNote(repo, { compact = false } = {}) {
+  const box = el("span", { class: "fresh", hidden: true });
+  if (!isMine(repo.id)) return box;
+  freshnessOf(repo.id).then((f) => {
+    if (!f?.behind || !box.isConnected) return;
+    fill(box,
+      el("span", { class: "status-pill", "data-tone": "warn",
+        title: `Indexed at ${String(f.indexed_commit).slice(0, 7)}; the branch is now at ${String(f.latest_commit).slice(0, 7)}.`,
+        text: f.new_commits ? plural(f.new_commits, "new commit") : "New commits" }),
+      el("button", { type: "button", class: compact ? "link-button" : "secondary small", text: "Update to latest",
+        onclick: (e) => { e.stopPropagation(); updateToLatest(repo, e.currentTarget); } }));
+    box.hidden = false;
+  });
+  return box;
+}
+
+/** Index the branch's newest commit as a new index; the job card shows progress; when it is ready the page opens it. */
+async function updateToLatest(repo, button) {
+  if (button) button.disabled = true;
+  try {
+    const r = await fetch(`/api/repos/${encodeURIComponent(repo.id)}/update`, { method: "POST" });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || `Couldn't update ${repo.name} (error ${r.status}). Try again in a moment.`);
+    state.freshness.delete(repo.id);
+    if (body.up_to_date) {
+      banner(`${repo.name} is already at the latest commit.`);
+      button?.closest(".fresh")?.setAttribute("hidden", "");
+      return;
+    }
+    state.replacing.set(body.repo_id, repo.id);
+    trackJob(body);
+  } catch (err) {
+    banner(err.message, "error");
+    if (button) button.disabled = false;
+  }
+}
+
+/** Rebuild an index at the same commit and version (re-chunk, re-embed); the job card shows progress. */
+async function rebuildIndex(repo, button) {
+  if (button) button.disabled = true;
+  try {
+    const r = await fetch(`/api/repos/${encodeURIComponent(repo.id)}/rebuild`, { method: "POST" });
+    const body = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(body.error || `Couldn't rebuild ${repo.name} (error ${r.status}). Try again in a moment.`);
+    trackJob(body);
+  } catch (err) {
+    banner(err.message, "error");
+  } finally {
+    if (button) button.disabled = false;
   }
 }
 
@@ -766,6 +855,7 @@ function renderRepoHead(demo) {
       demo.indexed_with ? el("span", {}, el("code", { text: demo.indexed_with })) : null,
       languages.length ? el("span", { class: "dots", title: languages.map(([l, n]) => `${plural(n, `${l} file`)}`).join(", ") },
         languages.slice(0, 6).map(([label, n]) => el("span", { class: "lang", title: plural(n, `${label} file`) }, dot(null, languageKey(label)), label))) : null,
+      isMine(demo.id) ? freshnessNote(demo) : null,
       demo.reindex_to ? el("button", { type: "button", class: "link-button reindex",
         title: `Indexed with ${demo.indexed_with || "an older version"}. Rebuild it with ${demo.reindex_to}: `
           + "other languages and links across them (HTTP, JNI, ctypes) are indexed too.",
@@ -853,7 +943,7 @@ function renderTiles(demo) {
   const asked = askedMeta(demo.id);
   const perDay = asked?.perDay || [0, 0, 0, 0, 0, 0, 0];
   const today = perDay[perDay.length - 1];
-  const dayName = (back) => { const d = new Date(); d.setDate(d.getDate() - back); return d.toLocaleDateString(undefined, { weekday: "short" }); };
+  const dayName = (back) => { const d = new Date(); d.setDate(d.getDate() - back); return WEEKDAY.format(d); };
   const questions = tile("Questions asked", asked ? asked.total : null,
     !asked ? "counting…" : today ? el("b", { class: "up", text: `+${today} today` })
       : asked.total ? "none today" : currentUser() ? "none yet" : "this session",
@@ -1609,7 +1699,7 @@ function applyRelationToggles() {
   document.querySelectorAll(".legend-relation button").forEach((b) => {
     b.setAttribute("aria-pressed", String(!hiddenRelations.has(b.closest("li").dataset.relation)));
   });
-  graphView?.node.classed("off", (n) => hiddenRelations.has(relationOfNode(n.id)));
+  drawGraph();                                     // switched-off relations aren't drawn at all
 }
 
 function nodeClass(n) {
@@ -1749,21 +1839,137 @@ function symbolPath(kind, r) {
   return d3.symbol().type(type).size(Math.PI * r * r * (shape === "circle" ? 1 : 1.15))();
 }
 
+// ── layout: computed once per graph state, in slices, then cached ───────────
+const CANVAS_LIMIT = 400;                 // visible nodes: above this the graph is drawn on a <canvas>
+const MAX_TICKS = 300;                    // the force layout stops here, or sooner once it has settled
+const SETTLED_ALPHA = 0.02;
+const SLICE_MS = 12;                      // layout work per slice, so the page keeps responding
+const LAYOUT_CACHE_SIZE = 24;
+const layoutCache = new Map();            // layout key (repo, view, answer, size) -> Map(id -> {x, y})
+let layoutTask = null;                    // cancels the layout being computed (a newer draw replaces it)
+
+function cacheLayout(key, finals) {
+  layoutCache.delete(key);
+  layoutCache.set(key, finals);
+  while (layoutCache.size > LAYOUT_CACHE_SIZE) layoutCache.delete(layoutCache.keys().next().value);
+}
+
+/**
+ * Tick a stopped simulation in slices of at most sliceMs until it settles (alpha under its alphaMin)
+ * or MAX_TICKS, then done(). Each slice stays under the 50 ms long-task line. Returns a canceller.
+ */
+function settleLayout(sim, done, sliceMs = SLICE_MS) {
+  let ticks = 0, timer = null, cancelled = false;
+  const settledAt = sim.alphaMin();
+  const step = () => {
+    timer = null;
+    if (cancelled) return;
+    const until = performance.now() + sliceMs;
+    while (ticks < MAX_TICKS && sim.alpha() > settledAt && performance.now() < until) { sim.tick(); ticks++; }
+    if (ticks < MAX_TICKS && sim.alpha() > settledAt) timer = setTimeout(step, 0);
+    else done(ticks);
+  };
+  step();
+  return () => { cancelled = true; if (timer) clearTimeout(timer); };
+}
+
+// label widths, measured once per text and font (canvas text metrics: no layout, no DOM)
+const textWidths = new Map();
+let measureContext = null;
+let labelFontCache = "";
+function textWidth(text, font) {
+  const key = `${font}|${text}`;
+  let w = textWidths.get(key);
+  if (w === undefined) {
+    measureContext ||= document.createElement("canvas").getContext("2d");
+    measureContext.font = font;
+    w = measureContext.measureText(text).width;
+    if (textWidths.size > 20000) textWidths.clear();
+    textWidths.set(key, w);
+  }
+  return w;
+}
+
+/** The graph labels' font at scale 1 ("500 12px Family"), read once from a probe label. */
+function labelFont(svgEl) {
+  if (labelFontCache) return labelFontCache;
+  const ns = "http://www.w3.org/2000/svg";
+  const g = document.createElementNS(ns, "g");
+  const probe = document.createElementNS(ns, "text");
+  g.setAttribute("class", "node");
+  probe.setAttribute("class", "label");
+  probe.textContent = "x";
+  g.append(probe);
+  const before = svgEl.style.getPropertyValue("--label-scale");
+  svgEl.style.setProperty("--label-scale", "1");
+  svgEl.append(g);
+  const cs = getComputedStyle(probe);
+  labelFontCache = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+  g.remove();
+  if (before) svgEl.style.setProperty("--label-scale", before); else svgEl.style.removeProperty("--label-scale");
+  return labelFontCache;
+}
+if (document.fonts?.status !== "loaded") {
+  document.fonts?.ready.then(() => { textWidths.clear(); labelFontCache = ""; layoutCache.clear(); if (graphView) { graphView.key = ""; drawGraph(); } });
+}
+
+/** Boxes in a quadtree (by centre): the overlap area of a box with those already added. */
+function boxIndex() {
+  const tree = d3.quadtree().x((b) => (b.x0 + b.x1) / 2).y((b) => (b.y0 + b.y1) / 2);
+  let hw = 0, hh = 0;
+  return {
+    add(b) { tree.add(b); hw = Math.max(hw, (b.x1 - b.x0) / 2); hh = Math.max(hh, (b.y1 - b.y0) / 2); },
+    overlap(q, skip) {
+      let sum = 0;
+      const x0 = q.x0 - hw, x1 = q.x1 + hw, y0 = q.y0 - hh, y1 = q.y1 + hh;
+      tree.visit((node, nx0, ny0, nx1, ny1) => {
+        if (!node.length) {
+          let d = node;
+          do {
+            const p = d.data;
+            if (skip === undefined || p.id !== skip) {
+              sum += Math.max(0, Math.min(q.x1, p.x1) - Math.max(q.x0, p.x0)) * Math.max(0, Math.min(q.y1, p.y1) - Math.max(q.y0, p.y0));
+            }
+          } while ((d = d.next));
+        }
+        return nx0 > x1 || nx1 < x0 || ny0 > y1 || ny1 < y0;
+      });
+      return sum;
+    },
+  };
+}
+
+/** How far a node's symbol reaches from its centre (a diamond is taller than its radius). */
+function symbolReach(kind, r) {
+  const shape = SHAPES[kind] || "circle";
+  const area = Math.PI * r * r * (shape === "circle" ? 1 : 1.15);
+  if (shape === "circle") return { up: r, down: r, left: r, right: r };
+  if (shape === "square") { const h = Math.sqrt(area) / 2; return { up: h, down: h, left: h, right: h }; }
+  if (shape === "diamond") { const y = Math.sqrt(area / (2 * 0.57735)), x = y * 0.57735; return { up: y, down: y, left: x, right: x }; }
+  if (shape === "triangle") { const y = Math.sqrt(area / (Math.sqrt(3) * 3)); return { up: 2 * y, down: y, left: Math.sqrt(3) * y, right: Math.sqrt(3) * y }; }
+  const w = r * 1.3;
+  return { up: w, down: w, left: w, right: w };
+}
+
 function drawGraph() {
   syncLegend();
   const svg = window.d3 && d3.select("#graph");
+  const canvas = $("#graph-canvas");
   const hint = $("#graph-hint");
   const toggle = $("#graph-toggle");
   const subtitle = $("#graph-subtitle");
   if (!svg) { hint.textContent = "The graph library could not be loaded."; return; }
-  graphView?.stop();
-  graphView = null;
   const graph = state.graph;
   const answer = state.retrieved.size > 0 && state.graphMode !== "full";
   $("#layout-toggle").hidden = !answer;
   $("#layout-toggle").setAttribute("aria-pressed", String(state.graphLayout === "rings"));
   if (!graph) {
+    graphView?.stop();
+    graphView = null;
+    layoutTask?.();
     svg.selectAll("g.scene").remove();
+    canvas.hidden = true;
+    svg.node().hidden = false;
     hint.textContent = state.demo ? "No graph for this repository yet." : "Choose a repository to see its call graph.";
     hint.classList.remove("caption");
     toggle.hidden = true;
@@ -1778,7 +1984,7 @@ function drawGraph() {
   if (state.graphMode === "full") data = graph;
   else if (state.retrieved.size) data = focusSubgraph(graph, state.retrieved);
   else if (small) data = graph;
-  else { data = moduleGraph(graph); collapsed = true; }      // a large repository: its modules
+  else { data = moduleGraph(graph); collapsed = true; }      // a large repository: its modules, nothing inside them
 
   toggle.hidden = small && !state.retrieved.size;
   toggle.setAttribute("aria-pressed", String(state.graphMode === "full"));
@@ -1795,25 +2001,45 @@ function drawGraph() {
   hint.classList.toggle("caption", Boolean(caption));
   hint.textContent = caption ? "Ask a question to light up the code it uses. Point at a node to see its calls." : "";
 
-  const { width, height } = svg.node().getBoundingClientRect();
+  const { width, height } = $(".graph-wrap").getBoundingClientRect();
   if (!width || !height) return;                       // hidden pane: drawn when shown, from where it was
   // the graph is laid out and fitted below the pill, so the two never meet
   const top = caption ? hint.offsetTop + hint.offsetHeight + 8 : 10;
   const bottom = 10;
   const midY = top + (height - top - bottom) / 2;
-
   const rings = answer && state.graphLayout === "rings";
   const positions = positionsFor(`${state.demo?.id || "_"}${collapsed ? ":modules" : ""}`);
+
+  // relations switched off in the legend aren't drawn at all (no faded nodes in the background)
+  const shown = data.nodes.filter((n) => !hiddenRelations.has(relationOfNode(n.id)));
+  const shownIds = new Set(shown.map((n) => n.id));
+  const shownLinks = data.links.filter((l) => shownIds.has(nodeId(l.source)) && shownIds.has(nodeId(l.target)));
   // isolated nodes wait in the tray (the answer's own sources always stay in the picture)
   const linked = new Set();
-  for (const l of data.links) { linked.add(l.source); linked.add(l.target); }
-  const isolated = data.nodes.filter((n) => !linked.has(n.id) && !state.retrieved.has(n.id));
+  for (const l of shownLinks) { linked.add(nodeId(l.source)); linked.add(nodeId(l.target)); }
+  const isolated = shown.filter((n) => !linked.has(n.id) && !state.retrieved.has(n.id));
   renderTray(isolated);
-  const nodes = data.nodes.filter((n) => linked.has(n.id) || state.retrieved.has(n.id)).map((n) => ({ ...n }));
+  const nodes = shown.filter((n) => linked.has(n.id) || state.retrieved.has(n.id)).map((n) => ({ ...n }));
+  const useCanvas = nodes.length > CANVAS_LIMIT;
+
+  // the same state as the scene on screen (a tab switch, a repeated call): keep it as it is. The layout
+  // doesn't depend on the canvas size: a resize (the tray, the thumbnails) rescales it and refits, no re-layout
+  const retrievedKey = [...state.retrieved.keys()].sort().join(",");
+  const layoutKey = [state.demo?.id, collapsed ? "modules" : state.graphMode, retrievedKey, rings ? "rings" : "free",
+    [...hiddenRelations].sort().join(",")].join("|");
+  const sceneKey = [layoutKey, Math.round(width), Math.round(height), Math.round(top), [...(state.cited || [])].sort().join(","),
+    [...state.sids].join(","), useCanvas ? "canvas" : "svg"].join("|");
+  if (graphView && graphView.key === sceneKey && graphView.alive()) return;
+  const resized = graphView?.layoutKey === layoutKey;      // only the size changed: no glide either
+  graphView?.stop();
+  graphView = null;
+  layoutTask?.();
+  layoutTask = null;
+
   const byId = new Map(nodes.map((n) => [n.id, n]));
-  const links = data.links.map((l) => ({ ...l }));
+  const links = shownLinks.map((l) => ({ ...l, source: nodeId(l.source), target: nodeId(l.target) }));
   const big = nodes.length > 250;
-  const moving = !calm() && nodes.length <= MOTION_LIMIT;
+  const moving = !calm() && nodes.length <= MOTION_LIMIT && !useCanvas && !resized;
   const outlined = !rings && !collapsed && nodes.length <= HULL_LIMIT;
   const trails = state.retrieved.size ? trailEdges() : new Map();
 
@@ -1836,16 +2062,21 @@ function drawGraph() {
   // modules, the answer's sources and (in small views) everything carry a label; the rest show theirs zoomed in
   const isModule = (n) => n.kind === "file" || n.kind === "module";
   const labelled = (n) => state.retrieved.has(n.id) || isModule(n) || nodes.length <= (state.retrieved.size ? 12 : 30);
-  const labelText = (n) => middleTruncateName(n.label || n.name, 34);          // shortest unique qualified name
+  const labelText = (n) => middleTruncateName(n.label || n.name || n.file || "", 34);   // shortest unique qualified name
   const sidText = (n) => (state.sids.has(n.id) ? `S${state.sids.get(n.id)} ` : "");
-  const labelWidth = (n) => (labelled(n) ? (sidText(n) + labelText(n)).length * 7.4 + 12 : 0);
+  const el = svg.node();
+  const font = labelFont(el);
+  const fontSize = parseFloat(font.split(" ")[1]) || 12;
+  for (const n of nodes) {
+    n.textWidth = textWidth(sidText(n) + labelText(n), font);
+    n.reach = symbolReach(n.kind, radius(n));
+  }
+  const labelWidth = (n) => (labelled(n) ? n.textWidth + 12 : 0);
   // rings shrink to the canvas, so the outer ring (and its nodes) stays inside it
   const ringScale = Math.min(1, Math.max(0.3, (Math.min(width, height - top - bottom) / 2 - 24) / RING_RADII[3]));
   const ringR = (i) => RING_RADII[i] * ringScale;
-  const ringRadius = (n) => {
-    const hop = state.retrieved.get(n.id);
-    return ringR(hop === undefined ? 3 : Math.min(hop, 2));
-  };
+  const ringIndex = (n) => { const hop = state.retrieved.get(n.id); return hop === undefined ? 3 : Math.min(hop, 2); };
+  const ringRadius = (n) => ringR(ringIndex(n));
   // every node, with its label's padding, stays inside the canvas (the band under the hint excluded)
   const EDGE = 6;
   const bounded = (n, x, y) => {
@@ -1867,140 +2098,20 @@ function drawGraph() {
     const near = [...adjacency.get(n.id)].map((id) => byId.get(id)).find((m) => m && positions.has(m.id));
     if (near) { n.x = near.x + jitter(n.id, 0) * 40; n.y = near.y + jitter(n.id, 1) * 40; n.born = true; }
   }
-  const start = new Map(nodes.filter((n) => n.x !== undefined && !Number.isNaN(n.x)).map((n) => [n.id, { x: n.x, y: n.y }]));
-
-  // with no answer yet, every node is the subject: all labels keep 12px, none hide
-  const overview = !state.retrieved.size;
-  const el = svg.node();
-  el.classList.toggle("overview", overview);
-  el.classList.remove("hovering", "zoomed-in", "zoomed-out");
-  const subject = (n) => overview || state.retrieved.has(n.id);
-
-  // arrowheads coloured by CSS, so a theme change needs no redraw
-  if (svg.select("defs").empty()) {
-    const defs = svg.append("defs");
-    for (const id of ["arrow", "arrow-lit", "arrow-trail", "arrow-bridge"]) {
-      defs.append("marker").attr("id", id).attr("viewBox", "0 -4 8 8").attr("refX", 8)
-        .attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
-        .append("path").attr("d", "M0,-4L8,0L0,4");
+  // a big graph starts from the module view's layout: each function beside its module, so it settles in few ticks
+  if (useCanvas) {
+    const modules = positionsFor(`${state.demo?.id || "_"}:modules`);
+    for (const n of nodes) {
+      const m = n.x === undefined && modules.get(`m:${n.file}`);
+      if (m) { n.x = m.x + jitter(n.id, 0) * 30; n.y = m.y + jitter(n.id, 1) * 30; }
     }
   }
-  // the old scene steps back while the new one takes its place
-  const old = svg.selectAll("g.scene").attr("aria-hidden", "true").style("pointer-events", "none");
-  if (moving && !old.empty()) old.transition().duration(200).style("opacity", 0).remove();
-  else old.remove();
-  // never start from a camera a hidden pane left broken
-  if (!Number.isFinite(d3.zoomTransform(el).k)) el.__zoom = d3.zoomIdentity;
-  const root = svg.append("g").attr("class", "scene").attr("transform", d3.zoomTransform(el));
-  const ringLayer = root.append("g").attr("class", "rings").attr("aria-hidden", "true");
-  const hullLayer = root.append("g").attr("class", "hulls").attr("aria-hidden", "true");
-  const linkLayer = root.append("g").attr("class", "links").attr("aria-hidden", "true");
-  const trailLayer = root.append("g").attr("class", "trails").attr("aria-hidden", "true");
-  const nodeLayer = root.append("g").attr("class", "nodes");
+  const start = new Map(nodes.filter((n) => n.x !== undefined && !Number.isNaN(n.x)).map((n) => [n.id, { x: n.x, y: n.y }]));
 
-  // the fit never zooms out past MIN_FIT, where the answer's labels still render at 12px;
-  // further out, only by hand, they shrink (and other labels hide below ~11.5px)
-  const MIN_FIT = 0.6;
-  const labelScale = (k) => Math.min(1 / MIN_FIT, Math.max(1, 1 / k));
-  let zoomTimer = null;
-  const dismissHint = () => {
-    if (state.hintDone) return;
-    state.hintDone = true;
-    hint.textContent = "";
-    hint.classList.remove("caption");
-  };
-  const zoom = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on("zoom", (e) => {
-    if (e.sourceEvent) dismissHint();                    // the user's own pan or zoom, not a fit
-    root.attr("transform", e.transform);
-    el.style.setProperty("--label-scale", String(labelScale(e.transform.k)));
-    el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / e.transform.k)));
-    // zoomed out, only the answer's own labels stay; zoomed in, every function shows its name
-    el.classList.toggle("zoomed-out", e.transform.k < 0.96);
-    const zoomedIn = e.transform.k >= ZOOMED_IN;
-    if (zoomedIn !== el.classList.contains("zoomed-in")) {
-      el.classList.toggle("zoomed-in", zoomedIn);
-      if (zoomedIn) placeQuiet(new Set(nodes.map((n) => n.id)), { hideOverlaps: true });
-    } else if (zoomedIn) {
-      clearTimeout(zoomTimer);
-      zoomTimer = setTimeout(() => placeQuiet(new Set(nodes.map((n) => n.id)), { hideOverlaps: true }), 120);
-    }
-  });
-  svg.call(zoom).on("dblclick.zoom", null);
-  svg.on("dblclick.fit", (e) => { if (e.target === el) fit(true); });   // double-click the background: fit
-  svg.on("pointerdown.hint keydown.hint", dismissHint);
-
-  const keyOf = (l) => pairKey(nodeId(l.source), nodeId(l.target));
-  const onTrail = (l) => trails.has(keyOf(l));
-  // confidence comes from the full graph: a link matched by name (not resolved) is drawn dashed
-  const confidence = new Map(graph.links.map((l) => [`${nodeId(l.source)}>${nodeId(l.target)}:${l.type}`, l.confidence]));
-  const nameMatched = (l) => (l.confidence || confidence.get(`${nodeId(l.source)}>${nodeId(l.target)}:${l.type}`)) === "name_match";
-  const bridgeOf = new Map(graph.links.filter((l) => l.type === "bridge")
-    .map((l) => [`${nodeId(l.source)}>${nodeId(l.target)}`, l]));
-  const link = linkLayer.selectAll("path").data(links).join("path")
-    .attr("class", (l) => `link ${l.type}${onTrail(l) ? " trail" : ""}${nameMatched(l) ? " name-match" : ""}`)
-    .attr("data-mechanism", (l) => (l.type === "bridge" ? l.mechanism || bridgeOf.get(`${nodeId(l.source)}>${nodeId(l.target)}`)?.mechanism : null))
-    // a path edge takes the relation of the source it leads to
-    .attr("data-relation", (l) => (onTrail(l) ? relationOfNode(trails.get(keyOf(l)).to) : null));
-  // pointing at a bridge shows its evidence: the matched strings and both file:line locations
-  link.filter((l) => l.type === "bridge").append("title").text((l) => {
-    const b = l.evidence ? l : bridgeOf.get(`${nodeId(l.source)}>${nodeId(l.target)}`);
-    return b ? bridgeEvidence(b) : "Crosses a language boundary";
-  });
-  const trailLinks = links.filter(onTrail);
-  const flow = trailLayer.selectAll("path").data(trailLinks).join("path").attr("class", "trail-flow")
-    // the dots travel the way retrieval walked, whichever way the call points
-    .attr("data-dir", (l) => (nodeId(l.source) === trails.get(keyOf(l)).from ? "fwd" : "rev"));
-
-  // keyboard order: the answer's sources by number, then everything else by name
-  const order = [...nodes].sort((a, b) => (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity)
-    || labelText(a).localeCompare(labelText(b)));
-  let timer = null;
-  const node = nodeLayer.selectAll("g").data(nodes).join("g")
-    .attr("class", nodeClass)
-    .attr("data-hop", hopOf)
-    .attr("data-kind", (n) => n.kind || null)
-    .attr("data-relation", (n) => relationOfNode(n.id))
-    .attr("data-language", (n) => n.language || null)
-    .classed("off", (n) => hiddenRelations.has(relationOfNode(n.id)))
-    .classed("selected", (n) => n.id === state.selected)
-    .attr("role", "button")
-    .attr("aria-label", nodeName)
-    .attr("tabindex", (n) => (n === order[0] ? 0 : -1))
-    .call(d3.drag()
-      .on("start", (e, d) => { if (timer) finish(); if (!e.active) sim.alphaTarget(0.2).restart(); d.fx = d.x; d.fy = d.y; })
-      .on("drag", (e, d) => { [d.fx, d.fy] = bounded(d, e.x, e.y); })
-      .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }))
-    .on("click", (e, d) => { focusNode(d, false); activateNode(d); })
-    .on("dblclick", (e, d) => { e.stopPropagation(); zoomTo([d.id, ...related.get(d.id)]); })
-    .on("mouseenter.lit focus.lit", (e, d) => highlight(d.id))
-    .on("mouseleave.lit blur.lit", () => highlight(null))
-    .on("keydown", (e, d) => {
-      const i = order.indexOf(d);
-      const target = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: order.length - 1 }[e.key];
-      if (target !== undefined) {
-        e.preventDefault();
-        focusNode(order[(target + order.length) % order.length], true);
-      } else if (e.key === "Enter" || e.key === " ") {
-        e.preventDefault();
-        activateNode(d);
-      } else if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.5); }
-      else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.5); }
-      else if (e.key === "0") { e.preventDefault(); fit(true); }
-    });
-  node.append("path").attr("class", "ring").attr("d", (n) => symbolPath(n.kind, radius(n) + 4));
-  node.append("path").attr("class", "dot").attr("d", (n) => symbolPath(n.kind, radius(n)));
-  node.append("title").text((n) => `${n.label || n.name}\n${formatLocation(n)}${n.language ? `\n${LANGUAGE_LABELS[n.language] || n.language}` : ""}${collapsed ? `\n${plural(n.members, "symbol")}` : ""}`);
-  const label = node.filter(labelled).append("text").attr("class", "label").attr("text-anchor", "middle")
-    .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4);
-  label.filter((n) => state.sids.has(n.id)).append("tspan").attr("class", "label-sid").text(sidText);
-  label.append("tspan").text(labelText);
-  // every other node keeps a quiet label, shown zoomed in or while it or a neighbour is pointed at
-  node.filter((n) => !labelled(n)).append("text").attr("class", "label quiet").attr("text-anchor", "middle")
-    .attr("dominant-baseline", "hanging").attr("y", (n) => radius(n) + 4).text(labelText);
-
-  const sim = d3.forceSimulation(nodes)
+  const makeSim = () => d3.forceSimulation(nodes)
     .force("link", d3.forceLink(links).id((n) => n.id).distance((l) => (l.type === "member" ? 28 : collapsed ? 90 : 70)).strength(rings ? 0.06 : 0.5))
-    .force("charge", d3.forceManyBody().strength(big ? -35 : rings ? -150 : state.retrieved.size ? -260 : -170))
+    .force("charge", d3.forceManyBody().strength(big ? -35 : rings ? -150 : state.retrieved.size ? -260 : -170)
+      .theta(big ? 1.5 : 0.9).distanceMax(big ? 260 : Infinity))
     .force("center", rings ? null : d3.forceCenter(width / 2, midY))
     // gentle gravity keeps disconnected parts of the graph from drifting apart
     .force("x", rings ? null : d3.forceX(width / 2).strength(big ? 0.12 : 0.07))
@@ -2008,40 +2119,62 @@ function drawGraph() {
     // the closer to the centre, the more directly the code was found
     .force("ring", rings ? d3.forceRadial(ringRadius, width / 2, midY).strength(0.85) : null)
     .force("cluster", outlined ? forceCluster(0.3) : null)
-    // labels take room too: keep labelled nodes further apart
-    .force("collide", d3.forceCollide().radius((n) => Math.min(Math.max(radius(n), labelWidth(n) / 2), 120) + 6))
+    // labels take room too: keep labelled nodes further apart (in big graphs names are placed afterwards,
+    // so nodes only keep from overlapping: wide collision radii made each tick of 668 nodes slow)
+    .force("collide", d3.forceCollide().radius((n) => (useCanvas ? radius(n) + 3 : Math.min(Math.max(radius(n), labelWidth(n) / 2), 120) + 6))
+      .iterations(1))
+    .alphaMin(useCanvas ? 0.03 : SETTLED_ALPHA)
+    // big graphs cool faster (about 60 ticks): seeded from the module layout, they need little settling
+    .alphaDecay(useCanvas ? 1 - Math.pow(0.001, 1 / 120) : 1 - Math.pow(0.001, 1 / 300))
     .stop();
-  for (let i = 0; i < 300; i++) sim.tick();           // lay out before the first paint
-  // then into the canvas: scaled as a whole when it is larger (its shape kept), then every node clamped
-  if (!rings) {
-    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
-    for (const n of nodes) {
-      const half = Math.max(radius(n), labelWidth(n) / 2) + EDGE;
-      x0 = Math.min(x0, n.x - half); x1 = Math.max(x1, n.x + half);
-      y0 = Math.min(y0, n.y - radius(n) - EDGE); y1 = Math.max(y1, n.y + radius(n) + (labelled(n) ? 22 : 0) + EDGE);
-    }
-    const s = Math.min(1, width / Math.max(x1 - x0, 1), (height - top - bottom) / Math.max(y1 - y0, 1));
-    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    for (const n of nodes) { n.x = width / 2 + (n.x - cx) * s; n.y = midY + (n.y - cy) * s; }
-  }
-  clampAll();
 
-  // rings: faint guides, named where they cross the top
-  const ringIndex = (n) => { const hop = state.retrieved.get(n.id); return hop === undefined ? 3 : Math.min(hop, 2); };
-  let ringText = d3.select(null);
-  if (rings) {
-    const used = [...new Set(nodes.map(ringIndex))].sort();
-    const guide = ringLayer.selectAll("g").data(used).join("g");
-    guide.append("circle").attr("cx", width / 2).attr("cy", midY).attr("r", ringR);
-    ringText = guide.append("text").attr("x", width / 2).attr("y", (i) => midY - ringR(i) - 6).text((i) => RING_NAMES[i]);
-  }
-  // files as soft outlines, named at their top edge
+  /** The settled layout, into the canvas: scaled as a whole when larger (its shape kept), every node clamped. */
+  const intoCanvas = () => {
+    if (rings) {
+      // ring layouts are centred on the canvas they were made for: move them to this one's centre
+      const cx = nodes.reduce((a, n) => a + n.x, 0) / (nodes.length || 1), cy = nodes.reduce((a, n) => a + n.y, 0) / (nodes.length || 1);
+      for (const n of nodes) { n.x += width / 2 - cx; n.y += midY - cy; }
+    } else {
+      let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+      for (const n of nodes) {
+        const half = Math.max(radius(n), labelWidth(n) / 2) + EDGE;
+        x0 = Math.min(x0, n.x - half); x1 = Math.max(x1, n.x + half);
+        y0 = Math.min(y0, n.y - radius(n) - EDGE); y1 = Math.max(y1, n.y + radius(n) + (labelled(n) ? 22 : 0) + EDGE);
+      }
+      const s = Math.min(1, width / Math.max(x1 - x0, 1), (height - top - bottom) / Math.max(y1 - y0, 1));
+      const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+      for (const n of nodes) { n.x = width / 2 + (n.x - cx) * s; n.y = midY + (n.y - cy) * s; }
+    }
+    clampAll();
+    return new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
+  };
+
+  // ── labels: placed once the layout has settled (a quadtree, never per frame or per hover) ──
+  const MIN_FIT = 0.6;                                   // the fit never zooms out past this
+  const labelScale = (k) => Math.min(1 / MIN_FIT, Math.max(1, 1 / k));
+  const overview = !state.retrieved.size;
+  const subject = (n) => overview || state.retrieved.has(n.id);
+  const SIDES = ["below", "above", "right", "left"];
+  const labelBox = (n, side, k) => {
+    const w = n.textWidth * k + 6, h = (fontSize + 6) * k, e = n.reach;
+    if (side === "below") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y + e.down + 3, y1: n.y + e.down + 3 + h };
+    if (side === "above") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y - e.up - 3 - h, y1: n.y - e.up - 3 };
+    if (side === "right") return { x0: n.x + e.right + 3, x1: n.x + e.right + 3 + w, y0: n.y - h / 2, y1: n.y + h / 2 };
+    return { x0: n.x - e.left - 3 - w, x1: n.x - e.left - 3, y0: n.y - h / 2, y1: n.y + h / 2 };
+  };
+  const outside = (q) => {
+    const w = q.x1 - q.x0, h = q.y1 - q.y0;
+    const inW = Math.max(0, Math.min(q.x1, width) - Math.max(q.x0, 0)), inH = Math.max(0, Math.min(q.y1, height - bottom) - Math.max(q.y0, top));
+    return w * h - inW * inH;
+  };
+  // priority when two names would overlap (the lower one hides; pointed-at and selected ones show anyway):
+  // cited, then selected, then modules by how many edges they have, then the rest by edges
+  const rank = (n) => (state.cited?.has(n.id) ? 0 : n.id === state.selected ? 1 : isModule(n) ? 2 : 3);
+  const byPriority = (a, b) => rank(a) - rank(b)
+    || Number(state.retrieved.has(b.id)) - Number(state.retrieved.has(a.id))
+    || (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity)
+    || (degree.get(b.id) || 0) - (degree.get(a.id) || 0);
   const groups = outlined ? d3.groups(nodes, (n) => n.file).filter(([, ns]) => ns.length > 1) : [];
-  const hull = hullLayer.selectAll("g").data(groups).join("g").attr("class", "hull");
-  hull.append("path");
-  hull.append("text").text(([file]) => file.split("/").pop());
-  hull.append("title").text(([file]) => file);
-  const hullLine = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5));
   const hullShape = (ns) => {
     const pts = [];
     for (const n of ns) {
@@ -2051,273 +2184,624 @@ function drawGraph() {
     const shape = d3.polygonHull(pts);
     return shape && { shape, top: shape.reduce((m, p) => (p[1] < m[1] ? p : m)) };
   };
-  const drawHulls = () => hull.each(function outline([, ns]) {
-    const h = hullShape(ns);
-    const g = d3.select(this);
-    g.select("path").attr("d", h ? hullLine(h.shape) : null);
-    if (h) g.select("text").attr("x", h.top[0]).attr("y", h.top[1] - 5);
-  });
-
+  const nameBox = (x, y, text, k) => {
+    const w = textWidth(text, font) * k + 8, h = (fontSize + 5) * k;
+    return { x0: x - w / 2, x1: x + w / 2, y0: y - h, y1: y + 3 };
+  };
+  const hiddenFiles = new Set();
+  const hiddenRings = new Set();
+  /** Sides and hidden flags for every name (n.side, n.collides; quiet names: n.hide on hover, n.hideZoom zoomed in). */
+  const placeAll = (k) => {
+    const dots = boxIndex();
+    for (const n of nodes) {
+      const e = n.reach;
+      dots.add({ id: n.id, x0: n.x - e.left - 1, x1: n.x + e.right + 1, y0: n.y - e.up - 1, y1: n.y + e.down + 1 });
+    }
+    const placed = boxIndex(), zoomed = boxIndex();
+    for (const n of nodes.filter(labelled).sort(byPriority)) {
+      const kk = subject(n) ? labelScale(k) : 1;
+      let best = null;
+      for (const side of SIDES) {
+        const q = labelBox(n, side, kk);
+        const names = placed.overlap(q), covered = dots.overlap(q, n.id), area = names * 4 + covered + outside(q);
+        if (!best || area < best.area) best = { side, q, area, names, covered };
+        if (area === 0) break;
+      }
+      n.side = best.side;
+      n.collides = best.names > 0 || (best.covered > 6 && rank(n) > 1);
+      if (!n.collides) { placed.add(best.q); zoomed.add(best.q); }
+    }
+    for (const n of nodes.filter((m) => !labelled(m)).sort(byPriority)) {
+      let best = null;
+      for (const side of SIDES) {
+        const q = labelBox(n, side, 1);
+        const area = placed.overlap(q) + outside(q);
+        if (!best || area < best.area) best = { side, q, area };
+        if (area === 0) break;
+      }
+      n.side = best.side;
+      n.hide = best.area > 0;                                    // shown on hover only if it covers no name
+      n.hideZoom = n.hide || zoomed.overlap(best.q) > 0;         // zoomed in, also no other quiet name
+      if (!n.hideZoom) zoomed.add(best.q);
+    }
+    // file and ring names rank lowest: one that would cover a node's name, a larger file's name or a dot steps aside
+    hiddenFiles.clear();
+    hiddenRings.clear();
+    const fileNames = boxIndex();
+    for (const [file, ns] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
+      const h = hullShape(ns);
+      if (!h) continue;
+      const q = nameBox(h.top[0], h.top[1] - 5, file.split("/").pop(), Math.max(1, 1 / k));
+      if (placed.overlap(q) > 0 || fileNames.overlap(q) > 0 || dots.overlap(q) > 12) hiddenFiles.add(file);
+      else fileNames.add(q);
+    }
+    if (rings) {
+      for (const i of new Set(nodes.map(ringIndex))) {
+        if (placed.overlap(nameBox(width / 2, midY - ringR(i) - 6, RING_NAMES[i], Math.max(1, 1 / k))) > 0) hiddenRings.add(i);
+      }
+    }
+  };
+  /** The scene's bounding box at zoom k (nodes, placed names, file outlines, rings), from the numbers alone. */
+  const sceneBox = (k) => {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    const add = (b) => { x0 = Math.min(x0, b.x0); x1 = Math.max(x1, b.x1); y0 = Math.min(y0, b.y0); y1 = Math.max(y1, b.y1); };
+    for (const n of nodes) {
+      const e = n.reach;
+      add({ x0: n.x - e.left - 5, x1: n.x + e.right + 5, y0: n.y - e.up - 5, y1: n.y + e.down + 5 });
+      if (labelled(n) && !n.collides) add(labelBox(n, n.side || "below", subject(n) ? labelScale(k) : 1));
+    }
+    for (const [file, ns] of groups) {
+      const h = hullShape(ns);
+      if (!h) continue;
+      for (const [x, y] of h.shape) add({ x0: x, x1: x, y0: y, y1: y });
+      if (!hiddenFiles.has(file)) add(nameBox(h.top[0], h.top[1] - 5, file.split("/").pop(), Math.max(1, 1 / k)));
+    }
+    if (rings) {
+      for (const i of new Set(nodes.map(ringIndex))) {
+        add({ x0: width / 2 - ringR(i), x1: width / 2 + ringR(i), y0: midY - ringR(i), y1: midY + ringR(i) });
+        if (!hiddenRings.has(i)) add(nameBox(width / 2, midY - ringR(i) - 6, RING_NAMES[i], Math.max(1, 1 / k)));
+      }
+    }
+    return { x0, x1, y0, y1 };
+  };
+  const room = height - top - bottom;
+  const SIDE_MARGIN = 10;
+  const fitTransform = () => {
+    let scale = 1, box = sceneBox(1);
+    for (let i = 0; i < 4; i++) {
+      box = sceneBox(scale);
+      const next = Math.min(1.5, (width - 2 * SIDE_MARGIN) / Math.max(box.x1 - box.x0, 1), room / Math.max(box.y1 - box.y0, 1));
+      const settled = Math.abs(next - scale) < 0.005;
+      scale = next;
+      if (settled) break;
+    }
+    const cx = (box.x0 + box.x1) / 2, cy = (box.y0 + box.y1) / 2;
+    return { scale, transform: d3.zoomIdentity.translate(width / 2, top + room / 2).scale(scale).translate(-cx, -cy) };
+  };
+  const dismissHint = () => {
+    if (state.hintDone) return;
+    state.hintDone = true;
+    hint.textContent = "";
+    hint.classList.remove("caption");
+  };
   // calls curve gently (a call each way bows apart); arrowheads stop at the node's edge
-  const curve = (l) => {
+  const curvePoints = (l) => {
     const s = l.source, t = l.target;
     const dx = t.x - s.x, dy = t.y - s.y;
     const bend = l.type === "member" ? 0 : 0.1;
     const cx = (s.x + t.x) / 2 - dy * bend, cy = (s.y + t.y) / 2 + dx * bend;
     const ex = t.x - cx, ey = t.y - cy, len = Math.hypot(ex, ey) || 1;
     const back = l.type === "calls" || l.type === "bridge" ? radius(t) + 2.5 : 0;
-    return `M${s.x},${s.y}Q${cx},${cy} ${t.x - (ex / len) * back},${t.y - (ey / len) * back}`;
+    return [s.x, s.y, cx, cy, t.x - (ex / len) * back, t.y - (ey / len) * back];
   };
-  const render = () => {
-    link.attr("d", curve);
-    flow.attr("d", curve);
-    node.attr("transform", (n) => `translate(${n.x},${n.y})`);
-    if (outlined) drawHulls();
-  };
-  const remember = () => { for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y }); };
+  const keyOf = (l) => pairKey(nodeId(l.source), nodeId(l.target));
+  const onTrail = (l) => trails.has(keyOf(l));
+  const order = [...nodes].sort((a, b) => (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity)
+    || labelText(a).localeCompare(labelText(b)));
 
-  // ── pointing: a node's calls stay, the rest steps back; its path flows ──
-  let pointed = null;                                  // the hovered node: its label outranks all but cited ones
-  const highlight = (id) => {
-    if (id === null || id === undefined || !byId.has(id)) {
-      el.classList.remove("hovering");
-      node.attr("data-lit", null);
-      link.attr("data-lit", null).classed("on-path", false);
-      hull.attr("data-lit", null);
-      flow.classed("flowing", false);
-      if (pointed !== null) { pointed = null; placeLabels(d3.zoomTransform(el).k); }
-      return;
-    }
-    const near = related.get(id);
-    const path = trailOf(id);
-    el.classList.add("hovering");
-    node.attr("data-lit", (n) => (n.id === id ? "self" : near.has(n.id) ? "near" : path.ids.has(n.id) ? "path" : null));
-    link.attr("data-lit", (l) => (l.type === "member" ? null : nodeId(l.source) === id ? "out" : nodeId(l.target) === id ? "in" : null))
-      .classed("on-path", (l) => path.keys.has(keyOf(l)));
-    const file = byId.get(id).file;
-    hull.attr("data-lit", ([f]) => (f === file ? "" : null));
-    flow.classed("flowing", (l) => path.keys.has(keyOf(l)));
-    pointed = id;
-    placeLabels(d3.zoomTransform(el).k);
-    placeQuiet(new Set([id, ...near, ...path.ids]), { hideOverlaps: true });
-  };
-  // the answer's paths flow once when it is first shown
-  let flowTimer = null;
-  const playTrails = () => {
-    if (!trailLinks.length || calm()) return;
-    flow.classed("flowing", true);
-    clearTimeout(flowTimer);
-    flowTimer = setTimeout(() => { if (!el.classList.contains("hovering")) flow.classed("flowing", false); }, 2400);
+  /** Positions known: names placed, then the scene drawn (SVG, or a canvas for big graphs). */
+  const show = (finals, fresh) => {
+    for (const n of nodes) Object.assign(n, finals.get(n.id));
+    for (const l of links) { l.source = byId.get(nodeId(l.source)); l.target = byId.get(nodeId(l.target)); }
+    placeAll(1);
+    let target = fitTransform();
+    if (target.scale < 0.98) { placeAll(target.scale); target = fitTransform(); }
+    for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y });
+    (useCanvas ? canvasScene : svgScene)(finals, target, fresh);
   };
 
-  // ── camera ──
-  const room = height - top - bottom;
-  const SIDE_MARGIN = 10;
-  const fitTransform = () => {
-    // the scene as drawn (nodes, placed labels, file names, rings) is measured, not estimated, so
-    // nothing is clipped; labels grow when zoomed out, so refit until the scale and their size agree
-    render();
-    let scale = 1, box = root.node().getBBox();
-    for (let i = 0; i < 4; i++) {
-      el.style.setProperty("--label-scale", String(labelScale(scale)));
-      el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / scale)));
-      box = root.node().getBBox();
-      const next = Math.min(1.5, (width - 2 * SIDE_MARGIN) / Math.max(box.width, 1), room / Math.max(box.height, 1));
-      const settled = Math.abs(next - scale) < 0.005;
-      scale = next;
-      if (settled) break;
+  // ── the SVG scene (up to CANVAS_LIMIT nodes) ──────────────────────────────
+  const svgScene = (finals, target) => {
+    canvas.hidden = true;
+    el.hidden = false;
+    el.classList.toggle("overview", overview);
+    el.classList.remove("hovering", "zoomed-in", "zoomed-out");
+    // arrowheads coloured by CSS, so a theme change needs no redraw
+    if (svg.select("defs").empty()) {
+      const defs = svg.append("defs");
+      for (const id of ["arrow", "arrow-lit", "arrow-trail", "arrow-bridge"]) {
+        defs.append("marker").attr("id", id).attr("viewBox", "0 -4 8 8").attr("refX", 8)
+          .attr("markerWidth", 6).attr("markerHeight", 6).attr("orient", "auto")
+          .append("path").attr("d", "M0,-4L8,0L0,4");
+      }
     }
-    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
-    return { scale, transform: d3.zoomIdentity.translate(width / 2, top + room / 2).scale(scale).translate(-cx, -cy) };
-  };
-  const camera = (transform, ms) => {
-    if (ms && !calm()) svg.transition().duration(ms).ease(d3.easeExpOut).call(zoom.transform, transform);
-    else svg.call(zoom.transform, transform);
-  };
-  const fit = (animate) => camera(fitTransform().transform, animate ? 420 : 0);
-  const zoomBy = (k) => (calm() ? svg.call(zoom.scaleBy, k) : svg.transition().duration(220).ease(d3.easeExpOut).call(zoom.scaleBy, k));
-  const zoomTo = (ids) => {
-    const ns = ids.map((id) => byId.get(id)).filter(Boolean);
-    const x0 = Math.min(...ns.map((n) => n.x)) - 60, x1 = Math.max(...ns.map((n) => n.x)) + 60;
-    const y0 = Math.min(...ns.map((n) => n.y)) - 40, y1 = Math.max(...ns.map((n) => n.y)) + 60;
-    const k = Math.min(2.2, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / room));
-    camera(d3.zoomIdentity.translate(width / 2, top + room / 2).scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2), 420);
-  };
+    // the old scene steps back while the new one takes its place
+    const old = svg.selectAll("g.scene").attr("aria-hidden", "true").style("pointer-events", "none");
+    if (moving && !old.empty()) old.transition().duration(200).style("opacity", 0).remove();
+    else old.remove();
+    if (!Number.isFinite(d3.zoomTransform(el).k)) el.__zoom = d3.zoomIdentity;
+    const root = svg.append("g").attr("class", "scene").attr("transform", d3.zoomTransform(el));
+    const ringLayer = root.append("g").attr("class", "rings").attr("aria-hidden", "true");
+    const hullLayer = root.append("g").attr("class", "hulls").attr("aria-hidden", "true");
+    const linkLayer = root.append("g").attr("class", "links").attr("aria-hidden", "true");
+    const trailLayer = root.append("g").attr("class", "trails").attr("aria-hidden", "true");
+    const nodeLayer = root.append("g").attr("class", "nodes");
 
-  // labels go below their node unless that covers a label already placed; then above,
-  // right or left (cited first, then the answer's code by S-number, then the rest)
-  const SIDES = ["below", "above", "right", "left"];
-  // how far a node's symbol reaches from its centre on each side (a diamond is taller than its radius)
-  const reach = (n) => n.reach || { up: radius(n), down: radius(n), left: radius(n), right: radius(n) };
-  // a label's box as drawn: its measured width (else ~7.7px a character) and 18px a line at 12px, plus a margin
-  const labelBox = (n, side, k) => {
-    const w = (n.textWidth || (sidText(n) + labelText(n)).length * 7.7) * k + 6, h = 18 * k, e = reach(n);
-    if (side === "below") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y + e.down + 3, y1: n.y + e.down + 3 + h };
-    if (side === "above") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y - e.up - 3 - h, y1: n.y - e.up - 3 };
-    if (side === "right") return { x0: n.x + e.right + 3, x1: n.x + e.right + 3 + w, y0: n.y - h / 2, y1: n.y + h / 2 };
-    return { x0: n.x - e.left - 3 - w, x1: n.x - e.left - 3, y0: n.y - h / 2, y1: n.y + h / 2 };
-  };
-  const overlap = (q, boxes) => boxes.reduce((sum, p) => sum + Math.max(0, Math.min(q.x1, p.x1) - Math.max(q.x0, p.x0))
-    * Math.max(0, Math.min(q.y1, p.y1) - Math.max(q.y0, p.y0)), 0);
-  // a side that would leave the canvas counts as covering something
-  const outside = (q) => {
-    const w = q.x1 - q.x0, h = q.y1 - q.y0;
-    const inW = Math.max(0, Math.min(q.x1, width) - Math.max(q.x0, 0)), inH = Math.max(0, Math.min(q.y1, height - bottom) - Math.max(q.y0, top));
-    return w * h - inW * inH;
-  };
-  const sideFor = (n, k, boxes) => {
-    let best = null;
-    for (const side of SIDES) {
-      const q = labelBox(n, side, k), area = overlap(q, boxes) + outside(q);
-      if (!best || area < best.area) best = { side, q, area };
-      if (area === 0) break;
+    const zoom = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on("zoom", (e) => {
+      if (e.sourceEvent) dismissHint();                    // the user's own pan or zoom, not a fit
+      root.attr("transform", e.transform);
+      el.style.setProperty("--label-scale", String(labelScale(e.transform.k)));
+      el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / e.transform.k)));
+      // zoomed out, only the answer's own labels stay; zoomed in, every function shows its name (as placed)
+      el.classList.toggle("zoomed-out", e.transform.k < 0.96);
+      el.classList.toggle("zoomed-in", e.transform.k >= ZOOMED_IN);
+    });
+    svg.call(zoom).on("dblclick.zoom", null);
+    svg.on("dblclick.fit", (e) => { if (e.target === el) fit(true); });   // double-click the background: fit
+    svg.on("pointerdown.hint keydown.hint", dismissHint);
+
+    if (rings) {
+      const used = [...new Set(nodes.map(ringIndex))].sort();
+      const guide = ringLayer.selectAll("g").data(used).join("g");
+      guide.append("circle").attr("cx", width / 2).attr("cy", midY).attr("r", ringR);
+      guide.append("text").attr("x", width / 2).attr("y", (i) => midY - ringR(i) - 6).text((i) => RING_NAMES[i])
+        .classed("collide", (i) => hiddenRings.has(i));
     }
-    return best;
-  };
-  const setSide = (sel) => {
-    const e = (n) => reach(n);
-    sel.attr("x", (n) => (n.side === "right" ? e(n).right + 4 : n.side === "left" ? -e(n).left - 4 : 0))
-      .attr("y", (n) => (n.side === "below" ? e(n).down + 4 : n.side === "above" ? -e(n).up - 4 : 0))
+    const hull = hullLayer.selectAll("g").data(groups).join("g").attr("class", "hull");
+    hull.append("path");
+    hull.append("text").text(([file]) => file.split("/").pop()).classed("collide", ([file]) => hiddenFiles.has(file));
+    hull.append("title").text(([file]) => file);
+    const hullLine = d3.line().curve(d3.curveCatmullRomClosed.alpha(0.5));
+    const drawHulls = () => hull.each(function outline([, ns]) {
+      const h = hullShape(ns);
+      const g = d3.select(this);
+      g.select("path").attr("d", h ? hullLine(h.shape) : null);
+      if (h) g.select("text").attr("x", h.top[0]).attr("y", h.top[1] - 5);
+    });
+
+    // confidence comes from the full graph: a link matched by name (not resolved) is drawn dashed
+    const confidence = new Map(graph.links.map((l) => [`${nodeId(l.source)}>${nodeId(l.target)}:${l.type}`, l.confidence]));
+    const nameMatched = (l) => (l.confidence || confidence.get(`${nodeId(l.source)}>${nodeId(l.target)}:${l.type}`)) === "name_match";
+    const bridgeOf = new Map(graph.links.filter((l) => l.type === "bridge").map((l) => [`${nodeId(l.source)}>${nodeId(l.target)}`, l]));
+    const link = linkLayer.selectAll("path").data(links).join("path")
+      .attr("class", (l) => `link ${l.type}${onTrail(l) ? " trail" : ""}${nameMatched(l) ? " name-match" : ""}`)
+      .attr("data-mechanism", (l) => (l.type === "bridge" ? l.mechanism || bridgeOf.get(`${nodeId(l.source)}>${nodeId(l.target)}`)?.mechanism : null))
+      // a path edge takes the relation of the source it leads to
+      .attr("data-relation", (l) => (onTrail(l) ? relationOfNode(trails.get(keyOf(l)).to) : null));
+    // pointing at a bridge shows its evidence: the matched strings and both file:line locations
+    link.filter((l) => l.type === "bridge").append("title").text((l) => {
+      const b = l.evidence ? l : bridgeOf.get(`${nodeId(l.source)}>${nodeId(l.target)}`);
+      return (b && bridgeEvidence(b)) || "Crosses a language boundary";
+    });
+    const trailLinks = links.filter(onTrail);
+    const flow = trailLayer.selectAll("path").data(trailLinks).join("path").attr("class", "trail-flow")
+      // the dots travel the way retrieval walked, whichever way the call points
+      .attr("data-dir", (l) => (nodeId(l.source) === trails.get(keyOf(l)).from ? "fwd" : "rev"));
+
+    let timer = null;
+    let live = null;                                      // a simulation only while a node is dragged
+    const node = nodeLayer.selectAll("g").data(nodes).join("g")
+      .attr("class", nodeClass)
+      .attr("data-hop", hopOf)
+      .attr("data-kind", (n) => n.kind || null)
+      .attr("data-relation", (n) => relationOfNode(n.id))
+      .attr("data-language", (n) => n.language || null)
+      .classed("selected", (n) => n.id === state.selected)
+      .attr("role", "button")
+      .attr("aria-label", nodeName)
+      .attr("tabindex", (n) => (n === order[0] ? 0 : -1))
+      .call(d3.drag()
+        .on("start", (e, d) => {
+          if (timer) finish();
+          live ||= makeSim().on("tick", () => { clampAll(); render(); }).on("end", settledAfterDrag);
+          if (!e.active) live.alphaTarget(0.2).restart();
+          d.fx = d.x; d.fy = d.y;
+        })
+        .on("drag", (e, d) => { [d.fx, d.fy] = bounded(d, e.x, e.y); })
+        .on("end", (e, d) => { if (!e.active) live.alphaTarget(0); d.fx = null; d.fy = null; }))
+      .on("click", (e, d) => { focusNode(d, false); activateNode(d); })
+      .on("dblclick", (e, d) => { e.stopPropagation(); zoomTo([d.id, ...related.get(d.id)]); })
+      .on("mouseenter.lit focus.lit", (e, d) => highlight(d.id))
+      .on("mouseleave.lit blur.lit", () => highlight(null))
+      .on("keydown", (e, d) => {
+        const i = order.indexOf(d);
+        const to = { ArrowRight: i + 1, ArrowDown: i + 1, ArrowLeft: i - 1, ArrowUp: i - 1, Home: 0, End: order.length - 1 }[e.key];
+        if (to !== undefined) {
+          e.preventDefault();
+          focusNode(order[(to + order.length) % order.length], true);
+        } else if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          activateNode(d);
+        } else if (e.key === "+" || e.key === "=") { e.preventDefault(); zoomBy(1.5); }
+        else if (e.key === "-" || e.key === "_") { e.preventDefault(); zoomBy(1 / 1.5); }
+        else if (e.key === "0") { e.preventDefault(); fit(true); }
+      });
+    node.append("path").attr("class", "ring").attr("d", (n) => symbolPath(n.kind, radius(n) + 4));
+    node.append("path").attr("class", "dot").attr("d", (n) => symbolPath(n.kind, radius(n)));
+    node.append("title").text((n) => [n.label || n.name || n.file, formatLocation(n),
+      n.language ? LANGUAGE_LABELS[n.language] || n.language : "", collapsed && n.members ? plural(n.members, "symbol") : ""]
+      .filter(Boolean).join("\n"));
+    const label = node.filter(labelled).append("text").attr("class", "label");
+    label.filter((n) => state.sids.has(n.id)).append("tspan").attr("class", "label-sid").text(sidText);
+    label.append("tspan").text(labelText);
+    // every other node keeps a quiet label, shown zoomed in or while it or a neighbour is pointed at
+    const quiet = node.filter((n) => !labelled(n)).append("text").attr("class", "label quiet").text(labelText);
+    const setSide = (sel) => sel
+      .attr("x", (n) => (n.side === "right" ? n.reach.right + 4 : n.side === "left" ? -n.reach.left - 4 : 0))
+      .attr("y", (n) => (n.side === "below" ? n.reach.down + 4 : n.side === "above" ? -n.reach.up - 4 : 0))
       .attr("text-anchor", (n) => (n.side === "right" ? "start" : n.side === "left" ? "end" : "middle"))
       .attr("dominant-baseline", (n) => (n.side === "below" ? "hanging" : n.side === "above" ? "auto" : "central"));
-  };
-  // label priority when two would overlap (the lower one hides): cited, then the pointed-at or
-  // selected node, then modules by how many edges they have, then the rest by edges
-  const rank = (n) => (state.cited?.has(n.id) ? 0 : n.id === pointed || n.id === state.selected ? 1 : isModule(n) ? 2 : 3);
-  const byPriority = (a, b) => rank(a) - rank(b)
-    || Number(state.retrieved.has(b.id)) - Number(state.retrieved.has(a.id))
-    || (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity)
-    || (degree.get(b.id) || 0) - (degree.get(a.id) || 0);
-  // names revealed by pointing or zooming go where they cover the fewest labels already showing;
-  // one that would still cover another stays hidden (the pointed-at node's own name always shows)
-  const placeQuiet = (ids, { hideOverlaps = false } = {}) => {
-    const k = d3.zoomTransform(el).k;
-    const boxes = nodes.filter((n) => labelled(n) && !n.collides).map((n) => labelBox(n, n.side || "below", subject(n) ? labelScale(k) : 1));
-    const reveal = nodes.filter((n) => ids.has(n.id) && !labelled(n)).sort(byPriority);
-    for (const n of reveal) {
-      const best = sideFor(n, Math.max(1, 1 / k), boxes);
-      n.side = best.side;
-      n.hidden = hideOverlaps && best.area > 0 && n.id !== pointed;
-      if (!n.hidden) boxes.push(best.q);
-    }
-    const quiet = node.filter((n) => ids.has(n.id) && !labelled(n)).select("text.quiet");
-    setSide(quiet);
-    quiet.classed("hide", (n) => Boolean(n.hidden));
-  };
-  // the dots: a label avoids covering other nodes where it can (they never hide it)
-  const dotBoxes = () => nodes.map((n) => {
-    const e = reach(n);
-    return { id: n.id, x0: n.x - e.left - 1, x1: n.x + e.right + 1, y0: n.y - e.up - 1, y1: n.y + e.down + 1 };
-  });
-  const placeLabels = (scale) => {
-    const placed = [];
-    const dots = dotBoxes();
-    for (const n of nodes.filter(labelled).sort(byPriority)) {
-      const k = subject(n) ? labelScale(scale) : 1;
-      const others = dots.filter((d) => d.id !== n.id);
-      let best = null;
-      for (const side of SIDES) {
-        const q = labelBox(n, side, k);
-        const labels = overlap(q, placed), covered = overlap(q, others), area = labels * 4 + covered + outside(q);
-        if (!best || area < best.area) best = { side, q, area, labels, covered };
-        if (area === 0) break;
-      }
-      n.side = best.side;
-      // it would cover a higher-priority name, or sit under another node on every side: hidden
-      // (cited, pointed-at and selected names always show)
-      n.collides = best.labels > 0 || (best.covered > 6 && rank(n) > 1);
-      if (!n.collides) placed.push(best.q);
-    }
-    setSide(label);
-    label.classed("collide", (n) => Boolean(n.collides));
-    node.filter((n) => rank(n) <= 1).raise();         // cited and selected names paint above other nodes
-    // file and ring names rank lowest: one that would cover a node's name steps aside
-    const named = (x, y, text, perChar) => {
-      const k = Math.max(1, 1 / scale), w = text.length * perChar * k + 8, h = 17 * k;
-      return { x0: x - w / 2, x1: x + w / 2, y0: y - h, y1: y + 3 };
+    const applyNames = () => {
+      setSide(label).classed("collide", (n) => Boolean(n.collides));
+      setSide(quiet).classed("hide", (n) => Boolean(n.hide)).classed("hide-zoom", (n) => Boolean(n.hideZoom));
+      hull.select("text").classed("collide", ([file]) => hiddenFiles.has(file));
+      ringLayer.selectAll("text").classed("collide", (i) => hiddenRings.has(i));
+      node.filter((n) => rank(n) <= 1).raise();             // cited and selected names paint above other nodes
     };
-    // (larger files first; a file name also gives way to another file's name and to the dots)
-    const fileNames = [...placed];
-    const hidden = new Set();
-    for (const [file, ns] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
-      const h = hullShape(ns);
-      if (!h) continue;
-      const q = named(h.top[0], h.top[1] - 5, file.split("/").pop(), 7.7);
-      if (overlap(q, fileNames) > 0 || overlap(q, dots) > 12) hidden.add(file);
-      else fileNames.push(q);
-    }
-    hull.select("text").classed("collide", ([file]) => hidden.has(file));
-    ringText.classed("collide", (i) => overlap(named(width / 2, midY - ringR(i) - 6, RING_NAMES[i], 6.8), placed) > 0);
-  };
+    applyNames();
 
-  // ── the morph: final positions are known; the scene glides there from where it was ──
-  const finals = new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
-  // measure each label once at its base size (the camera sets the scale again right after)
-  el.style.setProperty("--label-scale", "1");
-  el.style.setProperty("--label-scale-all", "1");
-  label.each(function measure(n) { n.textWidth = this.getComputedTextLength() || 0; });
-  node.select("path.dot").each(function measure(n) {
-    const b = this.getBBox();
-    if (b.width) n.reach = { up: -b.y, down: b.y + b.height, left: -b.x, right: b.x + b.width };
-  });
-  placeLabels(1);
-  let target = fitTransform();
-  placeLabels(target.scale);
-  target = fitTransform();
-  remember();
-  const live = () => { sim.on("tick", () => { clampAll(); render(); }).on("end", remember); };
-  const finish = () => {
-    timer?.stop();
-    timer = null;
-    for (const n of nodes) Object.assign(n, finals.get(n.id));
-    node.style("opacity", null);
-    render();
-    live();
-  };
-  const glide = moving && start.size > 0;
-  if (glide) {
-    for (const n of nodes) {
-      const s = start.get(n.id);
-      if (s) Object.assign(n, s);
+    const render = () => {
+      link.attr("d", (l) => { const [a, b, c, d, e, f] = curvePoints(l); return `M${a},${b}Q${c},${d} ${e},${f}`; });
+      flow.attr("d", (l) => { const [a, b, c, d, e, f] = curvePoints(l); return `M${a},${b}Q${c},${d} ${e},${f}`; });
+      node.attr("transform", (n) => `translate(${n.x},${n.y})`);
+      if (outlined) drawHulls();
+    };
+    const remember = () => { for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y }); };
+    function settledAfterDrag() {                          // after a drag: the new layout, its names placed once
+      remember();
+      cacheLayout(layoutKey, new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }])));
+      placeAll(d3.zoomTransform(el).k);
+      applyNames();
     }
-    // new nodes grow out of a neighbour (or simply appear where they belong)
-    node.filter((n) => !start.has(n.id) || n.born).style("opacity", 0)
-      .transition().delay(140).duration(MORPH_MS - 140).ease(d3.easeExpOut).style("opacity", 1);
-    render();
-    timer = d3.timer((elapsed) => {
-      const t = Math.min(1, elapsed / MORPH_MS), e = d3.easeExpOut(t);
-      for (const n of nodes) {
-        const s = start.get(n.id), f = finals.get(n.id);
-        if (s) { n.x = s.x + (f.x - s.x) * e; n.y = s.y + (f.y - s.y) * e; }
-      }
-      render();
-      if (t === 1) finish();
+
+    // ── pointing: only the pointed-at node, its neighbours and their edges change, once per frame ──
+    const nodeEls = new Map();
+    node.each(function keep(n) { nodeEls.set(n.id, this); });
+    const linksOf = new Map(nodes.map((n) => [n.id, []]));
+    const linksByKey = new Map();
+    link.each(function keep(l) {
+      linksOf.get(l.source.id)?.push([this, l, "out"]);
+      linksOf.get(l.target.id)?.push([this, l, "in"]);
+      const k = keyOf(l);
+      (linksByKey.get(k) || linksByKey.set(k, []).get(k)).push(this);
     });
-    camera(target.transform, MORPH_MS);
-  } else {
-    render();
-    camera(target.transform, 0);
-    live();
-  }
+    const flowsByKey = new Map();
+    flow.each(function keep(l) { flowsByKey.set(keyOf(l), this); });
+    const hullsByFile = new Map();
+    hull.each(function keep([file]) { hullsByFile.set(file, this); });
+    let lit = [], wanted = null, litFrame = 0;
+    const applyHighlight = () => {
+      litFrame = 0;
+      for (const [x, attr, cls] of lit) { if (attr) x.removeAttribute(attr); if (cls) x.classList.remove(cls); }
+      lit = [];
+      const id = wanted;
+      if (id === null || !byId.has(id)) { el.classList.remove("hovering"); return; }
+      const mark = (x, attr, value, cls) => {
+        if (!x) return;
+        if (attr) x.setAttribute(attr, value);
+        if (cls) x.classList.add(cls);
+        lit.push([x, attr, cls]);
+      };
+      const near = related.get(id);
+      const path = trailOf(id);
+      mark(nodeEls.get(id), "data-lit", "self");
+      for (const m of near) mark(nodeEls.get(m), "data-lit", "near");
+      for (const m of path.ids) if (m !== id && !near.has(m)) mark(nodeEls.get(m), "data-lit", "path");
+      for (const [x, l, dir] of linksOf.get(id) || []) if (l.type !== "member") mark(x, "data-lit", dir);
+      for (const k of path.keys) {
+        for (const x of linksByKey.get(k) || []) mark(x, null, null, "on-path");
+        mark(flowsByKey.get(k), null, null, "flowing");
+      }
+      if (outlined) mark(hullsByFile.get(byId.get(id).file), "data-lit", "");
+      el.classList.add("hovering");
+    };
+    const highlight = (id) => {
+      wanted = id ?? null;
+      if (!litFrame) litFrame = requestAnimationFrame(applyHighlight);
+    };
+    // the answer's paths flow once when it is first shown
+    let flowTimer = null;
+    const playTrails = () => {
+      if (!trailLinks.length || calm()) return;
+      flow.classed("flowing", true);
+      clearTimeout(flowTimer);
+      flowTimer = setTimeout(() => { if (!el.classList.contains("hovering")) flow.classed("flowing", false); }, 2400);
+    };
 
-  graphView = {
-    node, byId, nodes, links, related, highlight, fit, zoomBy, playTrails, collapsed,
-    relabel: () => placeLabels(d3.zoomTransform(el).k),            // the selection changed: it outranks the rest
-    stop: () => {
+    // ── camera ──
+    const camera = (transform, ms) => {
+      if (ms && !calm()) svg.transition().duration(ms).ease(d3.easeExpOut).call(zoom.transform, transform);
+      else svg.call(zoom.transform, transform);
+    };
+    const fit = (animate) => camera(fitTransform().transform, animate ? 420 : 0);
+    const zoomBy = (k) => (calm() ? svg.call(zoom.scaleBy, k) : svg.transition().duration(220).ease(d3.easeExpOut).call(zoom.scaleBy, k));
+    const zoomTo = (ids) => {
+      const ns = ids.map((id) => byId.get(id)).filter(Boolean);
+      const x0 = Math.min(...ns.map((n) => n.x)) - 60, x1 = Math.max(...ns.map((n) => n.x)) + 60;
+      const y0 = Math.min(...ns.map((n) => n.y)) - 40, y1 = Math.max(...ns.map((n) => n.y)) + 60;
+      const k = Math.min(2.2, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / room));
+      camera(d3.zoomIdentity.translate(width / 2, top + room / 2).scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2), 420);
+    };
+
+    // ── the morph: final positions are known; the scene glides there from where it was ──
+    const finish = () => {
       timer?.stop();
       timer = null;
-      clearTimeout(flowTimer);
-      clearTimeout(zoomTimer);
-      sim.stop();
-      svg.interrupt();
-      remember();                                       // a view interrupted mid-glide continues from here
-    },
+      for (const n of nodes) Object.assign(n, finals.get(n.id));
+      node.style("opacity", null);
+      render();
+    };
+    const glide = moving && start.size > 0;
+    if (glide) {
+      for (const n of nodes) {
+        const s = start.get(n.id);
+        if (s) Object.assign(n, s);
+      }
+      // new nodes grow out of a neighbour (or simply appear where they belong)
+      node.filter((n) => !start.has(n.id) || n.born).style("opacity", 0)
+        .transition().delay(140).duration(MORPH_MS - 140).ease(d3.easeExpOut).style("opacity", 1);
+      render();
+      timer = d3.timer((elapsed) => {
+        const t = Math.min(1, elapsed / MORPH_MS), e = d3.easeExpOut(t);
+        for (const n of nodes) {
+          const s = start.get(n.id), f = finals.get(n.id);
+          if (s) { n.x = s.x + (f.x - s.x) * e; n.y = s.y + (f.y - s.y) * e; }
+        }
+        render();
+        if (t === 1) finish();
+      });
+      camera(target.transform, MORPH_MS);
+    } else {
+      render();
+      camera(target.transform, 0);
+    }
+
+    graphView = {
+      key: sceneKey, layoutKey, width, height, node, byId, nodes, links, related, highlight, fit, zoomBy, playTrails, collapsed,
+      alive: () => root.node().isConnected && !el.hidden,
+      relabel: () => {},                                   // the selected node's name shows by CSS; nothing to place again
+      stop: () => {
+        timer?.stop();
+        timer = null;
+        live?.stop();
+        cancelAnimationFrame(litFrame);
+        clearTimeout(flowTimer);
+        svg.interrupt();
+        remember();                                       // a view interrupted mid-glide continues from here
+      },
+    };
+    afterDraw();
   };
-  // first sight of a written answer: its paths flow once
-  if (answer && state.cited && state.trailsShown !== state.answerTurn) {
-    state.trailsShown = state.answerTurn;
-    setTimeout(() => graphView?.playTrails(), glide ? MORPH_MS : 0);
+
+  // ── the canvas scene (over CANVAS_LIMIT nodes): drawn per frame, hit-tested with a quadtree ──
+  const canvasScene = (finals, target) => {
+    svg.selectAll("g.scene").remove();
+    el.hidden = true;
+    canvas.hidden = false;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(width * dpr);
+    canvas.height = Math.round(height * dpr);
+    canvas.style.width = `${width}px`;
+    canvas.style.height = `${height}px`;
+    canvas.setAttribute("aria-label", `Call graph, ${plural(nodes.length, "node")}. Use the arrow keys to move between functions and Enter to open one.`);
+    const ctx = canvas.getContext("2d");
+    const css = getComputedStyle(canvas);
+    const color = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+    const C = {
+      ink: color("--color-ink", "#222"), muted: color("--color-muted", "#777"), halo: color("--color-card", "#fff"),
+      calls: color("--cat-calls", "#999"), bridge: color("--cat-bridge", "#b0b"), accent: color("--color-accent", "#06c"),
+      hop: [color("--hop-0", "#06c"), color("--hop-1", "#39f"), color("--hop-2", "#7ad"), color("--hop-3", "#abd")],
+      none: color("--hop-none", "#999"), node: color("--color-ink-2", "#444"),
+    };
+    const family = font.split(" ").slice(2).join(" ");
+    const shapes = new Map();
+    const shapeOf = (n) => {
+      const key = `${n.kind}|${radius(n)}`;
+      if (!shapes.has(key)) shapes.set(key, new Path2D(symbolPath(n.kind, radius(n))));
+      return shapes.get(key);
+    };
+    const tree = d3.quadtree(nodes, (n) => n.x, (n) => n.y);
+    let transform = d3.zoomIdentity, hover = null, focused = 0, frame = 0, drawn = 0;
+    const fillOf = (n) => {
+      const hop = state.retrieved.get(n.id);
+      if (hop !== undefined) return C.hop[Math.min(hop, 3)];
+      return state.retrieved.size ? C.none : C.node;
+    };
+    const draw = () => {
+      frame = 0;
+      const k = transform.k;
+      const lit = hover === null ? null : related.get(hover);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      ctx.clearRect(0, 0, width, height);
+      ctx.save();
+      ctx.translate(transform.x, transform.y);
+      ctx.scale(k, k);
+      ctx.lineWidth = 1 / k;
+      if (rings) {
+        ctx.strokeStyle = C.muted;
+        ctx.globalAlpha = 0.35;
+        for (const i of new Set(nodes.map(ringIndex))) { ctx.beginPath(); ctx.arc(width / 2, midY, ringR(i), 0, Math.PI * 2); ctx.stroke(); }
+      }
+      for (const l of links) {
+        const on = lit && (l.source.id === hover || l.target.id === hover);
+        ctx.globalAlpha = lit ? (on ? 0.95 : 0.08) : onTrail(l) ? 0.9 : l.type === "member" ? 0.25 : 0.4;
+        ctx.strokeStyle = onTrail(l) ? C.accent : l.type === "bridge" ? C.bridge : on ? C.ink : C.calls;
+        ctx.lineWidth = (onTrail(l) || on ? 1.6 : 1) / Math.max(k, 0.5);
+        const [a, b, c, d, e, f] = curvePoints(l);
+        ctx.beginPath();
+        ctx.moveTo(a, b);
+        ctx.quadraticCurveTo(c, d, e, f);
+        ctx.stroke();
+      }
+      for (const n of nodes) {
+        const on = !lit || n.id === hover || lit.has(n.id);
+        ctx.globalAlpha = on ? 1 : 0.2;
+        ctx.fillStyle = fillOf(n);
+        ctx.translate(n.x, n.y);
+        ctx.fill(shapeOf(n));
+        if (n.id === state.selected || n.id === hover || (n === order[focused] && document.activeElement === canvas)) {
+          ctx.strokeStyle = C.ink;
+          ctx.lineWidth = 2 / k;
+          ctx.stroke(shapeOf(n));
+        }
+        ctx.translate(-n.x, -n.y);
+      }
+      // names: the placed ones; zoomed in, the quiet ones that fit; the pointed-at and selected always
+      const scaleAll = Math.max(1, 1 / k);
+      ctx.textBaseline = "middle";
+      ctx.lineJoin = "round";
+      for (const n of nodes) {
+        const forced = n.id === hover || n.id === state.selected;
+        const showIt = forced || (labelled(n) ? !n.collides && (k >= 0.96 || subject(n))
+          : (k >= ZOOMED_IN && !n.hideZoom) || (lit && lit.has(n.id) && !n.hide));
+        if (!showIt) continue;
+        const s = labelled(n) && subject(n) ? labelScale(k) : scaleAll;
+        const size = fontSize * s;
+        ctx.font = `${font.split(" ")[0]} ${size}px ${family}`;
+        const text = sidText(n) + labelText(n);
+        const e = n.reach;
+        const side = n.side || "below";
+        const x = side === "right" ? n.x + e.right + 4 : side === "left" ? n.x - e.left - 4 : n.x;
+        const y = side === "below" ? n.y + e.down + 4 + size / 2 : side === "above" ? n.y - e.up - 4 - size / 2 : n.y;
+        ctx.textAlign = side === "right" ? "left" : side === "left" ? "right" : "center";
+        ctx.globalAlpha = !lit || forced || lit.has(n.id) ? 1 : 0.3;
+        ctx.lineWidth = 3 * s;
+        ctx.strokeStyle = C.halo;
+        ctx.strokeText(text, x, y);
+        ctx.fillStyle = state.cited?.has(n.id) ? C.accent : C.ink;
+        ctx.fillText(text, x, y);
+      }
+      ctx.restore();
+      drawn += 1;
+    };
+    const request = () => { if (!frame) frame = requestAnimationFrame(draw); };
+    const zoom = d3.zoom().scaleExtent([0.1, 4]).on("zoom", (e) => {
+      if (e.sourceEvent) dismissHint();
+      transform = e.transform;
+      request();
+    });
+    const selection = d3.select(canvas).call(zoom).on("dblclick.zoom", null);
+    const listen = new AbortController();
+    const at = (event) => {
+      const [x, y] = transform.invert(d3.pointer(event, canvas));
+      return tree.find(x, y, 14 / Math.min(transform.k, 1)) || null;
+    };
+    let moveFrame = 0, lastMove = null;
+    canvas.addEventListener("mousemove", (event) => {
+      lastMove = event;
+      if (moveFrame) return;
+      moveFrame = requestAnimationFrame(() => {
+        moveFrame = 0;
+        const n = at(lastMove);
+        const id = n ? n.id : null;
+        if (id === hover) return;
+        hover = id;
+        canvas.style.cursor = n ? "pointer" : "";
+        const tip = n ? [n.label || n.name || n.file, formatLocation(n)].filter(Boolean).join("\n") : "";
+        if (tip) canvas.title = tip; else canvas.removeAttribute("title");    // never an empty tooltip
+        request();
+      });
+    }, { signal: listen.signal });
+    canvas.addEventListener("mouseleave", () => {
+      hover = null;
+      canvas.removeAttribute("title");
+      request();
+    }, { signal: listen.signal });
+    canvas.addEventListener("click", (event) => {
+      const n = at(event);
+      if (n) { focused = order.indexOf(n); activateNode(n); }
+    }, { signal: listen.signal });
+    canvas.addEventListener("dblclick", (event) => {
+      const n = at(event);
+      if (n) zoomTo([n.id, ...related.get(n.id)]); else fit(true);
+    }, { signal: listen.signal });
+    canvas.addEventListener("pointerdown", dismissHint, { signal: listen.signal });
+    canvas.addEventListener("keydown", (event) => {
+      const to = { ArrowRight: focused + 1, ArrowDown: focused + 1, ArrowLeft: focused - 1, ArrowUp: focused - 1, Home: 0, End: order.length - 1 }[event.key];
+      if (to !== undefined) {
+        event.preventDefault();
+        focused = (to + order.length) % order.length;
+        hover = order[focused].id;
+        request();
+      } else if (event.key === "Enter" || event.key === " ") { event.preventDefault(); activateNode(order[focused]); }
+      else if (event.key === "+" || event.key === "=") { event.preventDefault(); zoomBy(1.5); }
+      else if (event.key === "-" || event.key === "_") { event.preventDefault(); zoomBy(1 / 1.5); }
+      else if (event.key === "0") { event.preventDefault(); fit(true); }
+    }, { signal: listen.signal });
+    canvas.addEventListener("blur", () => { hover = null; request(); }, { signal: listen.signal });
+
+    const camera = (t, ms) => {
+      if (ms && !calm()) selection.transition().duration(ms).ease(d3.easeExpOut).call(zoom.transform, t);
+      else selection.call(zoom.transform, t);
+    };
+    const fit = (animate) => camera(fitTransform().transform, animate ? 420 : 0);
+    const zoomBy = (k) => (calm() ? selection.call(zoom.scaleBy, k) : selection.transition().duration(220).ease(d3.easeExpOut).call(zoom.scaleBy, k));
+    const zoomTo = (ids) => {
+      const ns = ids.map((id) => byId.get(id)).filter(Boolean);
+      const x0 = Math.min(...ns.map((n) => n.x)) - 60, x1 = Math.max(...ns.map((n) => n.x)) + 60;
+      const y0 = Math.min(...ns.map((n) => n.y)) - 40, y1 = Math.max(...ns.map((n) => n.y)) + 60;
+      const k = Math.min(2.2, 0.9 / Math.max((x1 - x0) / width, (y1 - y0) / room));
+      camera(d3.zoomIdentity.translate(width / 2, top + room / 2).scale(k).translate(-(x0 + x1) / 2, -(y0 + y1) / 2), 420);
+    };
+    camera(target.transform, 0);
+    draw();
+    canvas.classList.add("drawn");
+    // for tests and tools: where nodes are on screen now, and a signature that changes when the picture does
+    canvas.__graph = {
+      sig: () => `${transform}|${drawn}|${hover}`,
+      points: (n = 15) => nodes.filter((_, i) => i % Math.max(1, Math.floor(nodes.length / n)) === 0).slice(0, n)
+        .map((m) => transform.apply([m.x, m.y])),
+    };
+    const stub = { classed: () => { request(); return stub; }, attr: () => stub, filter: () => stub, style: () => stub, node: () => null, each: () => stub };
+    graphView = {
+      key: sceneKey, layoutKey, width, height, node: stub, byId, nodes, links, related, fit, zoomBy, collapsed,
+      highlight: (id) => { hover = id ?? null; request(); },
+      playTrails: () => {},
+      alive: () => !canvas.hidden && canvas.isConnected,
+      relabel: request,
+      stop: () => {
+        cancelAnimationFrame(frame);
+        cancelAnimationFrame(moveFrame);
+        listen.abort();
+        selection.on(".zoom", null).interrupt();
+        canvas.classList.remove("drawn");
+        canvas.__graph = null;
+      },
+    };
+    afterDraw();
+  };
+
+  /** Once a scene is on screen: a written answer's paths flow once. */
+  const afterDraw = () => {
+    if (answer && state.cited && state.trailsShown !== state.answerTurn) {
+      state.trailsShown = state.answerTurn;
+      setTimeout(() => graphView?.playTrails(), moving && start.size ? MORPH_MS : 0);
+    }
+  };
+
+  const cached = layoutCache.get(layoutKey);
+  if (cached && nodes.every((n) => cached.has(n.id))) {
+    for (const n of nodes) Object.assign(n, cached.get(n.id));
+    show(intoCanvas(), false);                            // the cached layout, rescaled to this canvas
+    return;
   }
+  const sim = makeSim();
+  layoutTask = settleLayout(sim, () => {
+    layoutTask = null;
+    const finals = intoCanvas();
+    cacheLayout(layoutKey, finals);
+    show(finals, true);
+  }, useCanvas ? 40 : SLICE_MS);
 }
 
 const TRAY_OPEN_MAX = 6;                  // more unconnected nodes than this: the tray starts collapsed
@@ -2899,6 +3383,11 @@ function repoRow(repo, { demo = false } = {}) {
     el("button", { type: "button", role: "menuitem", text: "Open", onclick: open }),
     demo ? null : el("button", { type: "button", role: "menuitem", text: repo.reindex_to ? `Re-index with ${repo.reindex_to}` : "Re-index",
       disabled: status.key === "indexing", onclick: () => reindexRepo(repo) }),
+    demo ? null : el("button", { type: "button", role: "menuitem", text: "Update to latest",
+      disabled: status.key === "indexing", onclick: () => updateToLatest(repo) }),
+    demo ? null : el("button", { type: "button", role: "menuitem", text: "Rebuild index",
+      title: "Rebuild the index at the same commit and version: re-chunk and re-embed",
+      disabled: status.key === "indexing", onclick: () => rebuildIndex(repo) }),
     demo ? null : el("button", { type: "button", role: "menuitem", class: "danger", text: "Remove", onclick: () => removeUserRepo(repo.id) }));
   const trigger = el("button", { type: "button", class: "icon-button", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": `Actions for ${repo.name}`,
     onclick: (e) => { const on = menu.hidden; document.querySelectorAll(".row-menu .menu").forEach((m) => { m.hidden = true; }); menu.hidden = !on; e.currentTarget.setAttribute("aria-expanded", String(on)); } },
@@ -2916,7 +3405,8 @@ function repoRow(repo, { demo = false } = {}) {
     el("td", { class: "version" }, version || el("span", { class: "muted", text: "unknown" })),
     el("td", { class: "when" }, formatDate(repo.built) || el("span", { class: "muted", text: "unknown" })),
     el("td", {}, el("span", { class: "status-pill", "data-tone": status.tone, text: status.label }),
-      status.key === "indexing" ? el("div", { class: "progress", title: `${Math.round((status.progress || 0) * 100)}%` }, el("i", { style: `--progress:${status.progress || 0}` })) : null),
+      status.key === "indexing" ? el("div", { class: "progress", title: `${Math.round((status.progress || 0) * 100)}%` }, el("i", { style: `--progress:${status.progress || 0}` }))
+        : demo ? null : freshnessNote(repo, { compact: true })),
     el("td", {}, el("div", { class: "row-menu" }, trigger, menu)));
 }
 
@@ -3039,7 +3529,14 @@ function renderHomeRepos() {
   const known = new Set(state.home.repos.map((r) => r.id));
   const pending = [...state.jobs.values()].filter((j) => isActive(j.raw) && !known.has(j.repo_id))
     .map((j) => ({ id: j.repo_id, name: j.name, languages: {}, pending: true }));
-  grid.replaceChildren(...[...pending, ...state.home.repos].map(homeRepoCard));
+  const list = [...pending, ...state.home.repos];
+  const signature = JSON.stringify(list.map((r) => {
+    const j = state.jobs.get(r.id) || r.job;
+    return [r.id, j?.status, Math.round((j?.progress || 0) * 100), r.reindex_to];
+  }));
+  if (grid.dataset.signature === signature && grid.childElementCount) return;   // a poll with nothing new
+  grid.dataset.signature = signature;
+  grid.replaceChildren(...list.map(homeRepoCard));
 }
 
 function homeRepoCard(r) {
@@ -3049,18 +3546,20 @@ function homeRepoCard(r) {
   const [owner, name] = splitName(r.name);
   const languages = languagesOf(r);
   const ready = !r.pending && status.key !== "indexing";
-  return el("button", { type: "button", class: "home-repo-card", title: r.name, "data-repo": r.id, disabled: !ready || null,
-                         onclick: ready ? () => selectRepo(r.id) : null },
-    el("span", { class: "name" }, owner ? el("span", { class: "owner", text: `${owner}/` }) : null, middleTruncateName(name, 28)),
-    el("span", { class: "status-pill", "data-tone": status.tone, text: `${status.label}${percent}` }),
-    el("span", { class: "langs" }, languages.length ? languages.slice(0, 3).map(([l]) => el("span", { class: "lang" }, dot(null, languageKey(l)), l))
-      : r.pending ? "first indexing" : ""));
+  return el("div", { class: "home-repo-card", "data-repo": r.id },
+    el("button", { type: "button", class: "home-repo-open", title: r.name, disabled: !ready || null,
+                   onclick: ready ? () => selectRepo(r.id) : null },
+      el("span", { class: "name" }, owner ? el("span", { class: "owner", text: `${owner}/` }) : null, middleTruncateName(name, 28)),
+      el("span", { class: "status-pill", "data-tone": status.tone, text: `${status.label}${percent}` }),
+      el("span", { class: "langs" }, languages.length ? languages.slice(0, 3).map(([l]) => el("span", { class: "lang" }, dot(null, languageKey(l)), l))
+        : r.pending ? "first indexing" : "")),
+    ready ? freshnessNote(r, { compact: true }) : null);
 }
 
 function homeActivity(d) {
   const s = d.stats;
   const today = s.per_day[s.per_day.length - 1] || 0;
-  const dayName = (back) => { const t = new Date(); t.setDate(t.getDate() - back); return t.toLocaleDateString(undefined, { weekday: "short" }); };
+  const dayName = (back) => { const t = new Date(); t.setDate(t.getDate() - back); return WEEKDAY.format(t); };
   const indexing = d.repos.filter((r) => repoStatus(r, state.jobs.get(r.id) || (r.job ? jobView(r.job) : null)).key === "indexing").length;
   const withBridges = d.repos.filter((r) => r.bridges).sort((a, b) => b.bridges - a.bridges);
   return el("section", { class: "home-activity", "aria-labelledby": "home-activity-title" },
@@ -3212,15 +3711,20 @@ async function start() {
     const s = state.sources.find((x) => x.chunk_id === Number(row.dataset.chunk));
     selectNode(Number(row.dataset.chunk), { open: true, source: s });
   });
-  // the canvas changes size with the window and with the tray: lay out and fit again
-  let resizeTimer, canvasSize = "";
+  // the canvas changes size with the window and with the tray: lay out and fit again, at most every
+  // 150 ms, never for changes under 2 px, and never for the size the graph on screen was drawn at
+  // (so a fit can't set off another one)
+  let resizeTimer, seen = { width: 0, height: 0 };
+  const near = (a, b) => Math.abs(a.width - b.width) < 2 && Math.abs(a.height - b.height) < 2;
   new ResizeObserver(([entry]) => {
-    const { width, height } = entry.contentRect;
-    const size = `${Math.round(width)}x${Math.round(height)}`;
-    if (size === canvasSize) return;
-    canvasSize = size;
+    const size = { width: entry.contentRect.width, height: entry.contentRect.height };
+    if (near(size, seen)) return;
+    seen = size;
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => drawGraph(), 120);
+    resizeTimer = setTimeout(() => {
+      if (graphView && graphView.alive() && near(seen, graphView)) return;
+      drawGraph();
+    }, 150);
   }).observe($(".graph-wrap"));
   let trayWidth = 0;
   new ResizeObserver(([entry]) => {                    // the chips re-flow only when the width changes

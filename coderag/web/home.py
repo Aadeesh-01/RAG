@@ -5,7 +5,8 @@ The signed-in user's Home page, in one call:
 
   last_repo         the repo they opened last (else the one added last), or null
   last_question     their newest question about last_repo (with the start of its answer), or null
-  recent_questions  their last RECENT questions across all repos, newest first
+  recent_questions  their last RECENT questions across all repos, newest first; open_repo_id is the
+                    index of that repo now in their list (after "Update to latest", the newer one)
   repos             their repos, last opened (else added) first, each with its newest indexing
                     job (status and progress) and reindex_to when an older preset built it;
                     a repo whose first indexing is still running comes from its job alone
@@ -35,9 +36,10 @@ def cited_count(sources):
     return sum(1 for s in items if isinstance(s, dict) and s.get("cited"))
 
 
-def question_brief(row, repo_name, preview=False):
+def question_brief(row, repo_name, preview=False, open_id=None):
     out = {"id": row.id, "repo_id": row.repo_id, "repo_name": repo_name or row.repo_id, "question": row.question,
-           "created_at": iso(row.created_at), "cited": cited_count(row.sources)}
+           "created_at": iso(row.created_at), "cited": cited_count(row.sources),
+           "open_repo_id": open_id or row.repo_id}          # the user's current index of that repo
     if preview:
         out["answer"] = (row.answer or "")[:ANSWER_PREVIEW]
     return out
@@ -76,7 +78,9 @@ def add_routes(app, db, auth, repos, indexer, settings):
             mine = s.query(Question).filter(Question.user_id == user.id)
             rows = mine.order_by(Question.id.desc()).limit(RECENT).all()
             names = dict(s.query(Repo.id, Repo.name).filter(Repo.id.in_({r.repo_id for r in rows}))) if rows else {}
-            recent = [question_brief(r, names.get(r.repo_id)) for r in rows]
+            current = {r["name"]: r["id"] for r in reversed(items) if not r.get("pending")}   # name -> their index
+            recent = [question_brief(r, names.get(r.repo_id), open_id=current.get(names.get(r.repo_id)))
+                      for r in rows]
             last_question = None
             if last_repo is not None:
                 row = mine.filter(Question.repo_id == last_repo["id"]).order_by(Question.id.desc()).first()

@@ -20,6 +20,7 @@ data_dir), migrated on start. Index files stay on disk; answer cache and rate
 limits stay in memory, behind interfaces (limits.py).
     GET  /api/repos/mine                    repos the signed-in user added (their repo tabs)
     GET  /api/home                          the signed-in user's Home page in one call (home.py)
+    GET  /api/repos/{repo_id}/freshness     new commits on its branch; POST .../update, .../rebuild (freshness.py)
     PUT  /api/repos/mine/{repo_id}          add an indexed repo they can open to that list
     DELETE /api/repos/mine/{repo_id}        take it off the list (the index stays)
     GET  /api/github/repos                  the user's GitHub repos, for the add-repo picker
@@ -67,7 +68,7 @@ from ..gitfetch import FetchError
 from ..llm import DEFAULT_REMOTE_MODELS, FallbackChain, LLMUnavailable, RemoteLLM
 from ..visualize import graph_data
 from ..db import Database, default_url, safe_url
-from . import history, home
+from . import freshness, history, home
 from .auth import SESSION_COOKIE, Auth, GitHubError, GitHubReauth
 from .jobs import Indexer, NeedsToken, NotAllowed, QueueFull
 from .limits import LRU, AnswerCache, DailyUsage, Gate, RateLimiter, client_ip
@@ -686,6 +687,8 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                                  background=BackgroundTask(release))
 
     home.add_routes(app, db, auth, repos, indexer, settings)
+    app.state.freshness = freshness.Freshness(indexer.latest)          # new commits on a repo's branch
+    freshness.add_routes(app, auth, repos, indexer, limit, allow_index, settings, app.state.freshness)
     history.add_routes(app, db, auth, repos, can_open, limit,
                        FRONTEND_DIR if os.path.isdir(FRONTEND_DIR) else None)
 

@@ -372,19 +372,24 @@ class Repos:
         """
         Delete least recently used visitor repos until at most max_stored repos and
         max_stored_mb MB are on disk. Only repos nobody has in their list, never a
-        demo or `keep`. Returns the removed ids (a warning is logged if the limits
-        can't be met because every remaining repo is in someone's list).
+        demo or `keep`. A repo with questions (an older commit after "Update to latest")
+        loses only its index files: its row stays, so history and shared answers keep
+        working, and opening it rebuilds the index. Returns the removed ids (a warning
+        is logged if the limits can't be met because every remaining repo is in someone's list).
         """
         from sqlalchemy import func
-        from ..db.models import Repo, UserRepo
+        from ..db.models import Question, Repo, UserRepo
         limit_bytes = self.max_stored_mb * 1024 * 1024 if self.max_stored_mb else None
         with self.db.session() as s:
             rows = (s.query(Repo).filter_by(kind="user")
                     .order_by(func.coalesce(Repo.last_used_at, Repo.created_at).asc()).all())
             linked = {r.repo_id for r in s.query(UserRepo.repo_id).distinct()}
+            asked = {r.repo_id for r in s.query(Question.repo_id).distinct()}
             sizes = {}
             for row in rows:
-                if not row.disk_bytes and os.path.isdir(self.directory(row.id)):
+                if not os.path.isdir(self.directory(row.id)):
+                    continue                                 # its files are already gone: nothing to free
+                if not row.disk_bytes:
                     row.disk_bytes = dir_bytes(self.directory(row.id))      # rows from before the size column
                 sizes[row.id] = row.disk_bytes or 0
         count, total = len(sizes), sum(sizes.values())
@@ -394,13 +399,31 @@ class Repos:
                 break
             if repo_id == keep or repo_id in self.demos or repo_id in linked:
                 continue
-            self.remove(repo_id)
+            if repo_id in asked:
+                self.remove_files(repo_id)
+            else:
+                self.remove(repo_id)
             removed.append(repo_id)
             count, total = count - 1, total - sizes[repo_id]
         if count > self.max_stored or (limit_bytes is not None and total > limit_bytes):
             log.warning("stored repos (%d, %.0f MB) are over the limits, but the rest are in users' lists",
                         count, total / 2**20)
         return removed
+
+    def remove_files(self, repo_id):
+        """Delete a visitor repo's index files but keep its row (and its questions); opening it rebuilds them."""
+        from ..db.models import Repo
+        if repo_id in self.demos or not _REPO_ID.match(repo_id or ""):
+            return False
+        with self.lock:
+            self.loaded.pop(repo_id, None)
+            if os.path.isdir(self.directory(repo_id)):
+                rmtree(self.directory(repo_id))
+            with self.db.session() as s:
+                row = s.get(Repo, repo_id)
+                if row is not None:
+                    row.disk_bytes = 0
+        return True
 
     def remove(self, repo_id):
         """Delete a visitor repo: its row (questions and shares go with it), user links and index files."""

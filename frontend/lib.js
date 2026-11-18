@@ -280,10 +280,14 @@ export function middleTruncateName(name, max = 28) {
 }
 
 /** "3 Nov 2026" for an ISO timestamp, or "" when it isn't one (never a raw ISO string). */
+const dateFormats = new Map();             // one Intl formatter per locale: building one per call was slow
+
 export function formatDate(iso, locale = undefined) {
   const at = Date.parse(iso || "");
   if (Number.isNaN(at)) return "";
-  return new Date(at).toLocaleDateString(locale, { day: "numeric", month: "short", year: "numeric" });
+  const key = locale || "";
+  if (!dateFormats.has(key)) dateFormats.set(key, new Intl.DateTimeFormat(locale, { day: "numeric", month: "short", year: "numeric" }));
+  return dateFormats.get(key).format(new Date(at));
 }
 
 /**
@@ -360,7 +364,9 @@ export function answerLines(text, n = 2) {
 export function timeAgo(iso, now = Date.now(), locale = undefined) {
   const at = Date.parse(iso || "");
   if (Number.isNaN(at)) return "";
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  const key = `rel:${locale || ""}`;
+  if (!dateFormats.has(key)) dateFormats.set(key, new Intl.RelativeTimeFormat(locale, { numeric: "auto" }));
+  const rtf = dateFormats.get(key);
   let value = (at - now) / 1000;
   for (const [size, unit] of [[60, "second"], [60, "minute"], [24, "hour"], [7, "day"], [4.345, "week"], [12, "month"], [Infinity, "year"]]) {
     if (Math.abs(value) < size) return unit === "second" ? "just now" : rtf.format(Math.round(value), unit);

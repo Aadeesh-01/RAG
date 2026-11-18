@@ -85,6 +85,7 @@ class IndexJob:
     facts_token: str = field(default="", repr=False)   # signed-in user's token, GitHub metadata only; cleared
     reindex: bool = False            # rebuild an indexed repo with the current default version
     rebuild: bool = False            # its index files were missing: same commit, fetched again
+    version: str = ""                # build with this preset (an explicit rebuild keeps the repo's own); "" = default
     created_at: str = ""             # ISO, for the job list
     deadline: float = 0.0            # time.monotonic() by which the job must be done (set when it starts)
 
@@ -176,6 +177,7 @@ class Indexer:
         self.lock = threading.Lock()
         self.worker = None
         self.failed_rebuilds = {}    # repo_id -> (monotonic time, job): opening it doesn't retry at once
+        self.listeners = []          # callables(job) told when a job ends (ready or failed)
         from ..db.models import utcnow
         self.started = utcnow()      # recover() leaves jobs created after this alone
         self.started_wall = time.time()
@@ -282,6 +284,36 @@ class Indexer:
                            token=token if private else "", facts_token=token or "", reindex=True,
                            rebuild=True, message="Rebuilding index…")
             return self._start(job), True
+
+    def rebuild_index(self, repo_id, allow_new=lambda: (True, 0), token=None, owner_id=None):
+        """
+        Rebuild an indexed visitor repo from scratch at the same commit with the same
+        version it was built with (re-fetch, re-chunk, re-embed), asked for by a user.
+        Returns (job, queued_new); KeyError if it isn't a visitor repo; NotAllowed past the limits.
+        """
+        meta = self.repos.summary(repo_id)
+        if not meta or meta.get("kind") != "user":
+            raise KeyError(repo_id)
+        with self.lock:
+            if repo_id in self.inflight:
+                return self.jobs[self.inflight[repo_id]], False
+            self._check_user(owner_id)
+            allowed, retry = allow_new()
+            if not allowed:
+                raise NotAllowed("You've indexed several repositories recently; try again later.", retry)
+            private = bool(meta.get("private"))
+            if private and not token:
+                raise NeedsToken(repo_id)
+            job = IndexJob(id=uuid.uuid4().hex, repo_id=repo_id, name=meta["name"], url=meta["url"],
+                           sha=meta["sha"], ref=meta.get("ref") or "", owner_id=owner_id, private=private,
+                           token=token if private else "", facts_token=token or "", reindex=True, rebuild=True,
+                           version=meta.get("indexed_with") or "", message="Rebuilding index…")
+            self.failed_rebuilds.pop(repo_id, None)
+            return self._start(job), True
+
+    def latest(self, owner, repo, ref=None, token=None):
+        """The newest commit of `ref` (else the default branch) with git ls-remote; FetchError if it can't."""
+        return self._resolve(owner, repo, ref, token)[0]
 
     def reindex(self, repo_id, allow_new=lambda: (True, 0), token=None, owner_id=None):
         """
@@ -435,7 +467,7 @@ class Indexer:
 
             self._set(job, "parsing", 0.25, ("Rebuilding index… " if job.rebuild else "") +
                       "Parsing code and resolving calls…")
-            default = s.default_version if s.default_version in VERSIONS else "v10"
+            default = job.version if job.version in VERSIONS else s.default_version if s.default_version in VERSIONS else "v10"
             config = get_config(default, ignore_dirs=tuple(s.index_ignore_dirs))
             from ..index import VectorIndex
 
@@ -494,3 +526,12 @@ class Indexer:
                     self.failed_rebuilds[job.repo_id] = (time.monotonic(), job)
                 else:
                     self.failed_rebuilds.pop(job.repo_id, None)
+            self.finished(job)
+
+    def finished(self, job):
+        """Tell the listeners a job ended (ready or failed); a listener's error never fails the job."""
+        for listener in list(self.listeners):
+            try:
+                listener(job)
+            except Exception:                            # noqa: BLE001
+                log.exception("a job listener failed for %s", job.name)

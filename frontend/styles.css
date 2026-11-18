@@ -359,7 +359,9 @@ input[type="radio"], input[type="checkbox"] { accent-color: var(--color-ink); wi
 .graph-stage { position: relative; flex: 1 1 0; min-height: 18rem; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; grid-template-rows: minmax(0, 1fr); }
 /* the canvas takes the stage's height and never sizes it (so it can't spill over the tray) */
 .graph-wrap { position: relative; min-width: 0; min-height: 0; overflow: hidden; }
-#graph { position: absolute; inset: 0; display: block; width: 100%; height: 100%; cursor: grab; }
+#graph, #graph-canvas { position: absolute; inset: 0; display: block; width: 100%; height: 100%; cursor: grab; }
+#graph[hidden], #graph-canvas[hidden] { display: none; }
+#graph-canvas:focus-visible { outline-offset: calc(-1 * var(--ring)); }
 #graph:active { cursor: grabbing; }
 .graph-hint { position: absolute; inset: 0; height: fit-content; max-width: var(--measure-hint); margin: auto; padding: 0 var(--space-lg); color: var(--color-muted); font-size: var(--text-sm); text-align: center; pointer-events: none; }
 .graph-hint:empty { display: none; }
@@ -447,7 +449,11 @@ svg.key-line--bridge line { stroke: var(--cat-bridge); stroke-width: var(--graph
 #graph.zoomed-out:not(.overview) .node:not(.retrieved):not([data-kind="file"]) text { display: none; }
 #graph .node text.quiet { display: none; }
 #graph .node text.collide, #graph .hull text.collide, #graph .rings text.collide { display: none; }   /* lost to a higher-priority label */
-#graph.zoomed-in .node text.quiet:not(.hide), #graph.hovering .node[data-lit] text.quiet { display: block; font-size: calc(var(--graph-label) * var(--label-scale-all, 1)); stroke-width: calc(var(--graph-halo) * var(--label-scale-all, 1)); }
+/* names placed once after the layout settles: zoomed in, the quiet names that fit; pointing, the neighbours' that cover
+   no other name; the pointed-at and the selected node's own name always */
+#graph.zoomed-in .node text.quiet:not(.hide-zoom), #graph.hovering .node[data-lit] text.quiet:not(.hide),
+#graph .node[data-lit="self"] text.quiet, #graph .node.selected text.quiet { display: block; font-size: calc(var(--graph-label) * var(--label-scale-all, 1)); stroke-width: calc(var(--graph-halo) * var(--label-scale-all, 1)); }
+#graph .node[data-lit="self"] text.collide, #graph .node.selected text.collide { display: block; }
 /* edges */
 #graph path.link { fill: none; stroke: var(--cat-calls); stroke-opacity: 0.55; stroke-width: var(--graph-stroke); }
 #graph path.link.calls { marker-end: url(#arrow); }
@@ -477,15 +483,16 @@ svg.key-line--bridge line { stroke: var(--cat-bridge); stroke-width: var(--graph
 #graph .rings text { fill: var(--color-muted); font: 400 calc(var(--graph-label) * var(--label-scale-all, 1)) var(--font-body); text-anchor: middle;
                      paint-order: stroke; stroke: var(--color-card); stroke-width: calc(var(--graph-halo) * var(--label-scale-all, 1)); }
 /* pointing: what is pointed at, its calls and its path stay; the rest steps back */
-#graph .node, #graph path.link, #graph .hull { transition: opacity var(--dur-short) var(--ease-out); }
-#graph.hovering .node:not([data-lit]) { opacity: var(--dim); }
-#graph.hovering path.link:not([data-lit]):not(.on-path) { opacity: var(--dim-link); }
+/* dimmed with fill/stroke opacity on the shapes themselves and no transition: opacity on a group would
+   paint every node into a layer of its own, on every frame of the fade (pointing then took ~250 ms) */
+#graph.hovering .node:not([data-lit]) :is(.dot, .ring, text) { fill-opacity: var(--dim); stroke-opacity: var(--dim); }
+#graph.hovering path.link:not([data-lit]):not(.on-path) { stroke-opacity: var(--dim-link); marker-end: none; }
 #graph.hovering path.link[data-lit] { stroke: var(--color-ink-2); stroke-opacity: 1; }
 #graph.hovering path.link[data-lit].bridge { stroke: var(--cat-bridge); }
 #graph.hovering path.link[data-lit].calls { marker-end: url(#arrow-lit); }
 #graph.hovering path.link.on-path { stroke: var(--color-accent); stroke-opacity: 1; stroke-width: var(--graph-stroke-3); }
 #graph.hovering path.link.on-path.calls { marker-end: url(#arrow-trail); }
-#graph.hovering .hull:not([data-lit]) { opacity: var(--dim-hull); }
+#graph.hovering .hull:not([data-lit]) :is(path, text) { fill-opacity: var(--dim-hull); stroke-opacity: var(--dim-hull); }
 
 /* ── the node panel ──────────────────────────────────────────────────── */
 .node-panel { background: var(--color-card-2); padding: var(--card-pad); gap: var(--space-md); overflow-y: auto; }
@@ -581,6 +588,11 @@ svg.key-line--bridge line { stroke: var(--cat-bridge); stroke-width: var(--graph
 #focus-svg .f-edge-label { fill: var(--color-muted); font: 400 var(--text-2xs) var(--font-body); text-anchor: middle; paint-order: stroke; stroke: var(--color-card-3); stroke-width: var(--graph-halo); }
 
 /* ── the repos page ──────────────────────────────────────────────────── */
+/* new commits on a repo's branch: "3 new commits · Update to latest" */
+.fresh { display: inline-flex; flex-wrap: wrap; align-items: center; gap: var(--space-2xs) var(--space-xs); }
+.fresh[hidden] { display: none; }
+td .fresh { margin-top: var(--space-2xs); }
+
 /* ── home: the signed-in user's dashboard ────────────────────────────── */
 .home-page[hidden] { display: none; }
 .pill-nav button[hidden] { display: none; }
@@ -610,10 +622,12 @@ svg.key-line--bridge line { stroke: var(--cat-bridge); stroke-width: var(--graph
              background: var(--color-card-2); color: var(--color-ink-2); font-family: var(--font-measured); line-height: 1.7; }
 .home-section-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-sm); }
 .home-repos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 15rem), 1fr)); gap: var(--space-xs); }
-.home-repo-card { display: grid; justify-items: start; gap: var(--space-2xs); min-width: 0; padding: var(--space-md); border: 0; border-radius: var(--radius-inner);
-                  background: var(--color-card-2); color: var(--color-ink); font: inherit; text-align: left; cursor: pointer; transition: background-color var(--dur-micro) var(--ease-out); }
-.home-repo-card:hover:not(:disabled) { background: var(--color-card-3); }
-.home-repo-card:disabled { cursor: default; }
+.home-repo-card { display: grid; justify-items: start; gap: var(--space-xs); min-width: 0; padding: var(--space-md); border-radius: var(--radius-inner);
+                  background: var(--color-card-2); transition: background-color var(--dur-micro) var(--ease-out); }
+.home-repo-card:has(.home-repo-open:hover:not(:disabled)) { background: var(--color-card-3); }
+.home-repo-open { display: grid; justify-items: start; gap: var(--space-2xs); width: 100%; min-width: 0; padding: 0; border: 0; background: none;
+                  color: var(--color-ink); font: inherit; text-align: left; cursor: pointer; }
+.home-repo-open:disabled { cursor: default; }
 .home-repo-card .name { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 500; }
 .home-repo-card .langs { color: var(--color-muted); font-size: var(--text-xs); }
 .home-activity, .home-demos { display: grid; gap: var(--space-xs); min-width: 0; }

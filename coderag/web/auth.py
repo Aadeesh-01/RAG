@@ -268,6 +268,23 @@ class Users:
         with self.db.session() as s:
             s.query(UserRepo).filter_by(user_id=user_id, repo_id=repo_id).update({"last_opened_at": _now()})
 
+    def move_repo(self, user_id, old_id, new_id):
+        """
+        "Update to latest" finished: the user's link to `old_id` becomes a link to `new_id`
+        (when and how recently they opened it carry over). False if they had no link to old_id.
+        """
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            old = s.get(UserRepo, (user_id, old_id))
+            if old is None:
+                return False
+            new = s.get(UserRepo, (user_id, new_id))
+            if new is None:
+                s.add(UserRepo(user_id=user_id, repo_id=new_id, added_at=old.added_at,
+                               last_opened_at=old.last_opened_at or _now()))
+            s.delete(old)
+            return True
+
     def links(self, user_id):
         """The user's repo links: [(repo_id, added_at, last_opened_at)], last opened (else added) first."""
         from ..db.models import UserRepo

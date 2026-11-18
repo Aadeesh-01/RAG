@@ -1,7 +1,8 @@
 """
 Questions, shares and feedback (the `questions`, `shares`, `feedback` tables).
 
-  GET    /api/repos/{id}/history          the signed-in user's questions about a repo, newest first,
+  GET    /api/repos/{id}/history          the signed-in user's questions about a repo (at any of its
+                                          indexed commits: its lineage by owner/name), newest first,
                                           paginated (?limit=20&before=<question id>), with the total
                                           and the last 7 days' counts (the "Questions asked" tile)
   POST   /api/questions/{id}/share        -> {slug, url}; a private repo's answer needs
@@ -123,7 +124,11 @@ def add_routes(app, db, auth, repos, can_open, limit, frontend_dir=None):
             raise HTTPException(404, f"Unknown repository {repo_id!r}")
         limit = max(1, min(limit, 50))
         with db.session() as s:
-            mine = s.query(Question).filter(Question.user_id == user.id, Question.repo_id == repo_id)
+            # the repo's lineage: the same owner/name at other commits ("Update to latest" makes a new
+            # index), so earlier answers stay in the history; each item keeps its own repo_id and snippets
+            name = s.query(Repo.name).filter(Repo.id == repo_id).scalar()
+            lineage = [r for (r,) in s.query(Repo.id).filter(Repo.name == name)] if name else [repo_id]
+            mine = s.query(Question).filter(Question.user_id == user.id, Question.repo_id.in_(lineage or [repo_id]))
             page = mine.filter(Question.id < before) if before else mine
             rows = page.order_by(Question.id.desc()).limit(limit + 1).all()
             more = len(rows) > limit
