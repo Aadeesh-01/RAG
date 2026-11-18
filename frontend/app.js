@@ -37,6 +37,7 @@ const state = {
   jobs: new Map(),                     // repo id -> its latest indexing job (GET /api/jobs)
   freshness: new Map(),                // repo id -> {at, promise} of GET /api/repos/{id}/freshness (once per view)
   replacing: new Map(),                // new repo id -> the repo id it updates ("Update to latest")
+  githubDescriptions: new Map(),       // "owner/repo" (lower case) -> its GitHub description, from the repo picker's list
   chats: new Map(),                    // repo id -> {turns, evidence} while another repo is open
   reposFilter: "all",
 };
@@ -223,6 +224,7 @@ function isNarrow() {
 }
 
 function setView(name, { focus = false } = {}) {
+  closeRowMenu();
   state.view = name;
   document.body.dataset.view = name;
   document.querySelectorAll(".pill-nav button").forEach((b) => {
@@ -486,6 +488,7 @@ function setupRepoPicker({ onChange, onAdd, onOpen }) {
       }
       if (!response.ok || !Array.isArray(body)) throw new Error(body.error || `error ${response.status}`);
       repos = body;
+      for (const r of body) if (r.description) state.githubDescriptions.set(String(r.full_name).toLowerCase(), r.description);
     } catch {
       if (mine !== request) return;
       showProblem(el("span", { text: "Couldn't load your repositories. You can still paste a URL below." }),
@@ -860,9 +863,7 @@ function renderRepoHead(demo) {
         title: `Indexed with ${demo.indexed_with || "an older version"}. Rebuild it with ${demo.reindex_to}: `
           + "other languages and links across them (HTTP, JNI, ctypes) are indexed too.",
         text: `Re-index with ${demo.reindex_to}`, onclick: (e) => reindexRepo(demo, e.currentTarget) }) : null),
-    // the indexer's placeholder ("Indexed from GitHub.") says nothing the header doesn't
-    demo.description && !/^Indexed from GitHub\b/.test(demo.description)
-      ? el("p", { class: "description", text: demo.description.replace(/ -> /g, " → ") }) : null);
+    repoDescription(demo) ? el("p", { class: "description", text: repoDescription(demo).replace(/ -> /g, " → ") }) : null);
 }
 
 // ── the stat tiles ──────────────────────────────────────────────────────────
@@ -3367,9 +3368,102 @@ function setupRepos() {
     });
   });
   $("#repos-search").addEventListener("input", renderRepos);
-  document.addEventListener("click", (e) => {
-    if (!e.target.closest(".row-menu")) document.querySelectorAll(".row-menu .menu:not([hidden])").forEach((m) => { m.hidden = true; m.previousElementSibling.setAttribute("aria-expanded", "false"); });
+}
+
+// the indexer's placeholder ("Indexed from GitHub.") says nothing: never shown
+const PLACEHOLDER_DESCRIPTION = /^Indexed from GitHub\b/;
+
+/** A repo's real description: its own (a demo's), GitHub's if we have it, else "". */
+function repoDescription(repo) {
+  const own = repo?.description && !PLACEHOLDER_DESCRIPTION.test(repo.description) ? repo.description : "";
+  return own || repo?.facts?.description || state.githubDescriptions.get(String(repo?.name || "").toLowerCase()) || "";
+}
+
+// ── the "…" row menu: a popover in the top layer (never clipped by a scroll box) ──
+let openRowMenu = null;                   // {menu, trigger, close}
+
+function closeRowMenu({ focus = false } = {}) {
+  const current = openRowMenu;
+  if (!current) return;
+  openRowMenu = null;
+  current.close();
+  if (focus) current.trigger.focus();
+}
+
+/**
+ * A "…" button with a menu of items [{text, onclick, disabled, danger, title}] (null items are skipped).
+ * The menu opens under <body> (as a popover where supported), placed from the button: below it, or above
+ * when there is no room, always inside the viewport. Outside click, Esc, scroll and resize close it.
+ * Enter/Space/ArrowDown open it on the first item; the arrows move, Esc closes and returns to the button.
+ */
+function rowMenu(label, items) {
+  const trigger = el("button", { type: "button", class: "icon-button row-menu-trigger", "aria-haspopup": "menu",
+    "aria-expanded": "false", "aria-label": label, title: label }, svgIcon("M5 12h.01M12 12h.01M19 12h.01"));
+  trigger.querySelector("path").setAttribute("stroke-width", "3");
+  const show = (focusFirst) => {
+    closeRowMenu();
+    const buttons = items.filter(Boolean).map((item) => el("button", {
+      type: "button", role: "menuitem", tabindex: "-1", class: item.danger ? "danger" : null, title: item.title,
+      disabled: item.disabled || null, text: item.text,
+      onclick: (e) => { e.stopPropagation(); closeRowMenu({ focus: true }); item.onclick(); },
+    }));
+    const menu = el("div", { class: "row-menu-popover", role: "menu", "aria-label": label }, buttons);
+    const enabled = () => buttons.filter((b) => !b.disabled);
+    const move = (to) => { const list = enabled(); if (list.length) list[(to + list.length) % list.length].focus(); };
+    menu.addEventListener("click", (e) => e.stopPropagation());
+    menu.addEventListener("keydown", (e) => {
+      const list = enabled();
+      const i = list.indexOf(document.activeElement);
+      if (e.key === "ArrowDown") { e.preventDefault(); move(i + 1); }
+      else if (e.key === "ArrowUp") { e.preventDefault(); move(i < 0 ? -1 : i - 1); }
+      else if (e.key === "Home") { e.preventDefault(); move(0); }
+      else if (e.key === "End") { e.preventDefault(); move(-1); }
+      else if (e.key === "Tab") closeRowMenu();
+    });
+    const popover = typeof menu.showPopover === "function";
+    if (popover) menu.setAttribute("popover", "manual");
+    document.body.append(menu);
+    if (popover) menu.showPopover();
+    // placed from the button: below, else above; kept inside the viewport
+    const r = trigger.getBoundingClientRect(), m = menu.getBoundingClientRect();
+    const pad = 8, gap = 4, vw = document.documentElement.clientWidth, vh = window.innerHeight;
+    let top = r.bottom + gap;
+    if (top + m.height > vh - pad && r.top - gap - m.height >= pad) top = r.top - gap - m.height;
+    top = Math.max(pad, Math.min(top, vh - pad - m.height));
+    const left = Math.max(pad, Math.min(r.right - m.width, vw - pad - m.width));
+    menu.style.top = `${Math.round(top)}px`;
+    menu.style.left = `${Math.round(left)}px`;
+    menu.dataset.side = top < r.top ? "above" : "below";
+    trigger.setAttribute("aria-expanded", "true");
+
+    const listen = new AbortController();
+    const outside = (e) => { if (!menu.contains(e.target) && !trigger.contains(e.target)) closeRowMenu(); };
+    document.addEventListener("pointerdown", outside, { capture: true, signal: listen.signal });
+    document.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") { e.preventDefault(); e.stopPropagation(); closeRowMenu({ focus: true }); }
+    }, { capture: true, signal: listen.signal });
+    window.addEventListener("scroll", (e) => { if (!(e.target instanceof Node && menu.contains(e.target))) closeRowMenu(); }, { capture: true, signal: listen.signal });
+    window.addEventListener("resize", () => closeRowMenu(), { signal: listen.signal });
+    openRowMenu = {
+      menu, trigger,
+      close: () => {
+        listen.abort();
+        if (popover && menu.matches(":popover-open")) menu.hidePopover();
+        menu.remove();
+        trigger.setAttribute("aria-expanded", "false");
+      },
+    };
+    if (focusFirst) move(0);
+  };
+  trigger.addEventListener("click", (e) => {
+    e.stopPropagation();                               // never the row's own click
+    if (openRowMenu?.trigger === trigger) closeRowMenu();
+    else show(e.detail === 0);                         // from the keyboard (Enter/Space): focus the first item
   });
+  trigger.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); if (openRowMenu?.trigger !== trigger) show(true); }
+  });
+  return el("div", { class: "row-menu" }, trigger);
 }
 
 function repoRow(repo, { demo = false } = {}) {
@@ -3379,26 +3473,24 @@ function repoRow(repo, { demo = false } = {}) {
   const languages = Object.entries(repo.languages || {}).sort((a, b) => b[1] - a[1]);
   const version = repo.indexed_with || (repo.versions || []).at(-1) || "";
   const open = () => { selectRepo(repo.id); setView("overview", { focus: true }); };
-  const menu = el("div", { class: "menu", role: "menu", hidden: true },
-    el("button", { type: "button", role: "menuitem", text: "Open", onclick: open }),
-    demo ? null : el("button", { type: "button", role: "menuitem", text: repo.reindex_to ? `Re-index with ${repo.reindex_to}` : "Re-index",
-      disabled: status.key === "indexing", onclick: () => reindexRepo(repo) }),
-    demo ? null : el("button", { type: "button", role: "menuitem", text: "Update to latest",
-      disabled: status.key === "indexing", onclick: () => updateToLatest(repo) }),
-    demo ? null : el("button", { type: "button", role: "menuitem", text: "Rebuild index",
-      title: "Rebuild the index at the same commit and version: re-chunk and re-embed",
-      disabled: status.key === "indexing", onclick: () => rebuildIndex(repo) }),
-    demo ? null : el("button", { type: "button", role: "menuitem", class: "danger", text: "Remove", onclick: () => removeUserRepo(repo.id) }));
-  const trigger = el("button", { type: "button", class: "icon-button", "aria-haspopup": "menu", "aria-expanded": "false", "aria-label": `Actions for ${repo.name}`,
-    onclick: (e) => { const on = menu.hidden; document.querySelectorAll(".row-menu .menu").forEach((m) => { m.hidden = true; }); menu.hidden = !on; e.currentTarget.setAttribute("aria-expanded", String(on)); } },
-  svgIcon("M5 12h.01M12 12h.01M19 12h.01"));
-  trigger.querySelector("path").setAttribute("stroke-width", "3");
-  return el("tr", { "aria-selected": String(repo.id === state.demo?.id) },
+  const busy = status.key === "indexing" || repo.pending;
+  const menu = rowMenu(`Actions for ${repo.name}`, [
+    { text: "Open", onclick: open, disabled: repo.pending },
+    demo ? null : { text: repo.reindex_to ? `Re-index with ${repo.reindex_to}` : "Re-index", disabled: busy, onclick: () => reindexRepo(repo) },
+    demo ? null : { text: "Update to latest", disabled: busy, onclick: () => updateToLatest(repo) },
+    demo ? null : { text: "Rebuild index", disabled: busy, onclick: () => rebuildIndex(repo),
+                    title: "Rebuild the index at the same commit and version: re-chunk and re-embed" },
+    demo ? null : { text: "Remove", danger: true, onclick: () => removeUserRepo(repo.id) },
+  ]);
+  const description = repo.pending ? repo.description : repoDescription(repo);
+  // a click anywhere on the row opens it, except on its own buttons and links (the menu stops its clicks)
+  return el("tr", { "aria-selected": String(repo.id === state.demo?.id), class: repo.pending ? null : "openable", "data-repo": repo.id,
+    onclick: (e) => { if (!repo.pending && !e.target.closest("button, a, input, .row-menu")) open(); } },
     el("td", {}, el("div", { class: "repo-cell" },
       el("div", { class: "name" },
         el("button", { type: "button", title: repo.name, onclick: open }, owner ? el("span", { class: "owner", text: `${owner}/` }) : null, middleTruncateName(name, 30)),
         repo.private ? el("span", { class: "private-badge", text: "Private" }) : null),
-      repo.description ? el("span", { class: "desc", title: repo.description, text: repo.description }) : null)),
+      description ? el("span", { class: "desc", title: description, text: description }) : null)),
     el("td", {}, languages.length ? el("span", { class: "dots", title: languages.map(([l, k]) => plural(k, `${l} file`)).join(", ") },
       languages.slice(0, 5).map(([l]) => dot(null, languageKey(l))), el("span", { class: "muted", text: ` ${languages.slice(0, 2).map(([l]) => l).join(", ")}${languages.length > 2 ? ` +${languages.length - 2}` : ""}` }))
       : el("span", { class: "muted", text: "none recorded" })),
@@ -3407,16 +3499,16 @@ function repoRow(repo, { demo = false } = {}) {
     el("td", {}, el("span", { class: "status-pill", "data-tone": status.tone, text: status.label }),
       status.key === "indexing" ? el("div", { class: "progress", title: `${Math.round((status.progress || 0) * 100)}%` }, el("i", { style: `--progress:${status.progress || 0}` }))
         : demo ? null : freshnessNote(repo, { compact: true })),
-    el("td", {}, el("div", { class: "row-menu" }, trigger, menu)));
+    el("td", { class: "actions" }, menu));
 }
 
 function renderRepos() {
   const q = $("#repos-search").value.trim().toLowerCase();
-  const match = (r) => !q || r.name.toLowerCase().includes(q) || (r.description || "").toLowerCase().includes(q);
+  const match = (r) => !q || r.name.toLowerCase().includes(q) || repoDescription(r).toLowerCase().includes(q);
   const byStatus = (r) => state.reposFilter === "all" || repoStatus(r, state.jobs.get(r.id)).key === state.reposFilter;
   // a repo being indexed for the first time has no row yet: show it from its job
   const pending = [...state.jobs.values()].filter((j) => isActive(j.raw) && !state.userRepos.some((r) => r.id === j.repo_id))
-    .map((j) => ({ id: j.repo_id, name: j.name, languages: {}, built: "", description: j.message }));
+    .map((j) => ({ id: j.repo_id, name: j.name, languages: {}, built: "", description: j.message, pending: true }));
   const mine = [...pending, ...state.userRepos].filter(match).filter(byStatus);
   const rows = $("#repos-rows");
   const empty = $("#repos-empty");
@@ -3429,6 +3521,7 @@ function renderRepos() {
   $("#repos-table").hidden = !mine.length;
   $("#repos-lead").textContent = signedIn ? `${plural(state.userRepos.length + pending.length, "repository", "repositories")} on your account${pending.length ? `, ${pending.length} being indexed` : ""}.` : "The repositories you added, and where their indexes stand.";
   $("#demos-rows").replaceChildren(...state.demos.filter(match).map((d) => repoRow(d, { demo: true })));
+  if (openRowMenu && !openRowMenu.trigger.isConnected) closeRowMenu();      // its row was redrawn (a jobs poll)
 }
 
 // ── Home: the signed-in user's dashboard (GET /api/home, only their own data) ─
