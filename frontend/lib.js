@@ -111,8 +111,16 @@ export function middleTruncate(path, max = 48) {
   return head.length + file.length + 3 <= max ? `${head}/…/${file}` : `…/${file}`;
 }
 
+/**
+ * "path:start-end" when the whole range is known; otherwise the path alone (a module or
+ * file never shows a partial range). Never prints "undefined" or "null".
+ */
 export function formatLocation(source) {
-  return source.start_line ? `${source.file}:${source.start_line}-${source.end_line}` : source.file;
+  const file = source?.file || "";
+  const { start_line: start, end_line: end } = source || {};
+  if (file && start && end) return `${file}:${start}-${end}`;
+  if (file && start && !(source.kind === "module" || source.kind === "file")) return `${file}:${start}`;
+  return file;
 }
 
 const ERRORS = {

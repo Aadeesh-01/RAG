@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  citedSources, createSSEParser, focusSubgraph, middleTruncate, normalizeCitations, renderAnswer, viaLabel,
+  citedSources, createSSEParser, focusSubgraph, formatLocation, middleTruncate, normalizeCitations, renderAnswer, viaLabel,
 } from "../lib.js";
 
 test("SSE parser handles events split across chunks", () => {
@@ -254,5 +254,16 @@ test("safeHref drops script and data URLs in every spelling", () => {
                      "java\nscript:alert(1)", "\u0001javascript:x", "data:text/html,<b>x", "vbscript:x",
                      "file:///etc/passwd", "\\\\evil.example\\x", "", null, undefined]) {
     assert.equal(safeHref(bad), null, String(bad));
+  }
+});
+
+test("formatLocation shows a line range only when the whole range is known", () => {
+  assert.equal(formatLocation({ file: "a/b.py", start_line: 3, end_line: 9 }), "a/b.py:3-9");
+  assert.equal(formatLocation({ file: "a/b.py", start_line: 3 }), "a/b.py:3");
+  // a module or file: its path alone unless the full range is known (moduleGraph sets only start_line)
+  assert.equal(formatLocation({ file: "a/b.py", kind: "module", start_line: 1 }), "a/b.py");
+  assert.equal(formatLocation({ file: "a/b.py", kind: "file", start_line: 1, end_line: 40 }), "a/b.py:1-40");
+  for (const n of [{}, { file: "x.py", start_line: null, end_line: null }, { file: "x.py", start_line: undefined }, null]) {
+    assert.doesNotMatch(formatLocation(n), /undefined|null/);
   }
 });

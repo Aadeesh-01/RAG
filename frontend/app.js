@@ -770,7 +770,9 @@ function renderRepoHead(demo) {
         title: `Indexed with ${demo.indexed_with || "an older version"}. Rebuild it with ${demo.reindex_to}: `
           + "other languages and links across them (HTTP, JNI, ctypes) are indexed too.",
         text: `Re-index with ${demo.reindex_to}`, onclick: (e) => reindexRepo(demo, e.currentTarget) }) : null),
-    demo.description ? el("p", { class: "description", text: demo.description.replace(/ -> /g, " → ") }) : null);
+    // the indexer's placeholder ("Indexed from GitHub.") says nothing the header doesn't
+    demo.description && !/^Indexed from GitHub\b/.test(demo.description)
+      ? el("p", { class: "description", text: demo.description.replace(/ -> /g, " → ") }) : null);
 }
 
 // ── the stat tiles ──────────────────────────────────────────────────────────
@@ -1042,6 +1044,7 @@ async function ask(question) {
   question = question.trim();
   if (!question || state.busy || !state.demo) return;
   state.busy = true;
+  state.hintDone = true;                 // the graph's "ask a question" hint has done its job
   state.controller = new AbortController();
   setAskBusy(true);
   $("#question").value = "";
@@ -1522,6 +1525,7 @@ function selectNode(id, { open = false, source = null } = {}) {
     state.answerTurn.querySelector(`.source[data-chunk="${id}"]`)?.setAttribute("aria-current", "true");
   }
   graphView?.node.classed("selected", (n) => n.id === id);
+  graphView?.relabel();
   renderNodePanel(node, source);
   if (open && node) openFocus(node);
   else if (open && source) openFocus({ ...source, id: source.chunk_id, name: source.name, kind: source.kind || "function" });
@@ -1785,12 +1789,17 @@ function drawGraph() {
   subtitle.textContent = state.graphMode === "full" ? plural(graph.nodes.length, "node")
     : state.retrieved.size ? `${plural(state.retrieved.size, "source")} and their neighbours`
     : collapsed ? `${plural(data.nodes.length, "module")}, collapsed` : plural(graph.nodes.length, "node");
-  const caption = !state.retrieved.size && state.graphMode !== "full";
+  // the hint: a pill in the canvas's top-left corner until the first question or the first touch
+  const caption = !state.retrieved.size && state.graphMode !== "full" && !state.hintDone;
   hint.classList.toggle("caption", Boolean(caption));
   hint.textContent = caption ? "Ask a question to light up the code it uses. Point at a node to see its calls." : "";
 
   const { width, height } = svg.node().getBoundingClientRect();
   if (!width || !height) return;                       // hidden pane: drawn when shown, from where it was
+  // the graph is laid out and fitted below the pill, so the two never meet
+  const top = caption ? hint.offsetTop + hint.offsetHeight + 8 : 10;
+  const bottom = 10;
+  const midY = top + (height - top - bottom) / 2;
 
   const rings = answer && state.graphLayout === "rings";
   const positions = positionsFor(`${state.demo?.id || "_"}${collapsed ? ":modules" : ""}`);
@@ -1829,10 +1838,23 @@ function drawGraph() {
   const labelText = (n) => middleTruncateName(n.label || n.name, 34);          // shortest unique qualified name
   const sidText = (n) => (state.sids.has(n.id) ? `S${state.sids.get(n.id)} ` : "");
   const labelWidth = (n) => (labelled(n) ? (sidText(n) + labelText(n)).length * 7.4 + 12 : 0);
+  // rings shrink to the canvas, so the outer ring (and its nodes) stays inside it
+  const ringScale = Math.min(1, Math.max(0.3, (Math.min(width, height - top - bottom) / 2 - 24) / RING_RADII[3]));
+  const ringR = (i) => RING_RADII[i] * ringScale;
   const ringRadius = (n) => {
     const hop = state.retrieved.get(n.id);
-    return RING_RADII[hop === undefined ? 3 : Math.min(hop, 2)];
+    return ringR(hop === undefined ? 3 : Math.min(hop, 2));
   };
+  // every node, with its label's padding, stays inside the canvas (the band under the hint excluded)
+  const EDGE = 6;
+  const bounded = (n, x, y) => {
+    const r = radius(n);
+    const half = Math.max(r, labelWidth(n) / 2) + EDGE;
+    const under = r + (labelled(n) ? 22 : 0) + EDGE;
+    return [Math.min(Math.max(x, half), Math.max(half, width - half)),
+            Math.min(Math.max(y, top + r + EDGE), Math.max(top + r + EDGE, height - bottom - under))];
+  };
+  const clampAll = () => { for (const n of nodes) [n.x, n.y] = bounded(n, n.x, n.y); };
 
   // start where things were; new nodes start beside a neighbour that was already there
   for (const n of nodes) {
@@ -1850,7 +1872,7 @@ function drawGraph() {
   const overview = !state.retrieved.size;
   const el = svg.node();
   el.classList.toggle("overview", overview);
-  el.classList.remove("hovering", "zoomed-in");
+  el.classList.remove("hovering", "zoomed-in", "zoomed-out");
   const subject = (n) => overview || state.retrieved.has(n.id);
 
   // arrowheads coloured by CSS, so a theme change needs no redraw
@@ -1880,7 +1902,14 @@ function drawGraph() {
   const MIN_FIT = 0.6;
   const labelScale = (k) => Math.min(1 / MIN_FIT, Math.max(1, 1 / k));
   let zoomTimer = null;
+  const dismissHint = () => {
+    if (state.hintDone) return;
+    state.hintDone = true;
+    hint.textContent = "";
+    hint.classList.remove("caption");
+  };
   const zoom = d3.zoom().extent([[0, 0], [width, height]]).scaleExtent([0.1, 4]).on("zoom", (e) => {
+    if (e.sourceEvent) dismissHint();                    // the user's own pan or zoom, not a fit
     root.attr("transform", e.transform);
     el.style.setProperty("--label-scale", String(labelScale(e.transform.k)));
     el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / e.transform.k)));
@@ -1897,6 +1926,7 @@ function drawGraph() {
   });
   svg.call(zoom).on("dblclick.zoom", null);
   svg.on("dblclick.fit", (e) => { if (e.target === el) fit(true); });   // double-click the background: fit
+  svg.on("pointerdown.hint keydown.hint", dismissHint);
 
   const keyOf = (l) => pairKey(nodeId(l.source), nodeId(l.target));
   const onTrail = (l) => trails.has(keyOf(l));
@@ -1937,7 +1967,7 @@ function drawGraph() {
     .attr("tabindex", (n) => (n === order[0] ? 0 : -1))
     .call(d3.drag()
       .on("start", (e, d) => { if (timer) finish(); if (!e.active) sim.alphaTarget(0.2).restart(); d.fx = d.x; d.fy = d.y; })
-      .on("drag", (e, d) => { d.fx = e.x; d.fy = e.y; })
+      .on("drag", (e, d) => { [d.fx, d.fy] = bounded(d, e.x, e.y); })
       .on("end", (e, d) => { if (!e.active) sim.alphaTarget(0); d.fx = null; d.fy = null; }))
     .on("click", (e, d) => { focusNode(d, false); activateNode(d); })
     .on("dblclick", (e, d) => { e.stopPropagation(); zoomTo([d.id, ...related.get(d.id)]); })
@@ -1970,24 +2000,39 @@ function drawGraph() {
   const sim = d3.forceSimulation(nodes)
     .force("link", d3.forceLink(links).id((n) => n.id).distance((l) => (l.type === "member" ? 28 : collapsed ? 90 : 70)).strength(rings ? 0.06 : 0.5))
     .force("charge", d3.forceManyBody().strength(big ? -35 : rings ? -150 : state.retrieved.size ? -260 : -170))
-    .force("center", rings ? null : d3.forceCenter(width / 2, height / 2))
+    .force("center", rings ? null : d3.forceCenter(width / 2, midY))
     // gentle gravity keeps disconnected parts of the graph from drifting apart
     .force("x", rings ? null : d3.forceX(width / 2).strength(big ? 0.12 : 0.07))
-    .force("y", rings ? null : d3.forceY(height / 2).strength(big ? 0.12 : 0.07))
+    .force("y", rings ? null : d3.forceY(midY).strength(big ? 0.12 : 0.07))
     // the closer to the centre, the more directly the code was found
-    .force("ring", rings ? d3.forceRadial(ringRadius, width / 2, height / 2).strength(0.85) : null)
+    .force("ring", rings ? d3.forceRadial(ringRadius, width / 2, midY).strength(0.85) : null)
     .force("cluster", outlined ? forceCluster(0.3) : null)
     // labels take room too: keep labelled nodes further apart
     .force("collide", d3.forceCollide().radius((n) => Math.min(Math.max(radius(n), labelWidth(n) / 2), 120) + 6))
     .stop();
   for (let i = 0; i < 300; i++) sim.tick();           // lay out before the first paint
+  // then into the canvas: scaled as a whole when it is larger (its shape kept), then every node clamped
+  if (!rings) {
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (const n of nodes) {
+      const half = Math.max(radius(n), labelWidth(n) / 2) + EDGE;
+      x0 = Math.min(x0, n.x - half); x1 = Math.max(x1, n.x + half);
+      y0 = Math.min(y0, n.y - radius(n) - EDGE); y1 = Math.max(y1, n.y + radius(n) + (labelled(n) ? 22 : 0) + EDGE);
+    }
+    const s = Math.min(1, width / Math.max(x1 - x0, 1), (height - top - bottom) / Math.max(y1 - y0, 1));
+    const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+    for (const n of nodes) { n.x = width / 2 + (n.x - cx) * s; n.y = midY + (n.y - cy) * s; }
+  }
+  clampAll();
 
   // rings: faint guides, named where they cross the top
+  const ringIndex = (n) => { const hop = state.retrieved.get(n.id); return hop === undefined ? 3 : Math.min(hop, 2); };
+  let ringText = d3.select(null);
   if (rings) {
-    const used = [...new Set(nodes.map((n) => RING_RADII.indexOf(ringRadius(n))))].sort();
+    const used = [...new Set(nodes.map(ringIndex))].sort();
     const guide = ringLayer.selectAll("g").data(used).join("g");
-    guide.append("circle").attr("cx", width / 2).attr("cy", height / 2).attr("r", (i) => RING_RADII[i]);
-    guide.append("text").attr("x", width / 2).attr("y", (i) => height / 2 - RING_RADII[i] - 6).text((i) => RING_NAMES[i]);
+    guide.append("circle").attr("cx", width / 2).attr("cy", midY).attr("r", ringR);
+    ringText = guide.append("text").attr("x", width / 2).attr("y", (i) => midY - ringR(i) - 6).text((i) => RING_NAMES[i]);
   }
   // files as soft outlines, named at their top edge
   const groups = outlined ? d3.groups(nodes, (n) => n.file).filter(([, ns]) => ns.length > 1) : [];
@@ -2031,6 +2076,7 @@ function drawGraph() {
   const remember = () => { for (const n of nodes) positions.set(n.id, { x: n.x, y: n.y }); };
 
   // ── pointing: a node's calls stay, the rest steps back; its path flows ──
+  let pointed = null;                                  // the hovered node: its label outranks all but cited ones
   const highlight = (id) => {
     if (id === null || id === undefined || !byId.has(id)) {
       el.classList.remove("hovering");
@@ -2038,6 +2084,7 @@ function drawGraph() {
       link.attr("data-lit", null).classed("on-path", false);
       hull.attr("data-lit", null);
       flow.classed("flowing", false);
+      if (pointed !== null) { pointed = null; placeLabels(d3.zoomTransform(el).k); }
       return;
     }
     const near = related.get(id);
@@ -2049,7 +2096,9 @@ function drawGraph() {
     const file = byId.get(id).file;
     hull.attr("data-lit", ([f]) => (f === file ? "" : null));
     flow.classed("flowing", (l) => path.keys.has(keyOf(l)));
-    placeQuiet(new Set([id, ...near, ...path.ids]));
+    pointed = id;
+    placeLabels(d3.zoomTransform(el).k);
+    placeQuiet(new Set([id, ...near, ...path.ids]), { hideOverlaps: true });
   };
   // the answer's paths flow once when it is first shown
   let flowTimer = null;
@@ -2061,36 +2110,23 @@ function drawGraph() {
   };
 
   // ── camera ──
-  const top = 8;
-  const room = height - top - (caption ? 36 : 8);
+  const room = height - top - bottom;
+  const SIDE_MARGIN = 10;
   const fitTransform = () => {
-    const focus = rings ? nodes : nodes.filter((n) => state.retrieved.has(n.id));
-    const pts = focus.length ? focus : nodes;
-    // bounding box including the labels hanging under each node; the answer's labels grow
-    // when zoomed out, so refit until the scale and the label size agree
-    let scale = 1, x0, x1, y0, y1;
+    // the scene as drawn (nodes, placed labels, file names, rings) is measured, not estimated, so
+    // nothing is clipped; labels grow when zoomed out, so refit until the scale and their size agree
+    render();
+    let scale = 1, box = root.node().getBBox();
     for (let i = 0; i < 4; i++) {
-      const grow = (n) => (subject(n) ? labelScale(scale) : 1);
-      const half = (n) => Math.max(radius(n), (labelWidth(n) * grow(n)) / 2);
-      x0 = Math.min(...pts.map((n) => n.x - half(n)));
-      x1 = Math.max(...pts.map((n) => n.x + half(n)));
-      y0 = Math.min(...pts.map((n) => n.y - radius(n) - (rings ? 24 : 4)));
-      y1 = Math.max(...pts.map((n) => n.y + radius(n) + 6 + 16 * grow(n)));
-      scale = Math.min(1.5, 0.92 / Math.max((x1 - x0 + 40) / width, (y1 - y0 + 40) / room));
+      el.style.setProperty("--label-scale", String(labelScale(scale)));
+      el.style.setProperty("--label-scale-all", String(Math.max(1, 1 / scale)));
+      box = root.node().getBBox();
+      const next = Math.min(1.5, (width - 2 * SIDE_MARGIN) / Math.max(box.width, 1), room / Math.max(box.height, 1));
+      const settled = Math.abs(next - scale) < 0.005;
+      scale = next;
+      if (settled) break;
     }
-    let cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
-    if (scale < MIN_FIT) {
-      // too much to show legibly at once (a phone, a big answer): centre on what the answer cites
-      scale = MIN_FIT;
-      const core = nodes.filter((n) => state.cited?.has(n.id))
-        .sort((a, b) => (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity));
-      const half = (n) => Math.max(radius(n), (labelWidth(n) * labelScale(MIN_FIT)) / 2);
-      let c = core.length ? core : pts;
-      const spread = (Math.max(...c.map((n) => n.x + half(n))) - Math.min(...c.map((n) => n.x - half(n)))) * MIN_FIT;
-      if (core.length > 1 && spread > width - 24) c = [core[0]];    // can't show all cited labels: the first one, whole
-      cx = (Math.min(...c.map((n) => n.x - half(n))) + Math.max(...c.map((n) => n.x + half(n)))) / 2;
-      cy = (Math.min(...c.map((n) => n.y)) + Math.max(...c.map((n) => n.y))) / 2 + 8;
-    }
+    const cx = box.x + box.width / 2, cy = box.y + box.height / 2;
     return { scale, transform: d3.zoomIdentity.translate(width / 2, top + room / 2).scale(scale).translate(-cx, -cy) };
   };
   const camera = (transform, ms) => {
@@ -2110,80 +2146,125 @@ function drawGraph() {
   // labels go below their node unless that covers a label already placed; then above,
   // right or left (cited first, then the answer's code by S-number, then the rest)
   const SIDES = ["below", "above", "right", "left"];
-  // a label's box as drawn (measured: ~7.6px a character, 17px a line at 12px), plus a margin
+  // how far a node's symbol reaches from its centre on each side (a diamond is taller than its radius)
+  const reach = (n) => n.reach || { up: radius(n), down: radius(n), left: radius(n), right: radius(n) };
+  // a label's box as drawn: its measured width (else ~7.7px a character) and 18px a line at 12px, plus a margin
   const labelBox = (n, side, k) => {
-    const w = (sidText(n) + labelText(n)).length * 7.7 * k + 6, h = 18 * k, r = radius(n) + 3;
-    if (side === "below") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y + r, y1: n.y + r + h };
-    if (side === "above") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y - r - h, y1: n.y - r };
-    if (side === "right") return { x0: n.x + r, x1: n.x + r + w, y0: n.y - h / 2, y1: n.y + h / 2 };
-    return { x0: n.x - r - w, x1: n.x - r, y0: n.y - h / 2, y1: n.y + h / 2 };
+    const w = (n.textWidth || (sidText(n) + labelText(n)).length * 7.7) * k + 6, h = 18 * k, e = reach(n);
+    if (side === "below") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y + e.down + 3, y1: n.y + e.down + 3 + h };
+    if (side === "above") return { x0: n.x - w / 2, x1: n.x + w / 2, y0: n.y - e.up - 3 - h, y1: n.y - e.up - 3 };
+    if (side === "right") return { x0: n.x + e.right + 3, x1: n.x + e.right + 3 + w, y0: n.y - h / 2, y1: n.y + h / 2 };
+    return { x0: n.x - e.left - 3 - w, x1: n.x - e.left - 3, y0: n.y - h / 2, y1: n.y + h / 2 };
   };
   const overlap = (q, boxes) => boxes.reduce((sum, p) => sum + Math.max(0, Math.min(q.x1, p.x1) - Math.max(q.x0, p.x0))
     * Math.max(0, Math.min(q.y1, p.y1) - Math.max(q.y0, p.y0)), 0);
+  // a side that would leave the canvas counts as covering something
+  const outside = (q) => {
+    const w = q.x1 - q.x0, h = q.y1 - q.y0;
+    const inW = Math.max(0, Math.min(q.x1, width) - Math.max(q.x0, 0)), inH = Math.max(0, Math.min(q.y1, height - bottom) - Math.max(q.y0, top));
+    return w * h - inW * inH;
+  };
   const sideFor = (n, k, boxes) => {
     let best = null;
     for (const side of SIDES) {
-      const q = labelBox(n, side, k), area = overlap(q, boxes);
+      const q = labelBox(n, side, k), area = overlap(q, boxes) + outside(q);
       if (!best || area < best.area) best = { side, q, area };
       if (area === 0) break;
     }
     return best;
   };
   const setSide = (sel) => {
-    const gap = (n) => radius(n) + 4;
-    sel.attr("x", (n) => (n.side === "right" ? gap(n) : n.side === "left" ? -gap(n) : 0))
-      .attr("y", (n) => (n.side === "below" ? gap(n) : n.side === "above" ? -gap(n) : 0))
+    const e = (n) => reach(n);
+    sel.attr("x", (n) => (n.side === "right" ? e(n).right + 4 : n.side === "left" ? -e(n).left - 4 : 0))
+      .attr("y", (n) => (n.side === "below" ? e(n).down + 4 : n.side === "above" ? -e(n).up - 4 : 0))
       .attr("text-anchor", (n) => (n.side === "right" ? "start" : n.side === "left" ? "end" : "middle"))
       .attr("dominant-baseline", (n) => (n.side === "below" ? "hanging" : n.side === "above" ? "auto" : "central"));
   };
+  // label priority when two would overlap (the lower one hides): cited, then the pointed-at or
+  // selected node, then modules by how many edges they have, then the rest by edges
+  const rank = (n) => (state.cited?.has(n.id) ? 0 : n.id === pointed || n.id === state.selected ? 1 : isModule(n) ? 2 : 3);
+  const byPriority = (a, b) => rank(a) - rank(b)
+    || Number(state.retrieved.has(b.id)) - Number(state.retrieved.has(a.id))
+    || (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity)
+    || (degree.get(b.id) || 0) - (degree.get(a.id) || 0);
   // names revealed by pointing or zooming go where they cover the fewest labels already showing;
-  // zoomed in, a name that would still cover another stays hidden (collision avoidance)
+  // one that would still cover another stays hidden (the pointed-at node's own name always shows)
   const placeQuiet = (ids, { hideOverlaps = false } = {}) => {
     const k = d3.zoomTransform(el).k;
-    const boxes = nodes.filter(labelled).map((n) => labelBox(n, n.side || "below", subject(n) ? labelScale(k) : 1));
-    const reveal = nodes.filter((n) => ids.has(n.id) && !labelled(n)).sort((a, b) => (degree.get(b.id) || 0) - (degree.get(a.id) || 0));
+    const boxes = nodes.filter((n) => labelled(n) && !n.collides).map((n) => labelBox(n, n.side || "below", subject(n) ? labelScale(k) : 1));
+    const reveal = nodes.filter((n) => ids.has(n.id) && !labelled(n)).sort(byPriority);
     for (const n of reveal) {
       const best = sideFor(n, Math.max(1, 1 / k), boxes);
       n.side = best.side;
-      n.hidden = hideOverlaps && best.area > 0;
+      n.hidden = hideOverlaps && best.area > 0 && n.id !== pointed;
       if (!n.hidden) boxes.push(best.q);
     }
     const quiet = node.filter((n) => ids.has(n.id) && !labelled(n)).select("text.quiet");
     setSide(quiet);
     quiet.classed("hide", (n) => Boolean(n.hidden));
   };
+  // the dots: a label avoids covering other nodes where it can (they never hide it)
+  const dotBoxes = () => nodes.map((n) => {
+    const e = reach(n);
+    return { id: n.id, x0: n.x - e.left - 1, x1: n.x + e.right + 1, y0: n.y - e.up - 1, y1: n.y + e.down + 1 };
+  });
   const placeLabels = (scale) => {
     const placed = [];
-    // the names already on the canvas (files, rings) are obstacles: node labels go around them
+    const dots = dotBoxes();
+    for (const n of nodes.filter(labelled).sort(byPriority)) {
+      const k = subject(n) ? labelScale(scale) : 1;
+      const others = dots.filter((d) => d.id !== n.id);
+      let best = null;
+      for (const side of SIDES) {
+        const q = labelBox(n, side, k);
+        const labels = overlap(q, placed), covered = overlap(q, others), area = labels * 4 + covered + outside(q);
+        if (!best || area < best.area) best = { side, q, area, labels, covered };
+        if (area === 0) break;
+      }
+      n.side = best.side;
+      // it would cover a higher-priority name, or sit under another node on every side: hidden
+      // (cited, pointed-at and selected names always show)
+      n.collides = best.labels > 0 || (best.covered > 6 && rank(n) > 1);
+      if (!n.collides) placed.push(best.q);
+    }
+    setSide(label);
+    label.classed("collide", (n) => Boolean(n.collides));
+    node.filter((n) => rank(n) <= 1).raise();         // cited and selected names paint above other nodes
+    // file and ring names rank lowest: one that would cover a node's name steps aside
     const named = (x, y, text, perChar) => {
       const k = Math.max(1, 1 / scale), w = text.length * perChar * k + 8, h = 17 * k;
       return { x0: x - w / 2, x1: x + w / 2, y0: y - h, y1: y + 3 };
     };
-    for (const [file, ns] of groups) {
+    // (larger files first; a file name also gives way to another file's name and to the dots)
+    const fileNames = [...placed];
+    const hidden = new Set();
+    for (const [file, ns] of [...groups].sort((a, b) => b[1].length - a[1].length)) {
       const h = hullShape(ns);
-      if (h) placed.push(named(h.top[0], h.top[1] - 5, file.split("/").pop(), 7.7));
+      if (!h) continue;
+      const q = named(h.top[0], h.top[1] - 5, file.split("/").pop(), 7.7);
+      if (overlap(q, fileNames) > 0 || overlap(q, dots) > 12) hidden.add(file);
+      else fileNames.push(q);
     }
-    if (rings) {
-      for (const i of new Set(nodes.map((n) => RING_RADII.indexOf(ringRadius(n))))) {
-        placed.push(named(width / 2, height / 2 - RING_RADII[i] - 6, RING_NAMES[i], 6.8));
-      }
-    }
-    const first = (n) => (state.cited?.has(n.id) ? 0 : state.retrieved.has(n.id) ? 1 : 2);
-    for (const n of nodes.filter(labelled).sort((a, b) => first(a) - first(b)
-      || (state.sids.get(a.id) ?? Infinity) - (state.sids.get(b.id) ?? Infinity))) {
-      const best = sideFor(n, subject(n) ? labelScale(scale) : 1, placed);
-      n.side = best.side;
-      placed.push(best.q);
-    }
-    setSide(label);
+    hull.select("text").classed("collide", ([file]) => hidden.has(file));
+    ringText.classed("collide", (i) => overlap(named(width / 2, midY - ringR(i) - 6, RING_NAMES[i], 6.8), placed) > 0);
   };
 
   // ── the morph: final positions are known; the scene glides there from where it was ──
   const finals = new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]));
-  const target = fitTransform();
+  // measure each label once at its base size (the camera sets the scale again right after)
+  el.style.setProperty("--label-scale", "1");
+  el.style.setProperty("--label-scale-all", "1");
+  label.each(function measure(n) { n.textWidth = this.getComputedTextLength() || 0; });
+  node.select("path.dot").each(function measure(n) {
+    const b = this.getBBox();
+    if (b.width) n.reach = { up: -b.y, down: b.y + b.height, left: -b.x, right: b.x + b.width };
+  });
+  placeLabels(1);
+  let target = fitTransform();
   placeLabels(target.scale);
+  target = fitTransform();
   remember();
-  const live = () => { sim.on("tick", render).on("end", remember); };
+  const live = () => { sim.on("tick", () => { clampAll(); render(); }).on("end", remember); };
   const finish = () => {
     timer?.stop();
     timer = null;
@@ -2220,6 +2301,7 @@ function drawGraph() {
 
   graphView = {
     node, byId, nodes, links, related, highlight, fit, zoomBy, playTrails, collapsed,
+    relabel: () => placeLabels(d3.zoomTransform(el).k),            // the selection changed: it outranks the rest
     stop: () => {
       timer?.stop();
       timer = null;
@@ -2237,17 +2319,73 @@ function drawGraph() {
   }
 }
 
-/** Isolated nodes, listed in a tray under the graph instead of floating in it. */
+const TRAY_OPEN_MAX = 6;                  // more unconnected nodes than this: the tray starts collapsed
+const TRAY_CHIPS = 200;                   // chips rendered; the rest are counted in "+N more"
+
+/**
+ * Isolated nodes, listed in a tray below the graph (never in it: they take no part in the
+ * layout). Collapsible; when open it shows at most two rows of chips and "+N more".
+ */
 function renderTray(isolated) {
   const tray = $("#tray");
   tray.hidden = !isolated.length;
   if (!isolated.length) return;
+  // a new set of isolated nodes: collapsed when there are many, and back to two rows
+  const key = `${state.demo?.id}|${state.graphMode}|${state.retrieved.size}|${isolated.length}`;
+  if (state.trayKey !== key) {
+    state.trayKey = key;
+    state.trayAll = false;
+    tray.open = isolated.length <= TRAY_OPEN_MAX;
+  }
   $("#tray-title").textContent = `Unconnected (${isolated.length})`;
-  fill($("#tray-list"), ...isolated.slice(0, 60).map((n) => el("button", {
-    type: "button", class: "fact", title: `${n.label || n.name}\n${formatLocation(n)}`,
-    onclick: () => selectNode(n.id, { open: true }),
-  }, el("code", { text: middleTruncateName(n.label || n.name, 28) }))),
-  isolated.length > 60 ? el("span", { class: "note", text: `and ${plural(isolated.length - 60, "more")}` }) : null);
+  const list = $("#tray-list");
+  list.dataset.extra = String(Math.max(0, isolated.length - TRAY_CHIPS));
+  fill(list, ...isolated.slice(0, TRAY_CHIPS).map((n) => {
+    const name = n.label || n.name || n.file || "";
+    const where = formatLocation(n);
+    return el("button", {
+      type: "button", class: "fact", title: where && where !== name ? `${name}\n${where}` : name,
+      onclick: () => selectNode(n.id, { open: true }),
+    }, el("code", { text: middleTruncateName(name, 28) }));
+  }), el("button", { type: "button", class: "fact tray-more", hidden: true,
+                     onclick: () => { state.trayAll = !state.trayAll; layoutTray(); } }));
+  layoutTray();
+}
+
+/** Two rows of chips at most: the ones that don't fit are counted in "+N more" (which lists them, scrolling). */
+function layoutTray() {
+  const tray = $("#tray"), list = $("#tray-list");
+  if (tray.hidden || !tray.open) return;
+  const chips = [...list.querySelectorAll(".fact:not(.tray-more)")];
+  const more = list.querySelector(".tray-more");
+  if (!chips.length || !more) return;
+  for (const c of chips) c.hidden = false;
+  more.hidden = true;
+  list.classList.toggle("all", Boolean(state.trayAll));
+  list.style.maxHeight = "";
+  const rowH = chips[0].offsetHeight;
+  if (!rowH) { requestAnimationFrame(layoutTray); return; }          // not laid out yet (the tray just opened)
+  const gap = parseFloat(getComputedStyle(list).rowGap) || 0;
+  const twoRows = 2 * rowH + gap;
+  if (state.trayAll) {
+    more.hidden = false;
+    more.textContent = "Show fewer";
+    list.style.maxHeight = `${twoRows}px`;
+    return;
+  }
+  // rows are measured from the list's own top: the tray is pinned to the card's bottom, so it moves as rows go
+  const fits = (e) => e.getBoundingClientRect().top - list.getBoundingClientRect().top <= rowH + gap + 1;   // row one or two
+  let rest = Number(list.dataset.extra || 0);
+  for (const c of chips) if (!fits(c)) { c.hidden = true; rest += 1; }
+  if (!rest) return;
+  more.hidden = false;
+  const shown = chips.filter((c) => !c.hidden);
+  more.textContent = `+${rest} more`;
+  while (!fits(more) && shown.length) {                 // "+N more" takes the last place in row two
+    shown.pop().hidden = true;
+    rest += 1;
+    more.textContent = `+${rest} more`;
+  }
 }
 
 /** Roving focus: one node is in the Tab order; the arrow keys move it. */
@@ -2490,18 +2628,20 @@ function renderNodePanel(n, source = null) {
   const preview = el("div", { class: "code-view short", tabindex: "0", role: "region", "aria-label": "Code preview" }, codeSkeleton());
   const nodeTile = (label, value, text = false) => el("div", { class: "node-tile" }, el("span", { class: "label", text: label }),
     el("span", { class: `value${text ? " text" : ""}` }, value));
-  fill(panel, 
+  const name = n.label || n.name || n.file || "";
+  const where = formatLocation(n);
+  fill(panel,
     el("div", { class: "node-head" },
       el("span", { class: "kind", text: kindWord(n.kind) }),
       el("h2", {}, sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", text: `S${sid}` }) : null,
-        el("span", { title: n.label || n.name, text: middleTruncateName(n.label || n.name, 34) })),
-      el("span", { class: "where", title: formatLocation(n), text: formatLocation({ ...n, file: middleTruncate(n.file, 40) }) }),
+        el("span", { title: name, text: middleTruncateName(name, 34) })),
+      where ? el("span", { class: "where", title: where, text: formatLocation({ ...n, file: middleTruncate(n.file, 40) }) }) : null,
       statePill(n)),
     el("div", { class: "node-tiles" },
       nodeTile("Called by", callers.toLocaleString()),
       nodeTile("Calls", calls.toLocaleString()),
       nodeTile("Language", language ? [dot(null, languageKey(language)), el("span", { text: LANGUAGE_LABELS[language] || language })] : el("span", { text: "unknown" }), true),
-      nodeTile("Lines", lines ? lines.toLocaleString() : el("span", { text: "whole file" }))),
+      lines ? nodeTile("Lines", lines.toLocaleString()) : null),
     el("div", { class: "node-preview" }, el("h3", { text: "Code" }), preview),
     el("div", { class: "node-actions" },
       el("button", { type: "button", class: "primary small", text: "Ask about this", onclick: () => askAbout(n) }),
@@ -2597,14 +2737,14 @@ function openFocus(n) {
   const { callers, calls } = callCounts(n);
   const language = n.language || languageOfPath(n.file);
   const s = state.sources.find((x) => x.chunk_id === n.id);
-  fill($("#focus-title"), sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", text: `S${sid}` }) : null, " ", el("span", { text: n.label || n.name }));
-  fill($("#focus-where"), el("span", { text: formatLocation(n) }), statePill(n), language ? languageTag(language, { always: true }) : null);
+  fill($("#focus-title"), sid ? el("span", { class: state.cited?.has(n.id) ? "sid cited" : "sid", text: `S${sid}` }) : null, " ", el("span", { text: n.label || n.name || n.file || "" }));
+  fill($("#focus-where"), formatLocation(n) ? el("span", { text: formatLocation(n) }) : null, statePill(n), language ? languageTag(language, { always: true }) : null);
   const meta = (label, ...value) => el("div", {}, el("dt", { text: label }), el("dd", {}, ...value));
   fill($("#focus-meta"), 
     meta("Kind", el("span", { text: kindWord(n.kind) })),
     meta("Called by", el("span", { text: callers.toLocaleString() })),
     meta("Calls", el("span", { text: calls.toLocaleString() })),
-    meta("Lines", el("span", { text: n.end_line && n.start_line ? plural(n.end_line - n.start_line + 1, "line") : "whole file" })),
+    n.end_line && n.start_line ? meta("Lines", el("span", { text: plural(n.end_line - n.start_line + 1, "line") })) : null,
     s && s.hop ? meta("Reached", el("span", { title: relationLabel(s), text: relationLabel(s) })) : s ? meta("Found by", el("span", { text: "direct match" })) : null,
     s?.bridge ? meta("Bridge", el("span", { title: bridgeEvidence(s.bridge), text: s.bridge.label })) : null);
 
@@ -2911,11 +3051,23 @@ async function start() {
     const s = state.sources.find((x) => x.chunk_id === Number(row.dataset.chunk));
     selectNode(Number(row.dataset.chunk), { open: true, source: s });
   });
-  let resizeTimer;
-  window.addEventListener("resize", () => {
+  // the canvas changes size with the window and with the tray: lay out and fit again
+  let resizeTimer, canvasSize = "";
+  new ResizeObserver(([entry]) => {
+    const { width, height } = entry.contentRect;
+    const size = `${Math.round(width)}x${Math.round(height)}`;
+    if (size === canvasSize) return;
+    canvasSize = size;
     clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => drawGraph(), 200);
-  });
+    resizeTimer = setTimeout(() => drawGraph(), 120);
+  }).observe($(".graph-wrap"));
+  let trayWidth = 0;
+  new ResizeObserver(([entry]) => {                    // the chips re-flow only when the width changes
+    if (Math.round(entry.contentRect.width) === trayWidth) return;
+    trayWidth = Math.round(entry.contentRect.width);
+    layoutTray();
+  }).observe($("#tray-list"));
+  $("#tray").addEventListener("toggle", () => requestAnimationFrame(layoutTray));
 
   // Free hosting sleeps when idle: say so if the first response is slow.
   const wakeTimer = setTimeout(() => banner("Waking up the server (free hosting sleeps when idle). This can take up to a minute…"), 3000);
