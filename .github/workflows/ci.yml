@@ -23,6 +23,7 @@ jobs:
       - name: Install (locked, CPU-only torch)
         run: |
           pip install --require-hashes -r requirements.lock
+          pip install --no-deps -e .
           pip install "pytest>=8"
       - name: Tests
         run: pytest -q
