@@ -177,7 +177,7 @@ class Indexer:
         self.lock = threading.Lock()
         self.worker = None
         self.failed_rebuilds = {}    # repo_id -> (monotonic time, job): opening it doesn't retry at once
-        self.listeners = []          # callables(job) told when a job ends (ready or failed)
+        self.listeners = []          # callables(job, status) run as a job ends, before it shows "ready"/"failed"
         from ..db.models import utcnow
         self.started = utcnow()      # recover() leaves jobs created after this alone
         self.started_wall = time.time()
@@ -512,26 +512,32 @@ class Indexer:
             job.error = "Indexing failed unexpectedly."
         finally:
             job.token = job.facts_token = ""
-            # clean up first, so "ready"/"failed" means the job is completely finished
+            # everything first, so "ready"/"failed" means the job is completely finished: the clone
+            # removed, then the listeners run (freshness.py moves the user's link to the new index);
+            # a client polling the job only sees its final status after that
             if os.path.isdir(clone):
                 rmtree(clone)
-            if job.error:
-                job.status = "failed"
-            else:
-                job.status, job.progress, job.message = "ready", 1.0, done
-            self._persist(job, finished=True)
-            with self.lock:
+            status = "failed" if job.error else "ready"
+            self.finished(job, status)
+            with self.lock:                               # the final status and inflight change together
+                if job.error:
+                    job.status = "failed"
+                else:
+                    job.status, job.progress, job.message = "ready", 1.0, done
                 self.inflight.pop(job.repo_id, None)
                 if job.rebuild and job.error:
                     self.failed_rebuilds[job.repo_id] = (time.monotonic(), job)
                 else:
                     self.failed_rebuilds.pop(job.repo_id, None)
-            self.finished(job)
+            self._persist(job, finished=True)
 
-    def finished(self, job):
-        """Tell the listeners a job ended (ready or failed); a listener's error never fails the job."""
+    def finished(self, job, status):
+        """
+        Run the listeners for a job that is ending as `status` ("ready" or "failed"), before the
+        job shows that status. A listener's error is logged and never fails the job.
+        """
         for listener in list(self.listeners):
             try:
-                listener(job)
+                listener(job, status)
             except Exception:                            # noqa: BLE001
                 log.exception("a job listener failed for %s", job.name)
