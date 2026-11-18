@@ -12,6 +12,9 @@ from conftest import AUTH_SETTINGS, ROOT  # noqa: E402
 
 sys.path.insert(0, os.path.join(ROOT, "scripts"))
 import predeploy_check  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+
+from coderag.db import Database  # noqa: E402
 
 
 def read(name):
@@ -37,17 +40,45 @@ def statuses(rows):
 
 
 # ── scripts/predeploy_check.py ───────────────────────────────────────────────
-def test_a_complete_production_environment_passes_and_migrates(tmp_path):
-    rows = predeploy_check.check(env(tmp_path))
+def test_a_complete_production_environment_passes_without_migrating(tmp_path):
+    values = env(tmp_path)
+    Database(values["CODERAG_DATABASE_URL"]).upgrade()              # what the deployed server does on start
+    rows = predeploy_check.check(values)
     assert all(s == "PASS" for s, _, _ in rows), rows
-    assert statuses(rows)["migrations"] == "PASS"
     detail = dict((n, d) for _, n, d in rows)
-    assert detail["migrations"] == "at 0003 (head 0003)"
+    assert detail["migrations"] == "at 0003 (head 0003; not migrated by this check)"
     assert "https://coderag.example.com/api/auth/github/callback" in detail["CODERAG_PUBLIC_URL"]
     text = predeploy_check.table(rows)
     assert text.splitlines()[-1].startswith("OK: 0 failed")
     for secret in (AUTH_SETTINGS["session_secret"], AUTH_SETTINGS["token_key"], "gsk_" + "x" * 20):
         assert secret not in text                                    # secrets are never printed
+
+
+def test_the_check_never_migrates(tmp_path):
+    """Only the deployed image migrates (on start): a checkout ahead of it must not move the database."""
+    values = env(tmp_path)
+    url = values["CODERAG_DATABASE_URL"]
+
+    def migrations():
+        [(status, detail)] = [(s, d) for s, n, d in predeploy_check.check(values) if n == "migrations"]
+        return status, detail
+
+    status, detail = migrations()                                   # an empty database stays empty
+    assert status == "WARN" and "no schema yet" in detail and "creates it when it starts" in detail
+    assert Database(url).current() is None
+
+    Database(url).upgrade("0002")                                   # behind this checkout: reported, not upgraded
+    status, detail = migrations()
+    assert status == "WARN" and detail.startswith("at 0002, behind this checkout's head 0003")
+    assert Database(url).current() == "0002"
+
+    db = Database(url)                                              # ahead of this checkout (a newer image migrated it)
+    db.upgrade()
+    with db.engine.begin() as c:
+        c.execute(text("UPDATE alembic_version SET version_num = '9999'"))
+    status, detail = migrations()
+    assert status == "WARN" and "a revision this checkout doesn't have" in detail
+    assert Database(url).current() == "9999"
 
 
 def test_the_startup_rules_fail_one_row_each(tmp_path):
@@ -67,8 +98,8 @@ def test_an_unreachable_database_fails(tmp_path):
 def test_missing_pieces_are_warnings(tmp_path):
     values = {"CODERAG_DATA_DIR": str(tmp_path / "data"), "CODERAG_DEMOS_DIR": str(tmp_path / "none")}
     s = statuses(predeploy_check.check(values))
-    assert s["GitHub sign-in"] == s["GROQ_API_KEY"] == s["demos"] == s["database"] == "WARN"
-    assert s["settings"] == s["migrations"] == s["data dir"] == "PASS"
+    assert s["GitHub sign-in"] == s["GROQ_API_KEY"] == s["demos"] == s["database"] == s["migrations"] == "WARN"
+    assert s["settings"] == s["data dir"] == "PASS"
 
 
 def test_env_files_and_the_exit_code(tmp_path):

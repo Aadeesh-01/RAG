@@ -17,7 +17,7 @@ param(
     [string]$App = 'coderag',
     [string]$Tag = '',                      # default: the newest main commit that passed CI
     [string]$Image = '',                    # a full image reference instead of -Tag
-    [int]$TimeoutSeconds = 600
+    [int]$TimeoutSeconds = 300              # waiting for the new revision (5 min)
 )
 
 . (Join-Path $PSScriptRoot 'lib.ps1')
@@ -26,13 +26,8 @@ Write-Step 'preflight'
 $current = Get-AzJson @('containerapp', 'show', '-n', $App, '-g', $RG, '--query',
     '{image:properties.template.containers[0].image, revision:properties.latestRevisionName, fqdn:properties.configuration.ingress.fqdn}')
 if (-not $current) { Stop-Deploy "container app $App not found in ${RG}: run deploy.ps1 first" }
-if (-not $Image) {
-    $slug = Get-RepoSlug
-    if (-not $Tag) { $Tag = Resolve-LatestTag $slug }
-    $Image = "ghcr.io/$($slug.Split('/')[0].ToLower())/coderag:$Tag"
-}
 Write-Note "running: $($current.image) ($($current.revision))"
-Write-Note "target:  $Image"
+$Image = Resolve-Image (Get-RepoSlug) $Image $Tag              # the same choice deploy.ps1 makes
 Test-ImagePullable $Image
 
 if ($current.image -eq $Image) {

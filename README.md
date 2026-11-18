@@ -334,8 +334,10 @@ python scripts/predeploy_check.py --env-file prod.env --database-url "postgresql
 ```
 
 `prod.env` is any `KEY=value` file with the settings below. The check runs the startup rules,
-connects, migrates to the head revision, and checks the demos and the data directory. It prints a
-pass/fail table and never prints a secret.
+connects, reports the database's migration revision next to this checkout's head, and checks the demos
+and the data directory. It never migrates: the deployed server applies its own migrations when it
+starts, so a checkout that is ahead of the live image can't move the database past what that image
+knows. It prints a pass/fail table and never prints a secret.
 
 **2. The Space.** On huggingface.co, go to **New Space**, choose **Docker** with a blank template on
 the free CPU hardware, and leave it public or make it private. A Space reads its settings from the
@@ -400,7 +402,8 @@ are idempotent, so re-run one after fixing whatever stopped it. Use `deploy.ps1`
   `Microsoft.Storage`).
 - A Neon database (use the direct URL, as above), a GitHub OAuth app, and a Groq key.
 - Python with this repository's dependencies. The deploy runs `scripts/predeploy_check.py` locally against
-  Neon before it creates the app, and it uses `.venv` if one exists.
+  Neon before it creates the app (read only: it reports the migration revision and never migrates), and it
+  uses `.venv` if one exists.
 
 **CI publishes the image.** Every push to `main` that passes the tests, the smoke test and the secret scan
 ([scripts/scan_image.py](scripts/scan_image.py)) pushes `ghcr.io/<owner>/coderag:sha-<short>` and `:latest`.
@@ -421,6 +424,10 @@ Pull requests build the image without pushing it.
    .\deploy\azure\deploy.ps1                            # RG coderag-rg, centralindia, app coderag
    .\deploy\azure\deploy.ps1 -Location southeastasia    # bash: LOCATION=southeastasia ./deploy/azure/deploy.sh
    ```
+
+   `deploy` picks the same image as `update`: the newest main commit whose CI passed, found with the GitHub
+   API, else the newest `origin/main` commit with an image on GHCR. It prints the tag and where the tag came
+   from. `-Tag sha-1234567` or `-Image <ref>` (bash: `TAG=`, `IMAGE=`) choose one yourself.
 
    Azure for Students only allows certain regions. If one is refused (`RequestDisallowedByPolicy` or
    `RequestDisallowedByAzure`), the script prints the regions the subscription allows, read from its
@@ -457,8 +464,10 @@ split the limits and fail the first one's jobs, so `max replicas` is 1 (and uvic
 .\deploy\azure\update.ps1 -Tag sha-1234567   # bash: TAG=sha-1234567 ./deploy/azure/update.sh
 ```
 
-`update` only changes the image. It waits until the new revision is provisioned and `/api/ready` answers 200
-through the ingress. After editing `prod.env`, re-run `deploy`: it updates the secrets and restarts the revision.
+`update` only changes the image. It waits until the new revision is ready: provisioned and Healthy, whether
+it is running or has scaled to zero. A revision with no healthy replica is woken with a request to `/api/ready`.
+After 5 minutes it stops and says what it last saw. Then it checks that `/api/ready` answers 200 through the
+ingress. After editing `prod.env`, re-run `deploy`: it updates the secrets and restarts the revision.
 
 **Logs.**
 

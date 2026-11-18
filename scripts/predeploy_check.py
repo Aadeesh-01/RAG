@@ -3,10 +3,12 @@ Check a deployment's settings before (or right after) going live; prints a pass/
 
     python scripts/predeploy_check.py                       # the CODERAG_* environment as the server sees it
     python scripts/predeploy_check.py --env-file prod.env   # or from a file (KEY=value lines)
-    python scripts/predeploy_check.py --database-url "$NEON_DIRECT_URL"   # migrate over the direct URL
+    python scripts/predeploy_check.py --database-url "$NEON_DIRECT_URL"   # check this database URL instead
 
 Checks: the start-up rules (the same as the server's, Settings.validate), the server's
-LLM key, connecting to the database, running the migrations (to the head revision),
+LLM key, connecting to the database, its migration revision next to this checkout's
+head (read only: it never migrates; the deployed server does when it starts, so a
+checkout ahead of the live image can't move the database past what the image knows),
 the demos, and that the data directory is writable. Secrets are never printed.
 Exit code 0 when nothing failed (warnings are allowed), else 1.
 """
@@ -36,6 +38,32 @@ def read_env_file(path):
             key, _, value = line.removeprefix("export ").partition("=")
             values[key.strip()] = value.strip().strip("'\"")
     return values
+
+
+def migration_row(db):
+    """
+    The database's revision next to this checkout's head, read only. Never migrates: the
+    deployed server does that when it starts, with its own migrations. Upgrading from a
+    checkout that is ahead of the deployed image would leave the database at a revision
+    the live server doesn't know, and it would stop starting ("Can't locate revision").
+    """
+    from alembic.script import ScriptDirectory
+    try:
+        script = ScriptDirectory.from_config(db.alembic_config())
+        head = script.get_current_head()
+        current = db.current()
+    except Exception as e:                          # noqa: BLE001
+        return (FAIL, "migrations", f"{type(e).__name__}: {str(e).splitlines()[0][:160]}")
+    if current == head:
+        return (PASS, "migrations", f"at {current} (head {head}; not migrated by this check)")
+    if current is None:
+        return (WARN, "migrations", f"no schema yet (this checkout's head {head}): the server creates it when it starts")
+    known = {r.revision for r in script.walk_revisions()}
+    if current in known:
+        return (WARN, "migrations", f"at {current}, behind this checkout's head {head}: "
+                                    "the deployed server migrates when it starts")
+    return (WARN, "migrations", f"at {current}, a revision this checkout doesn't have (head {head}): the database "
+                                "is newer than this code; deploy an image at least that new")
 
 
 def check(environ, database_url=None):
@@ -68,14 +96,7 @@ def check(environ, database_url=None):
         db = Database(url)
         db.ping()
         rows.append((PASS, "database connection", safe_url(db.url)))
-        try:
-            db.upgrade()
-            from alembic.script import ScriptDirectory
-            head = ScriptDirectory.from_config(db.alembic_config()).get_current_head()
-            current = db.current()
-            rows.append((PASS if current == head else FAIL, "migrations", f"at {current} (head {head})"))
-        except Exception as e:                      # noqa: BLE001
-            rows.append((FAIL, "migrations", f"{type(e).__name__}: {str(e).splitlines()[0][:160]}"))
+        rows.append(migration_row(db))
         db.dispose()
     except Exception as e:                          # noqa: BLE001
         rows.append((FAIL, "database connection", f"{type(e).__name__}: {str(e).splitlines()[0][:160]}"))
@@ -109,7 +130,7 @@ def table(rows):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--env-file", help="read the settings from this file instead of the environment")
-    parser.add_argument("--database-url", help="connect and migrate over this URL (e.g. Neon's direct URL)")
+    parser.add_argument("--database-url", help="connect to this URL instead (e.g. Neon's direct URL); nothing is migrated")
     args = parser.parse_args(argv)
     environ = read_env_file(args.env_file) if args.env_file else dict(os.environ)
     rows = check(environ, args.database_url)

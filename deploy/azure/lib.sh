@@ -116,18 +116,55 @@ repo_slug() {
   esac
 }
 
-# latest_tag SLUG: sha-<7> of the newest main commit whose CI run succeeded (GitHub API; else origin/main).
+# ghcr_tags REPO: the sha- tags of a public GHCR package, one per line (nothing when they can't be listed).
+ghcr_tags() {
+  local token
+  token="$(curl -fsS --max-time 20 "https://ghcr.io/token?scope=repository:$1:pull" 2>/dev/null |
+    sed -E 's/.*"token":"([^"]+)".*/\1/' || true)"
+  [ -n "$token" ] || return 0
+  curl -fsS --max-time 20 -H "Authorization: Bearer $token" "https://ghcr.io/v2/$1/tags/list?n=1000" 2>/dev/null |
+    grep -o '"sha-[0-9a-f]*"' | tr -d '"' || true
+}
+
+# latest_tag SLUG: sha-<7> of the newest main commit whose CI run passed (CI pushes ghcr.io/<owner>/coderag:sha-<7>
+# only after every check passed), with a line on stderr saying where it came from. deploy and update both use it.
+#   1. the GitHub API: the newest successful push run of ci.yml on main;
+#   2. else: the newest commit on origin/main that has a sha-<7> image on GHCR.
 latest_tag() {
-  local sha
-  sha="$(curl -fsS --max-time 20 -H 'User-Agent: coderag-deploy' \
-    "https://api.github.com/repos/$1/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" 2>/dev/null |
-    grep -m1 '"head_sha"' | sed -E 's/.*"head_sha": *"([0-9a-f]+)".*/\1/' || true)"
-  if [ -z "$sha" ]; then
-    note "no successful CI run on main found; using origin/main" >&2
-    git -C "$REPO_ROOT" fetch --quiet origin main 2>/dev/null || true
-    sha="$(git -C "$REPO_ROOT" rev-parse origin/main)"
+  local json sha run when tags stale="" s
+  json="$(curl -fsS --max-time 20 -H 'User-Agent: coderag-deploy' \
+    "https://api.github.com/repos/$1/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" 2>/dev/null || true)"
+  sha="$(printf '%s' "$json" | grep -o '"head_sha": *"[0-9a-f]*"' | head -1 | grep -o '[0-9a-f]\{40\}' || true)"
+  if [ -n "$sha" ]; then
+    run="$(printf '%s' "$json" | grep -o '"run_number": *[0-9]*' | head -1 | grep -o '[0-9]*$' || true)"
+    when="$(printf '%s' "$json" | grep -o '"updated_at": *"[^"]*"' | head -1 | sed -E 's/.*"([^"]*)"$/\1/' || true)"
+    note "tag: sha-${sha:0:7}, the newest main commit whose CI passed (run #$run, $when)" >&2
+    printf 'sha-%s' "${sha:0:7}"
+    return 0
   fi
-  printf 'sha-%s' "${sha:0:7}"
+  note "GitHub API: no successful CI run on main found (or the API is unavailable)" >&2
+  # fallback: the newest origin/main commit with an image on GHCR (an image exists only if its CI passed)
+  git -C "$REPO_ROOT" fetch --quiet origin main 2>/dev/null || stale="; origin/main could not be fetched, so it may be older than GitHub"
+  tags="$(ghcr_tags "$(printf '%s' "${1%%/*}" | tr '[:upper:]' '[:lower:]')/coderag")"
+  for s in $(git -C "$REPO_ROOT" log origin/main --format=%H -n 100 2>/dev/null); do
+    if printf '%s\n' "$tags" | grep -qx "sha-${s:0:7}"; then
+      note "tag: sha-${s:0:7}, the newest origin/main commit with a published image (CI passed)$stale" >&2
+      printf 'sha-%s' "${s:0:7}"
+      return 0
+    fi
+  done
+  die "Couldn't find an image for any recent main commit (GitHub API and GHCR both checked). Set IMAGE or TAG."
+}
+
+# resolve_image SLUG IMAGE TAG: the image deploy and update use (on stdout; what was chosen on stderr):
+# IMAGE as given, else ghcr.io/<owner>/coderag:<TAG, or the newest CI-passed tag>.
+resolve_image() {
+  local slug="$1" image="$2" tag="$3"
+  if [ -n "$image" ]; then note "image: $image (given with IMAGE)" >&2; printf '%s' "$image"; return 0; fi
+  if [ -n "$tag" ]; then note "tag: $tag (given with TAG)" >&2; else tag="$(latest_tag "$slug")" || exit 1; fi
+  image="ghcr.io/$(printf '%s' "${slug%%/*}" | tr '[:upper:]' '[:lower:]')/coderag:$tag"
+  note "image: $image" >&2
+  printf '%s' "$image"
 }
 
 # image_pullable IMAGE: ghcr.io images must be pullable anonymously (that is what Container Apps does).
@@ -151,38 +188,53 @@ Make it public: https://github.com/users/${repo%%/*}/packages/container/${repo#*
 }
 
 # ── health ───────────────────────────────────────────────────────────────────
-# wait_healthy APP RG TIMEOUT: until the latest revision is provisioned, the latest ready one and not
-# unhealthy. With min replicas 0 it may then sit at zero replicas, so callers confirm with probe_url.
+# wake_url URL: one GET through the ingress (it starts a replica of an app scaled to zero); prints the status.
+wake_url() { curl -s -o /dev/null -w '%{http_code}' --max-time 30 "$1" || true; }
+
+# wait_healthy APP RG TIMEOUT: until the latest revision is ready. Ready: provisioned, the latest ready
+# revision, and Healthy (running, or scaled to zero after passing its probes). A provisioned revision
+# without a healthy replica (scaled to zero, or not started) is woken with GET /api/ready through the
+# ingress, at most every 20 s; a 200 from it also counts as ready. Fails after TIMEOUT s (default 5 min).
 wait_healthy() {
-  local app="$1" rg="$2" deadline=$(( $(date +%s) + ${3:-600} )) last="" state revs latest ready info prov health running
+  local app="$1" rg="$2" timeout="${3:-300}" deadline last="" state="waiting for the revision" revs latest ready fqdn
+  local info prov health running replicas code last_wake=0 now
+  deadline=$(( $(date +%s) + timeout ))
   # polling: a failed call (Azure answers 500s now and then) is retried, not fatal
   while [ "$(date +%s)" -lt "$deadline" ]; do
     az_try containerapp show -n "$app" -g "$rg" -o tsv \
-      --query "join('|', [properties.latestRevisionName || '', properties.latestReadyRevisionName || ''])"
-    revs=""; [ "$AZ_CODE" -ne 0 ] || revs="${AZ_OUT//$'\r'/}"
-    IFS='|' read -r latest ready <<EOF
+      --query "join('|', [properties.latestRevisionName || '', properties.latestReadyRevisionName || '', properties.configuration.ingress.fqdn || ''])"
+    revs="||"; [ "$AZ_CODE" -ne 0 ] || revs="${AZ_OUT//$'\r'/}"
+    IFS='|' read -r latest ready fqdn <<EOF
 $revs
 EOF
-    state="waiting for the revision"
     if [ -n "$latest" ]; then
       az_try containerapp revision show -n "$app" -g "$rg" --revision "$latest" -o tsv \
-        --query "join('|', [properties.provisioningState || 'None', properties.healthState || 'None', properties.runningState || 'None'])"
-      info="None|None|None"; [ "$AZ_CODE" -ne 0 ] || info="${AZ_OUT//$'\r'/}"
-      IFS='|' read -r prov health running <<EOF
+        --query "join('|', [properties.provisioningState || 'None', properties.healthState || 'None', properties.runningState || 'None', to_string(properties.replicas || \`0\`)])"
+      info="None|None|None|0"; [ "$AZ_CODE" -ne 0 ] || info="${AZ_OUT//$'\r'/}"
+      IFS='|' read -r prov health running replicas <<EOF
 $info
 EOF
-      state="$latest: provisioning $prov, health $health, running $running"
+      state="$latest: provisioning $prov, health $health, running $running, replicas $replicas"
       if [ "$prov" = Failed ] || [ "$running" = Failed ]; then
-        die "revision $latest failed. Logs: az containerapp logs show -n $app -g $rg --tail 100"
+        die "revision $latest failed ($state). Logs: az containerapp logs show -n $app -g $rg --type system --tail 50"
       fi
-      if [ "$prov" = Provisioned ] && [ "$ready" = "$latest" ] && [ "$health" != Unhealthy ]; then
-        note "$state"; return 0
+      if [ "$prov" = Provisioned ] && [ "$ready" = "$latest" ] && [ "$health" = Healthy ]; then
+        note "$state"; return 0                                    # running, or ScaledToZero after its probes passed
+      fi
+      now="$(date +%s)"
+      if [ "$prov" = Provisioned ] && [ -n "$fqdn" ] && [ $((now - last_wake)) -ge 20 ]; then
+        last_wake="$now"
+        code="$(wake_url "https://$fqdn/api/ready")"               # scaled to zero or not started: wake it
+        state="$state; woke it: GET /api/ready -> ${code:-000}"
+        if [ "$ready" = "$latest" ] && [ "$code" = 200 ]; then note "$state"; return 0; fi
       fi
     fi
     [ "$state" = "$last" ] || { note "$state"; last="$state"; }
     sleep 10
   done
-  die "the revision was not healthy in time. Logs: az containerapp logs show -n $app -g $rg --tail 100"
+  die "the new revision was not ready after $((timeout / 60)) min (last seen: $state).
+It may still be starting. Check: az containerapp revision list -n $app -g $rg -o table
+and the logs: az containerapp logs show -n $app -g $rg --type system --tail 50"
 }
 
 # probe_url URL TIMEOUT: GET until 200 (the first request after scale-to-zero waits for a cold start); prints the status.

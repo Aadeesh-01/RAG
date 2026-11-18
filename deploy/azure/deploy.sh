@@ -15,12 +15,14 @@
 #
 #   ./deploy/azure/deploy.sh
 #   LOCATION=southeastasia ./deploy/azure/deploy.sh
+#   TAG=sha-1234567 ./deploy/azure/deploy.sh
 #   IMAGE=ghcr.io/aadeesh-01/coderag:sha-1234567 ./deploy/azure/deploy.sh
 
 RG="${RG:-coderag-rg}"
 LOCATION="${LOCATION:-centralindia}"
 APP="${APP:-coderag}"
 IMAGE="${IMAGE:-}"                       # default: ghcr.io/<owner>/coderag:sha-<newest main commit that passed CI>
+TAG="${TAG:-}"                           # a tag instead of the default (e.g. sha-1234567)
 ENVIRONMENT="${ENVIRONMENT:-coderag-env}"
 WORKSPACE="${WORKSPACE:-coderag-logs}"
 STORAGE="${STORAGE:-}"                   # default: coderag<8 hex>, derived from the subscription and RG
@@ -62,10 +64,8 @@ PLAIN_ENV=(
 )
 note "prod.env: all $(( ${#SECRET_VARS[@]} + 1 )) values set"
 
-SLUG="$(repo_slug)"
-OWNER="$(printf '%s' "${SLUG%%/*}" | tr '[:upper:]' '[:lower:]')"
-[ -n "$IMAGE" ] || IMAGE="ghcr.io/$OWNER/coderag:$(latest_tag "$SLUG")"
-note "image: $IMAGE"
+# the same image update.sh picks: the newest main commit whose CI passed (or TAG / IMAGE)
+IMAGE="$(resolve_image "$(repo_slug)" "$IMAGE" "$TAG")" || exit 1
 image_pullable "$IMAGE"
 
 # ── 1. resource group, logs, environment ─────────────────────────────────────
@@ -271,7 +271,7 @@ fi
 
 # ── 5. healthy? ──────────────────────────────────────────────────────────────
 step "waiting for revision $AFTER"
-wait_healthy "$APP" "$RG" 600
+wait_healthy "$APP" "$RG" 300
 READY="$(probe_url "$PUBLIC_URL/api/ready" 300)"
 PAGE="$(probe_url "$PUBLIC_URL/app" 120)"
 note "GET /api/ready -> $READY, GET /app -> $PAGE"

@@ -12,7 +12,7 @@ RG="${RG:-coderag-rg}"
 APP="${APP:-coderag}"
 TAG="${TAG:-}"                           # default: the newest main commit that passed CI
 IMAGE="${IMAGE:-}"                       # a full image reference instead of TAG
-TIMEOUT="${TIMEOUT:-600}"
+TIMEOUT="${TIMEOUT:-300}"                # waiting for the new revision (5 min)
 
 # shellcheck source=lib.sh
 . "$(cd "$(dirname "$0")" && pwd)/lib.sh"
@@ -21,13 +21,8 @@ step preflight
 az_exists containerapp show -n "$APP" -g "$RG" || die "container app $APP not found in $RG: run deploy.sh first"
 CURRENT="$(az_value containerapp show -n "$APP" -g "$RG" --query 'properties.template.containers[0].image')"
 FQDN="$(az_value containerapp show -n "$APP" -g "$RG" --query properties.configuration.ingress.fqdn)"
-if [ -z "$IMAGE" ]; then
-  SLUG="$(repo_slug)"
-  [ -n "$TAG" ] || TAG="$(latest_tag "$SLUG")"
-  IMAGE="ghcr.io/$(printf '%s' "${SLUG%%/*}" | tr '[:upper:]' '[:lower:]')/coderag:$TAG"
-fi
 note "running: $CURRENT"
-note "target:  $IMAGE"
+IMAGE="$(resolve_image "$(repo_slug)" "$IMAGE" "$TAG")" || exit 1     # the same choice deploy.sh makes
 image_pullable "$IMAGE"
 
 if [ "$CURRENT" = "$IMAGE" ]; then

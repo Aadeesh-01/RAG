@@ -144,19 +144,64 @@ function Get-RepoSlug {
     Stop-Deploy 'Could not read the GitHub owner from "git remote get-url origin"; pass -Image.'
 }
 
+function Get-GhcrTags([string]$Repo) {
+    <# The tags of a public GHCR package (anonymous, as Container Apps pulls); @() when they can't be listed. #>
+    try {
+        $token = (Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Uri "https://ghcr.io/token?scope=repository:${Repo}:pull").token
+        $list = Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers @{ Authorization = "Bearer $token" } `
+            -Uri "https://ghcr.io/v2/$Repo/tags/list?n=1000"
+        return @($list.tags)
+    } catch { return @() }
+}
+
 function Resolve-LatestTag([string]$Slug) {
-    <# sha-<7> of the newest main commit whose CI run succeeded (GitHub API; else origin/main). #>
+    <#
+      sha-<7> of the newest main commit whose CI run passed (CI pushes ghcr.io/<owner>/coderag:sha-<7>
+      only after every check passed), with a line saying where it came from. deploy and update both use it.
+      1. the GitHub API: the newest successful push run of ci.yml on main;
+      2. else: the newest commit on origin/main that has a sha-<7> image on GHCR.
+    #>
     try {
         $runs = Invoke-RestMethod -UseBasicParsing -TimeoutSec 20 -Headers @{ 'User-Agent' = 'coderag-deploy' } `
             -Uri "https://api.github.com/repos/$Slug/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1"
-        if ($runs.workflow_runs.Count -gt 0) { return 'sha-' + $runs.workflow_runs[0].head_sha.Substring(0, 7) }
-        Write-Note 'no successful CI run on main yet; using origin/main'
+        if ($runs.workflow_runs.Count -gt 0) {
+            $run = $runs.workflow_runs[0]
+            $tag = 'sha-' + $run.head_sha.Substring(0, 7)
+            $title = (($run.head_commit.message -split "`n")[0]).Trim()
+            Write-Note "tag: $tag, the newest main commit whose CI passed (run #$($run.run_number), $($run.updated_at): $title)"
+            return $tag
+        }
+        Write-Note 'no successful CI run on main found through the GitHub API'
     } catch {
-        Write-Note "GitHub API unavailable ($($_.Exception.Message)); using origin/main"
+        Write-Note "GitHub API unavailable ($($_.Exception.Message))"
     }
+    # fallback: the newest origin/main commit with an image on GHCR (an image exists only if its CI passed)
+    $prev = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     & git -C $Script:RepoRoot fetch --quiet origin main 2>$null
-    $sha = (& git -C $Script:RepoRoot rev-parse --short=7 origin/main).Trim()
-    return "sha-$sha"
+    $fetched = $LASTEXITCODE -eq 0
+    $shas = @(& git -C $Script:RepoRoot log origin/main --format=%H -n 100 2>$null)
+    $ErrorActionPreference = $prev
+    $owner = $Slug.Split('/')[0].ToLower()
+    $tags = Get-GhcrTags "$owner/coderag"
+    foreach ($sha in $shas) {
+        $tag = 'sha-' + $sha.Trim().Substring(0, 7)
+        if ($tags -contains $tag) {
+            $stale = if ($fetched) { '' } else { '; origin/main could not be fetched, so it may be older than GitHub' }
+            Write-Note "tag: $tag, the newest origin/main commit with a published image (CI passed)$stale"
+            return $tag
+        }
+    }
+    Stop-Deploy "Couldn't find an image for any recent main commit (GitHub API and GHCR both checked). Pass -Image or -Tag."
+}
+
+function Resolve-Image([string]$Slug, [string]$Image = '', [string]$Tag = '') {
+    <# The image deploy and update use: -Image as given, else ghcr.io/<owner>/coderag:<-Tag or the newest CI-passed tag>. #>
+    if ($Image) { Write-Note "image: $Image (given with -Image)"; return $Image }
+    $owner = $Slug.Split('/')[0].ToLower()
+    if ($Tag) { Write-Note "tag: $Tag (given with -Tag)" } else { $Tag = Resolve-LatestTag $Slug }
+    $Image = "ghcr.io/$owner/coderag:$Tag"
+    Write-Note "image: $Image"
+    return $Image
 }
 
 function Test-ImagePullable([string]$Image) {
@@ -183,12 +228,24 @@ function Test-ImagePullable([string]$Image) {
 }
 
 # -- health -------------------------------------------------------------------
-function Wait-RevisionHealthy([string]$App, [string]$RG, [int]$TimeoutSeconds = 600) {
-    <# Waits until the latest revision is provisioned, is the latest ready one and is not unhealthy; returns
-       the app's FQDN. With min replicas 0 it may then sit at zero replicas, so callers confirm with a real
-       GET /api/ready through the ingress (Invoke-Probe), which starts a replica and passes its probes. #>
+function Invoke-Wake([string]$Url) {
+    <# One GET through the ingress (it starts a replica of an app scaled to zero); the status, or 0. #>
+    try { return [int](Invoke-WebRequest -UseBasicParsing -TimeoutSec 30 -Uri $Url).StatusCode }
+    catch { if ($_.Exception.Response) { return [int]$_.Exception.Response.StatusCode } else { return 0 } }
+}
+
+function Wait-RevisionHealthy([string]$App, [string]$RG, [int]$TimeoutSeconds = 300) {
+    <#
+      Waits until the latest revision is ready; returns the app's FQDN. Ready: provisioned, the latest
+      ready revision, and Healthy (running, or scaled to zero after passing its probes). A provisioned
+      revision without a healthy replica (scaled to zero, or not started) is woken with GET /api/ready
+      through the ingress, at most every 20 s; a 200 from it also counts as ready. Fails after
+      $TimeoutSeconds (5 min) with the last state it saw.
+    #>
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $last = ''
+    $state = 'waiting for the revision'
+    $lastWake = [datetime]::MinValue
     # polling: a failed call (Azure answers 500s now and then) is retried, not fatal
     function Get-Polled([string[]]$Arguments) {
         $p = Invoke-Az -Arguments ($Arguments + @('-o', 'json')) -AllowFail
@@ -198,25 +255,34 @@ function Wait-RevisionHealthy([string]$App, [string]$RG, [int]$TimeoutSeconds = 
     while ((Get-Date) -lt $deadline) {
         $a = Get-Polled @('containerapp', 'show', '-n', $App, '-g', $RG, '--query',
             '{latest:properties.latestRevisionName, ready:properties.latestReadyRevisionName, fqdn:properties.configuration.ingress.fqdn}')
-        $state = 'waiting for the revision'
         if ($a -and $a.latest) {
             $r = Get-Polled @('containerapp', 'revision', 'show', '-n', $App, '-g', $RG, '--revision', $a.latest, '--query',
-                '{prov:properties.provisioningState, health:properties.healthState, running:properties.runningState}')
+                '{prov:properties.provisioningState, health:properties.healthState, running:properties.runningState, replicas:properties.replicas}')
             if ($r) {
-                $state = "$($a.latest): provisioning $($r.prov), health $($r.health), running $($r.running)"
+                $state = "$($a.latest): provisioning $($r.prov), health $($r.health), running $($r.running), replicas $([int]$r.replicas)"
                 if ($r.prov -eq 'Failed' -or $r.running -eq 'Failed') {
-                    Stop-Deploy "revision $($a.latest) failed. Logs: az containerapp logs show -n $App -g $RG --tail 100"
+                    Stop-Deploy "revision $($a.latest) failed ($state). Logs: az containerapp logs show -n $App -g $RG --type system --tail 50"
                 }
-                if ($r.prov -eq 'Provisioned' -and $a.ready -eq $a.latest -and $r.health -ne 'Unhealthy') {
+                $provisioned = $r.prov -eq 'Provisioned' -and $a.ready -eq $a.latest
+                if ($provisioned -and $r.health -eq 'Healthy') {             # running, or ScaledToZero after its probes passed
                     Write-Note $state
                     return $a.fqdn
+                }
+                if ($r.prov -eq 'Provisioned' -and $a.fqdn -and ((Get-Date) - $lastWake).TotalSeconds -ge 20) {
+                    $lastWake = Get-Date
+                    $code = Invoke-Wake "https://$($a.fqdn)/api/ready"     # scaled to zero or not started: wake it
+                    $state += "; woke it: GET /api/ready -> $(if ($code) { $code } else { 'no answer' })"
+                    if ($provisioned -and $code -eq 200) { Write-Note $state; return $a.fqdn }
                 }
             }
         }
         if ($state -ne $last) { Write-Note $state; $last = $state }
         Start-Sleep -Seconds 10
     }
-    Stop-Deploy "the revision was not healthy after $TimeoutSeconds s. Logs: az containerapp logs show -n $App -g $RG --tail 100"
+    $minutes = [Math]::Round($TimeoutSeconds / 60, 1)
+    Stop-Deploy ("the new revision was not ready after $minutes min (last seen: $state).`n" +
+        "It may still be starting. Check: az containerapp revision list -n $App -g $RG -o table`n" +
+        "and the logs: az containerapp logs show -n $App -g $RG --type system --tail 50")
 }
 
 function Invoke-Probe([string]$Url, [int]$TimeoutSeconds = 240) {

@@ -236,3 +236,31 @@ def test_the_server_has_the_proxy_hops_log(tmp_path):
                      embedder=HashEncoder())
     [m] = [m for m in app.user_middleware if m.cls is ProxyHopsLog]
     assert m.kwargs == {"trusted_proxy_hops": 1}
+
+
+# ── the image, the wait, and migrations ─────────────────────────────────────
+@pytest.mark.parametrize("ext, resolve, old", [("ps1", "Resolve-Image", "Resolve-LatestTag $slug"), ("sh", "resolve_image", 'latest_tag "$SLUG"')])
+def test_deploy_and_update_pick_the_same_image(ext, resolve, old):
+    deploy, update = read("deploy", "azure", f"deploy.{ext}"), read("deploy", "azure", f"update.{ext}")
+    assert resolve in deploy and resolve in update                   # one resolver: the newest main commit whose CI passed
+    assert old not in deploy and old not in update
+    lib = read("deploy", "azure", f"lib.{ext}")
+    for needle in ("the newest main commit whose CI passed", "status=success", "tags/list",
+                   "the newest origin/main commit with a published image", "could not be fetched"):
+        assert needle in lib, needle                                  # it says which tag, and why
+
+
+@pytest.mark.parametrize("ext", ["ps1", "sh"])
+def test_the_wait_wakes_a_scaled_to_zero_app_and_gives_up_after_five_minutes(ext):
+    lib = read("deploy", "azure", f"lib.{ext}")
+    for needle in ("Healthy", "ScaledToZero", "/api/ready", "woke it", "not ready after", "revision list"):
+        assert needle in lib, needle
+    assert "300" in lib
+    deploy, update = read("deploy", "azure", f"deploy.{ext}"), read("deploy", "azure", f"update.{ext}")
+    assert ("Wait-RevisionHealthy $App $RG 300" if ext == "ps1" else 'wait_healthy "$APP" "$RG" 300') in deploy
+    assert ("$TimeoutSeconds = 300" if ext == "ps1" else 'TIMEOUT="${TIMEOUT:-300}"') in update
+
+
+def test_the_predeploy_check_never_migrates():
+    source = read("scripts", "predeploy_check.py")
+    assert ".upgrade(" not in source and "migration_row(db)" in source

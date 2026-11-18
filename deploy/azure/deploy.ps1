@@ -22,6 +22,7 @@
 .EXAMPLE
   .\deploy\azure\deploy.ps1
   .\deploy\azure\deploy.ps1 -Location southeastasia
+  .\deploy\azure\deploy.ps1 -Tag sha-1234567
   .\deploy\azure\deploy.ps1 -Image ghcr.io/aadeesh-01/coderag:sha-1234567
 #>
 param(
@@ -29,6 +30,7 @@ param(
     [string]$Location = 'centralindia',
     [string]$App = 'coderag',
     [string]$Image = '',                    # default: ghcr.io/<owner>/coderag:sha-<newest main commit that passed CI>
+    [string]$Tag = '',                      # a tag instead of the default (e.g. sha-1234567)
     [string]$Environment = 'coderag-env',
     [string]$Workspace = 'coderag-logs',
     [string]$Storage = '',                  # default: coderag<8 hex>, derived from the subscription and RG
@@ -76,10 +78,8 @@ foreach ($name in $SecretEnv.Values) { Add-Secret $values[$name] }
 $PlainEnv['CODERAG_GITHUB_CLIENT_ID'] = $values['CODERAG_GITHUB_CLIENT_ID']
 Write-Note "prod.env: all $($needed.Count) values set"
 
-$slug = Get-RepoSlug
-$owner = $slug.Split('/')[0].ToLower()
-if (-not $Image) { $Image = "ghcr.io/$owner/coderag:$(Resolve-LatestTag $slug)" }
-Write-Note "image: $Image"
+# the same image update.ps1 picks: the newest main commit whose CI passed (or -Tag / -Image)
+$Image = Resolve-Image (Get-RepoSlug) $Image $Tag
 Test-ImagePullable $Image
 
 # -- 1. resource group, logs, environment -------------------------------------
@@ -282,7 +282,7 @@ if ($before -and $after -eq $before) {
 
 # -- 5. healthy? --------------------------------------------------------------
 Write-Step "waiting for revision $after"
-Wait-RevisionHealthy $App $RG 600 | Out-Null
+Wait-RevisionHealthy $App $RG 300 | Out-Null
 $ready = Invoke-Probe "$publicUrl/api/ready" 300
 $page = Invoke-Probe "$publicUrl/app" 120
 Write-Note "GET /api/ready -> $ready, GET /app -> $page"
