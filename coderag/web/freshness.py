@@ -75,12 +75,16 @@ class Freshness:
 def add_routes(app, auth, repos, indexer, limit, allow_index, settings, freshness):
     """Register the freshness, update and rebuild endpoints on `app`."""
     moves = {}                                    # new repo id -> {(user id, old repo id)} once it is ready
+    ended = {}                                    # job id -> "ready"/"failed": jobs whose listeners already ran
     moves_lock = threading.Lock()
 
-    def move_links(job):
+    def move_links(job, status):                   # runs before the job shows "ready" to anyone polling it
         with moves_lock:
             waiting = moves.pop(job.repo_id, set())
-        if job.status != "ready":
+            ended[job.id] = status
+            while len(ended) > 1000:
+                ended.pop(next(iter(ended)))
+        if status != "ready":
             return                                 # failed: everyone keeps the index they had
         for user_id, old in waiting:
             if auth.users.move_repo(user_id, old, job.repo_id):
@@ -135,8 +139,14 @@ def add_routes(app, auth, repos, indexer, limit, allow_index, settings, freshnes
         if job.status == "ready":                  # that commit is indexed already (someone else updated)
             auth.users.move_repo(user.id, repo_id, job.repo_id)
         else:
+            # the job may have finished since submit(): register the move, or make it now, under one lock
             with moves_lock:
-                moves.setdefault(job.repo_id, set()).add((user.id, repo_id))
+                status = ended.get(job.id)
+                if status is None:
+                    moves.setdefault(job.repo_id, set()).add((user.id, repo_id))
+            if status == "ready":
+                auth.users.move_repo(user.id, repo_id, job.repo_id)
+                freshness.forget(repo_id)
         return queued_response(job, queued, replaces=repo_id)
 
     @app.post("/api/repos/{repo_id}/rebuild")
