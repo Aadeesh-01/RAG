@@ -1,0 +1,29 @@
+# secrets and local state never go into the image
+.env
+*.env
+!deploy/*.env.example
+data/
+*.db
+
+# environments, caches, VCS
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.git/
+.github/
+
+# not needed at runtime
+tests/
+eval/.repos/
+eval/
+improvements/
+.hallmark/
+.impeccable/
+.vscode/
+.idea/
+coderag.egg-info/
+frontend/tests/
+frontend/node_modules/
+DEPLOY_AUDIT.md

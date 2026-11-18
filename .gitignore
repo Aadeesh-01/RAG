@@ -33,3 +33,6 @@ data/
 # Design-tool output (not part of the app)
 .hallmark/
 .impeccable/
+
+# local env files for docker run (deploy/local.env.example is the template)
+deploy/*.env

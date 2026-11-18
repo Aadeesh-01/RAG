@@ -63,6 +63,13 @@ class Settings:
         Refuse unsafe or half-done settings (ConfigError, one line per problem).
         Returns warnings to log for allowed-but-risky ones.
         """
+        errors, warnings = self.problems()
+        if errors:
+            raise ConfigError("coderag will not start:\n  - " + "\n  - ".join(errors))
+        return warnings
+
+    def problems(self):
+        """(errors, warnings) of the start-up rules (validate; scripts/predeploy_check.py)."""
         errors, warnings = [], []
         github = {"CODERAG_GITHUB_CLIENT_ID": self.github_client_id,
                   "CODERAG_GITHUB_CLIENT_SECRET": self.github_client_secret}
@@ -90,9 +97,7 @@ class Settings:
                 else:
                     errors.append(message + ". Set CODERAG_TRUSTED_PROXY_HOPS=1, or CODERAG_ALLOW_NO_PROXY=1 "
                                             "if TLS really ends at this server")
-        if errors:
-            raise ConfigError("coderag will not start:\n  - " + "\n  - ".join(errors))
-        return warnings
+        return errors, warnings
 
     @classmethod
     def from_env(cls, environ=None):

@@ -1,5 +1,7 @@
 # coderag: code-aware RAG over Python repositories
 
+[![CI](https://github.com/Aadeesh-01/RAG/actions/workflows/ci.yml/badge.svg)](https://github.com/Aadeesh-01/RAG/actions/workflows/ci.yml)
+
 Ask natural-language questions about a Python codebase. Retrieval is built up in steps, from a naive
 fixed-window baseline to AST chunking with call/inheritance-graph expansion:
 
@@ -32,7 +34,7 @@ on `sample_repo`, [psf/requests](https://github.com/psf/requests) and
 ```bash
 python -m venv .venv
 .venv\Scripts\activate          # Windows  (source .venv/bin/activate on Linux/macOS)
-pip install -e ".[dev]"         # or: pip install -r requirements.txt
+pip install -e ".[dev]"         # or: pip install -r requirements-dev.txt (runtime only: requirements.txt)
 ```
 
 The first run downloads `all-MiniLM-L6-v2` (~90 MB). Answers come from one of these:
@@ -305,6 +307,81 @@ the next start. A question keeps the version that answered it and the text of th
 | `DELETE /api/me` | deletes your account: your token (and coderag's GitHub authorization), repo list, history, feedback, shared links and indexing jobs |
 
 Signed-out visitors' questions are not stored: their history lasts for the browser session only.
+
+## Deploy
+
+One Docker container ([Dockerfile](Dockerfile)), CPU only, here on a free Hugging Face Space with
+a free Neon Postgres database. The image has everything baked in: the locked dependencies
+([requirements.lock](requirements.lock), CPU-only torch), the embedding model, the tree-sitter grammars
+and the demos. It never downloads anything at start. It runs one worker as uid 1000, and
+`HEALTHCHECK` polls `/api/ready`.
+
+```bash
+docker build -t coderag .
+cp deploy/local.env.example deploy/local.env        # SQLite, signed out
+docker run --rm -p 7860:7860 --env-file deploy/local.env coderag
+```
+
+**1. Neon.** Create a project (any region near the Space, e.g. AWS us-east). Under **Connect**,
+copy two connection strings: the **pooled** one (host contains `-pooler`) and the **direct** one
+(with *Connection pooling* off). Use the direct URL for migrations, which take a Postgres advisory
+lock that a transaction pooler doesn't hold. One worker needs few connections, so the simplest
+choice is the direct URL for the app too:
+
+```bash
+python scripts/predeploy_check.py --env-file prod.env --database-url "postgresql://…@ep-….neon.tech/coderag?sslmode=require"
+```
+
+`prod.env` is any `KEY=value` file with the settings below. The check runs the startup rules,
+connects, migrates to the head revision, and checks the demos and the data directory. It prints a
+pass/fail table and never prints a secret.
+
+**2. The Space.** On huggingface.co, go to **New Space**, choose **Docker** with a blank template on
+the free CPU hardware, and leave it public or make it private. A Space reads its settings from the
+`README.md` header, so push the repository with the Space header in place of the GitHub README:
+
+```bash
+git remote add space https://huggingface.co/spaces/<you>/<space>
+git switch -c space
+cp deploy/huggingface/README.md README.md && git commit -am "Space README"
+git push --force space space:main
+git switch main && git branch -D space
+```
+
+**3. Secrets and variables** (Space **Settings → Variables and secrets**). These are **secrets**:
+
+| Name | Value |
+|---|---|
+| `CODERAG_DATABASE_URL` | the Neon URL (`postgresql://…?sslmode=require`) |
+| `CODERAG_SESSION_SECRET` | `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
+| `CODERAG_TOKEN_KEY` | another one like it (must differ) |
+| `CODERAG_GITHUB_CLIENT_ID`, `CODERAG_GITHUB_CLIENT_SECRET` | from the OAuth app (step 4) |
+| `GROQ_API_KEY` | the server's LLM key (optional: without it, visitors use their own key) |
+
+These are **variables**:
+
+| Name | Value |
+|---|---|
+| `CODERAG_PUBLIC_URL` | `https://<you>-<space>.hf.space` (or your domain) |
+| `CODERAG_TRUSTED_PROXY_HOPS` | `1` (the image's default; HF's proxy adds one `X-Forwarded-For` entry) |
+| `CODERAG_MAX_LOADED_REPOS` | `3` on the free hardware (optional) |
+
+**4. GitHub OAuth app.** On GitHub, go to **Settings → Developer settings → OAuth Apps**. Set the
+homepage to `https://<you>-<space>.hf.space` and the **callback URL** to
+`https://<you>-<space>.hf.space/api/auth/github/callback`. It must match `CODERAG_PUBLIC_URL`
+exactly. Use a separate OAuth app for local development.
+
+**Custom domain.** Many Spaces share `hf.space`. A custom domain (Space settings, on paid plans) gives
+the session cookie a site of its own, so it doesn't rely on `hf.space` being treated as a public
+suffix. Change `CODERAG_PUBLIC_URL` and the OAuth callback when you switch. The server's Origin check
+refuses requests that change state from any other origin (DEPLOY_AUDIT.md #27).
+
+**Known limitation: the disk resets.** A free Space's disk is wiped on every restart and rebuild.
+Users, history, shares and the list of indexed repos are kept in Neon, but the index files under
+`/data` are not. A visitor repo is rebuilt at the same commit the first time someone opens it after a
+restart: the site shows "Rebuilding index…" with progress. A private repo is rebuilt with the token
+of the user who opens it. The demos are in the image and are always there. With Hugging Face's
+persistent storage, mounted at `/data`, nothing needs rebuilding.
 
 ## Debugging retrieval
 
