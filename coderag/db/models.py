@@ -73,6 +73,7 @@ class UserRepo(Base):
     # Repos.remove() deletes the links of a repo it removes
     repo_id: Mapped[str] = mapped_column(String(200), primary_key=True, index=True)
     added_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
+    last_opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)   # Home: the last repo opened
 
 
 class Job(Base):

@@ -324,11 +324,49 @@ export function bridgeCounts(links) {
  */
 export function repoStatus(info, job) {
   if (job && (job.status === "queued" || job.status === "running" || job.status === "indexing")) {
-    return { key: "indexing", label: job.status === "queued" ? "Queued" : "Indexing", tone: "warn", progress: job.progress ?? 0 };
+    // a rebuild (its files were lost) counts as indexing for the filters, and says what it is
+    const label = job.status === "queued" ? "Queued" : job.kind === "rebuild" ? "Rebuilding" : "Indexing";
+    return { key: "indexing", label, tone: "warn", progress: job.progress ?? 0 };
   }
   if (job && job.status === "failed") return { key: "failed", label: "Failed", tone: "bad" };
   if (info?.reindex_to) return { key: "update", label: "Update available", tone: "warn" };
   return { key: "indexed", label: "Indexed", tone: "ok" };
+}
+
+/**
+ * The first `n` lines of an answer as plain text, for a preview: markdown markers and
+ * code fences dropped, citations kept as plain "S1", blank lines skipped.
+ */
+export function answerLines(text, n = 2) {
+  const out = [];
+  let fenced = false;
+  for (const raw of String(text || "").split("\n")) {
+    if (/^\s*(```|~~~)/.test(raw)) { fenced = !fenced; continue; }
+    if (fenced) continue;
+    const line = raw
+      .replace(/\[S(\d+)\]/g, "S$1")
+      .replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+[.)]\s+)/, "")
+      .replace(/(\*\*|__)(.*?)\1/g, "$2").replace(/(^|\W)[*_](\S.*?)[*_](?=\W|$)/g, "$1$2")
+      .replace(/`([^`]*)`/g, "$1").replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+      .replace(/\s+([.,;:!?])/g, "$1").replace(/\s{2,}/g, " ").trim();
+    if (!line || /^[-*_]{3,}$/.test(line)) continue;
+    out.push(line);
+    if (out.length === n) break;
+  }
+  return out;
+}
+
+/** "just now", "5 minutes ago", "yesterday", "3 weeks ago" for an ISO time ("" if unknown). */
+export function timeAgo(iso, now = Date.now(), locale = undefined) {
+  const at = Date.parse(iso || "");
+  if (Number.isNaN(at)) return "";
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: "auto" });
+  let value = (at - now) / 1000;
+  for (const [size, unit] of [[60, "second"], [60, "minute"], [24, "hour"], [7, "day"], [4.345, "week"], [12, "month"], [Infinity, "year"]]) {
+    if (Math.abs(value) < size) return unit === "second" ? "just now" : rtf.format(Math.round(value), unit);
+    value /= size;
+  }
+  return "";
 }
 
 /**

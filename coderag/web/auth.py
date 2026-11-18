@@ -262,6 +262,19 @@ class Users:
             if s.get(UserRepo, (user_id, repo_id)) is None:
                 s.add(UserRepo(user_id=user_id, repo_id=repo_id, added_at=_now()))
 
+    def opened_repo(self, user_id, repo_id):
+        """The user opened a repo in their list: remember when (Home's "Continue where you left off")."""
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            s.query(UserRepo).filter_by(user_id=user_id, repo_id=repo_id).update({"last_opened_at": _now()})
+
+    def links(self, user_id):
+        """The user's repo links: [(repo_id, added_at, last_opened_at)], last opened (else added) first."""
+        from ..db.models import UserRepo
+        with self.db.session() as s:
+            rows = [(r.repo_id, r.added_at, r.last_opened_at) for r in s.query(UserRepo).filter_by(user_id=user_id)]
+        return sorted(rows, key=lambda r: r[2] or r[1], reverse=True)
+
     def repo_ids(self, user_id):
         """Repos the user added, newest first."""
         from ..db.models import UserRepo

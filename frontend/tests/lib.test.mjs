@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  citedSources, createSSEParser, focusSubgraph, formatLocation, middleTruncate, normalizeCitations, renderAnswer, viaLabel,
+  answerLines, citedSources, createSSEParser, focusSubgraph, formatLocation, timeAgo, middleTruncate, normalizeCitations, renderAnswer, viaLabel,
 } from "../lib.js";
 
 test("SSE parser handles events split across chunks", () => {
@@ -266,4 +266,28 @@ test("formatLocation shows a line range only when the whole range is known", () 
   for (const n of [{}, { file: "x.py", start_line: null, end_line: null }, { file: "x.py", start_line: undefined }, null]) {
     assert.doesNotMatch(formatLocation(n), /undefined|null/);
   }
+});
+
+test("answerLines gives the first lines of an answer as plain text", () => {
+  const answer = "## How it works\n\nThe request starts in [S1], which **hands off** to `ask()` [S2].\n\n- then [the model](http://x) streams\n```py\ncode()\n```\nlast";
+  assert.deepEqual(answerLines(answer, 2), ["How it works", "The request starts in S1, which hands off to ask() S2."]);
+  assert.deepEqual(answerLines(answer, 4), ["How it works", "The request starts in S1, which hands off to ask() S2.", "then the model streams", "last"]);
+  assert.deepEqual(answerLines("", 2), []);
+  assert.deepEqual(answerLines(null, 2), []);
+});
+
+test("timeAgo reads like a person", () => {
+  const now = Date.parse("2026-11-18T12:00:00Z");
+  assert.equal(timeAgo("2026-11-18T11:59:30Z", now, "en"), "just now");
+  assert.equal(timeAgo("2026-11-18T11:55:00Z", now, "en"), "5 minutes ago");
+  assert.equal(timeAgo("2026-11-17T12:00:00Z", now, "en"), "yesterday");
+  assert.equal(timeAgo("", now, "en"), "");
+});
+
+test("repoStatus tells a rebuild from an indexing job", () => {
+  assert.deepEqual(repoStatus({}, { status: "running", kind: "rebuild", progress: 0.4 }), { key: "indexing", label: "Rebuilding", tone: "warn", progress: 0.4 });
+  assert.equal(repoStatus({}, { status: "running", kind: "index", progress: 0.4 }).label, "Indexing");
+  assert.equal(repoStatus({}, { status: "queued", kind: "rebuild" }).label, "Queued");
+  assert.equal(repoStatus({ reindex_to: "v10" }, null).label, "Update available");
+  assert.equal(repoStatus({}, { status: "failed" }).label, "Failed");
 });

@@ -40,6 +40,7 @@
     </a>
 
     <nav class="pill-nav" aria-label="Sections">
+      <button type="button" data-view="home" hidden>Home</button>
       <button type="button" data-view="overview" aria-current="page">Overview</button>
       <button type="button" data-view="ask">Ask</button>
       <button type="button" data-view="graph">Graph</button>
@@ -180,6 +181,11 @@
     </section>
 
     <!-- ── the repos page ──────────────────────────────────────────────── -->
+    <!-- ── home: the signed-in user's dashboard (GET /api/home) ─────────── -->
+    <section id="view-home" class="home-page" aria-label="Home" hidden>
+      <div id="home" class="home" aria-live="polite"></div>
+    </section>
+
     <section id="view-repos" class="repos-page" aria-label="Repositories" hidden>
       <div class="card repos-card">
         <div class="repos-head">

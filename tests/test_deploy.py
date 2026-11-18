@@ -42,7 +42,7 @@ def test_a_complete_production_environment_passes_and_migrates(tmp_path):
     assert all(s == "PASS" for s, _, _ in rows), rows
     assert statuses(rows)["migrations"] == "PASS"
     detail = dict((n, d) for _, n, d in rows)
-    assert detail["migrations"] == "at 0002 (head 0002)"
+    assert detail["migrations"] == "at 0003 (head 0003)"
     assert "https://coderag.example.com/api/auth/github/callback" in detail["CODERAG_PUBLIC_URL"]
     text = predeploy_check.table(rows)
     assert text.splitlines()[-1].startswith("OK: 0 failed")

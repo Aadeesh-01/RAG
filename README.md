@@ -302,6 +302,7 @@ the next start. A question keeps the version that answered it and the text of th
 | `GET /api/repos/{id}/history?limit=20&before=<id>` | your questions about a repo, newest first, with the total and the last 7 days' counts |
 | `POST /api/questions/{id}/share`, `DELETE` the same to revoke | a public read-only link, `/a/<slug>`. A private repo's answer needs `{"confirm_private": true}` and shows only the answer and the code it cites |
 | `POST /api/questions/{id}/feedback` | `{"rating": "up" \| "down", "note": "..."}` |
+| `GET /api/home` | your Home page in one call: the repo you opened last (`user_repos.last_opened_at`, set when you open one) with your last question about it, your last 8 questions, your repos with their status, and this week's counts. Only your own data; signed-in users land here when `/app` has no `?repo=` or `?q=` |
 | `GET /api/jobs` | your indexing jobs |
 | `DELETE /api/repos/{id}/mine` | removes the repo from your list; its index is deleted when nobody else has it (demos never are) |
 | `DELETE /api/me` | deletes your account: your token (and coderag's GitHub authorization), repo list, history, feedback, shared links and indexing jobs |

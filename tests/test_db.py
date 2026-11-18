@@ -89,7 +89,7 @@ def test_migrating_the_old_auth_database_keeps_every_row(tmp_path):
     legacy_layout(tmp_path)
     db = Database(default_url(str(tmp_path)))
     db.upgrade()
-    assert db.current() == "0002"
+    assert db.current() == "0003"
     with db.session() as s:
         [user] = s.query(User).all()
         assert (user.id, user.github_id, user.login, user.name) == (7, 4242, "ada", "Ada")
@@ -102,7 +102,7 @@ def test_migrating_the_old_auth_database_keeps_every_row(tmp_path):
     # the encrypted token still decrypts with the same session secret
     assert Users(db, AUTH_SETTINGS["session_secret"]).token(7) == "gho_legacy"
     db.upgrade()                                                       # idempotent
-    assert db.current() == "0002"
+    assert db.current() == "0003"
 
 
 def test_the_server_starts_on_an_old_data_folder(tmp_path):

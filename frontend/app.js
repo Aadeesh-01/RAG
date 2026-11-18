@@ -1,7 +1,7 @@
 import {
-  bridgeCounts, citedSources, createSSEParser, errorMessage, focusSubgraph, formatDate, formatLocation, hopLabel, middleTruncate,
+  answerLines, bridgeCounts, citedSources, createSSEParser, errorMessage, focusSubgraph, formatDate, formatLocation, hopLabel, middleTruncate,
   middleTruncateName, moduleGraph, normalizeCitations, plural, questionsPerDay, renderAnswer, repoOverview, repoStatus, suggestedQuestions,
-  viaLabel, initials, avatarSrc, safeHref,
+  viaLabel, initials, avatarSrc, safeHref, timeAgo,
 } from "./lib.js";
 import { currentUser, signIn, signOut } from "./auth.js";
 
@@ -212,11 +212,17 @@ function setView(name, { focus = false } = {}) {
   document.querySelectorAll(".pill-nav button").forEach((b) => {
     if (b.dataset.view === name) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
   });
-  const repos = name === "repos";
-  $("#view-work").hidden = repos;
+  const repos = name === "repos", home = name === "home";
+  $("#view-work").hidden = repos || home;
   $("#view-repos").hidden = !repos;
-  if (repos) { renderRepos(); syncJobs(); }
-  else if (name === "graph") requestAnimationFrame(() => drawGraph());
+  $("#view-home").hidden = !home;
+  if (home) { updateUrl({ repo: null, q: null }); renderHome(); }
+  else if (repos) { renderRepos(); syncJobs(); }
+  else if (!state.demo && !state.picking) {
+    // leaving Home before any repository was opened: the last one, else the first demo
+    state.picking = true;
+    selectRepo(state.home?.last_repo?.id || state.demos[0]?.id).finally(() => { state.picking = false; });
+  } else if (name === "graph") requestAnimationFrame(() => drawGraph());
   if (focus && name === "ask") $("#question").focus();
   if (focus && name === "overview") window.scrollTo({ top: 0 });
 }
@@ -362,15 +368,7 @@ const GENERIC_QUESTIONS = [
 
 /** "3 days ago", "last month", "just now": when a repository was last pushed to. */
 function pushedAgo(iso, now = Date.now()) {
-  const at = Date.parse(iso || "");
-  if (Number.isNaN(at)) return "";
-  const rtf = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
-  let value = (at - now) / 1000;
-  for (const [size, unit] of [[60, "second"], [60, "minute"], [24, "hour"], [7, "day"], [4.345, "week"], [12, "month"], [Infinity, "year"]]) {
-    if (Math.abs(value) < size) return unit === "second" ? "just now" : rtf.format(Math.round(value), unit);
-    value /= size;
-  }
-  return "";
+  return timeAgo(iso, now);
 }
 
 /**
@@ -679,6 +677,7 @@ async function syncJobs() {
     if (!jobs.some((j) => j.job_id === id) && !card.classList.contains("ready")) renderJobCard({ job_id: id, status: "failed", name: "", error: "Lost track of this job." });
   }
   if (state.view === "repos") renderRepos();
+  if (state.view === "home") renderHomeRepos();
   if ([...latest.values()].some(isActive)) jobsTimer = setTimeout(syncJobs, 2000);
 }
 
@@ -691,6 +690,7 @@ function trackJob(job) {
   state.jobs.set(job.repo_id, { ...jobView(job), raw: job });
   if (job.status === "ready") { jobFinished(job); return; }
   if (state.view === "repos") renderRepos();
+  if (state.view === "home") renderHomeRepos();
   syncJobs();
 }
 
@@ -949,6 +949,7 @@ async function selectRepo(id) {
   }
   const chat = state.chats.get(demo.id);
   state.demo = demo;
+  if (state.view === "home") setView(isNarrow() ? "ask" : "overview");      // opening a repo leaves Home
   setEvidence(chat?.evidence);
   state.graphMode = "focus";
   state.selected = null;
@@ -2940,6 +2941,164 @@ function renderRepos() {
   $("#demos-rows").replaceChildren(...state.demos.filter(match).map((d) => repoRow(d, { demo: true })));
 }
 
+// ── Home: the signed-in user's dashboard (GET /api/home, only their own data) ─
+const splitName = (name) => (String(name || "").includes("/") ? name.split("/", 2) : [null, name || ""]);
+const languagesOf = (r) => Object.entries(r.languages || {}).sort((a, b) => b[1] - a[1]);
+
+async function renderHome() {
+  const box = $("#home");
+  if (!state.home) box.replaceChildren(el("div", { class: "card home-loading" }, el("p", { class: "note", text: "Loading your Home…" })));
+  let data;
+  try {
+    data = await fetchJSON("/api/home");
+  } catch {
+    if (!state.home) fill(box, el("div", { class: "card home-loading" }, el("p", { class: "note", text: "Couldn't load your Home page. Reload to try again." })));
+    return;
+  }
+  state.home = data;
+  if (state.view !== "home") return;
+  const empty = !data.repos.length && !data.recent_questions.length && ![...state.jobs.values()].some((j) => isActive(j.raw));
+  fill(box, ...(empty ? homeEmpty() : [
+    el("div", { class: "home-top" }, homeContinue(data), homeRecent(data)),
+    homeRepos(),
+    homeActivity(data),
+    homeDemos(),
+  ]));
+  renderHomeRepos();
+}
+
+function homeEmpty() {
+  const first = (currentUser()?.name || "").split(" ")[0];
+  return [
+    el("section", { class: "card home-welcome", "aria-labelledby": "home-welcome-title" },
+      el("h1", { class: "section-title", id: "home-welcome-title", text: first ? `Welcome, ${first}` : "Welcome" }),
+      el("p", { class: "section-lead", text: "Add a GitHub repository and ask anything about its code. Every answer cites the lines it came from, and your questions are kept here." }),
+      el("button", { type: "button", class: "primary large", id: "home-add-first", text: "Add your first repo", onclick: () => state.openAddRepo?.() })),
+    homeDemos({ title: "Or explore a demo" }),
+  ];
+}
+
+function homeContinue(d) {
+  const r = d.last_repo;
+  const title = el("h2", { class: "card-title", id: "home-continue-title", text: "Continue where you left off" });
+  if (!r) {
+    return el("section", { class: "card home-continue", "aria-labelledby": "home-continue-title" }, title,
+      el("p", { class: "note", text: "Your repositories are being indexed. They will be here once they are ready." }));
+  }
+  const [owner, name] = splitName(r.name);
+  const languages = languagesOf(r);
+  const q = d.last_question;
+  const lines = q ? answerLines(q.answer, 2) : [];
+  return el("section", { class: "card home-continue", "aria-labelledby": "home-continue-title" },
+    title,
+    el("div", { class: "home-repo" },
+      el("h3", { class: "home-repo-name", title: r.name }, owner ? el("span", { class: "owner", text: `${owner}/` }) : null, name),
+      el("div", { class: "meta" },
+        languages.length ? el("span", { class: "dots" }, languages.slice(0, 4).map(([l]) => el("span", { class: "lang" }, dot(null, languageKey(l)), l))) : null,
+        formatDate(r.built) ? el("span", { text: `indexed ${formatDate(r.built)}` }) : null,
+        r.indexed_with ? el("code", { text: r.indexed_with }) : null)),
+    q ? el("div", { class: "home-last" },
+      el("p", { class: "home-last-q", text: q.question }),
+      lines.length ? el("p", { class: "home-last-a" }, lines.map((l) => el("span", { text: l }))) : null,
+      el("p", { class: "home-last-when" }, el("time", { datetime: q.created_at, text: timeAgo(q.created_at) }),
+        q.cited ? ` · ${plural(q.cited, "source")} cited` : ""))
+      : el("p", { class: "note", text: "No questions about it yet." }),
+    el("div", { class: "home-actions" },
+      el("button", { type: "button", class: "primary", id: "home-open", text: "Open repo", onclick: () => selectRepo(r.id) }),
+      el("button", { type: "button", class: "secondary", id: "home-follow-up", text: "Ask a follow-up",
+        onclick: () => (q ? openQuestion(q, { focus: true }) : selectRepo(r.id).then(focusQuestion)) })));
+}
+
+function homeRecent(d) {
+  return el("section", { class: "card home-recent", "aria-labelledby": "home-recent-title" },
+    el("h2", { class: "card-title", id: "home-recent-title", text: "Recent questions" }),
+    d.recent_questions.length ? el("ol", { class: "home-questions" }, d.recent_questions.map((q) => el("li", {},
+      el("button", { type: "button", class: "home-question", "data-question": q.id, onclick: () => openQuestion(q) },
+        el("span", { class: "q", title: q.question, text: q.question }),
+        el("span", { class: "meta" },
+          el("span", { class: "repo-chip", title: q.repo_name, text: middleTruncateName(splitName(q.repo_name)[1] || q.repo_name, 24) }),
+          el("time", { datetime: q.created_at, text: timeAgo(q.created_at) }),
+          q.cited ? el("span", { text: `${q.cited} cited` }) : null)))))
+      : el("p", { class: "note", text: "The questions you ask are kept here." }));
+}
+
+function homeRepos() {
+  return el("section", { class: "card home-repos-card", "aria-labelledby": "home-repos-title" },
+    el("div", { class: "home-section-head" },
+      el("h2", { class: "card-title", id: "home-repos-title", text: "Your repos" }),
+      el("div", { class: "home-actions" },
+        el("button", { type: "button", class: "primary small", text: "+ Add repo", onclick: () => state.openAddRepo?.() }),
+        el("button", { type: "button", class: "link-button", text: "All repos", onclick: () => setView("repos", { focus: true }) }))),
+    el("div", { id: "home-repos", class: "home-repos" }));
+}
+
+/** The repo grid; its statuses follow the live jobs (syncJobs calls this while any is running). */
+function renderHomeRepos() {
+  const grid = $("#home-repos");
+  if (!grid || !state.home) return;
+  const known = new Set(state.home.repos.map((r) => r.id));
+  const pending = [...state.jobs.values()].filter((j) => isActive(j.raw) && !known.has(j.repo_id))
+    .map((j) => ({ id: j.repo_id, name: j.name, languages: {}, pending: true }));
+  grid.replaceChildren(...[...pending, ...state.home.repos].map(homeRepoCard));
+}
+
+function homeRepoCard(r) {
+  const job = state.jobs.get(r.id) || (r.job ? jobView(r.job) : null);
+  const status = repoStatus(r, job);
+  const percent = status.key === "indexing" && status.label !== "Queued" ? ` ${Math.round((status.progress || 0) * 100)}%` : "";
+  const [owner, name] = splitName(r.name);
+  const languages = languagesOf(r);
+  const ready = !r.pending && status.key !== "indexing";
+  return el("button", { type: "button", class: "home-repo-card", title: r.name, "data-repo": r.id, disabled: !ready || null,
+                         onclick: ready ? () => selectRepo(r.id) : null },
+    el("span", { class: "name" }, owner ? el("span", { class: "owner", text: `${owner}/` }) : null, middleTruncateName(name, 28)),
+    el("span", { class: "status-pill", "data-tone": status.tone, text: `${status.label}${percent}` }),
+    el("span", { class: "langs" }, languages.length ? languages.slice(0, 3).map(([l]) => el("span", { class: "lang" }, dot(null, languageKey(l)), l))
+      : r.pending ? "first indexing" : ""));
+}
+
+function homeActivity(d) {
+  const s = d.stats;
+  const today = s.per_day[s.per_day.length - 1] || 0;
+  const dayName = (back) => { const t = new Date(); t.setDate(t.getDate() - back); return t.toLocaleDateString(undefined, { weekday: "short" }); };
+  const indexing = d.repos.filter((r) => repoStatus(r, state.jobs.get(r.id) || (r.job ? jobView(r.job) : null)).key === "indexing").length;
+  const withBridges = d.repos.filter((r) => r.bridges).sort((a, b) => b.bridges - a.bridges);
+  return el("section", { class: "home-activity", "aria-labelledby": "home-activity-title" },
+    el("h2", { class: "home-heading", id: "home-activity-title", text: "Activity" }),
+    el("div", { class: "tiles home-tiles" },
+      tile("Questions this week", s.questions_week,
+        today ? el("b", { class: "up", text: `+${today} today` }) : s.questions_week ? "none today" : "none yet",
+        bars(s.per_day.map((n, i) => ({ value: n, title: `${dayName(6 - i)}: ${plural(n, "question")}` })), { current: 6, empty: !s.questions_week })),
+      tile("Repos", s.repos, indexing ? `${indexing} indexing` : "on your account",
+        bars(d.repos.slice(0, 8).map((r) => ({ value: 1, title: r.name })), { empty: !s.repos })),
+      tile("Bridges found", s.bridges, s.bridges ? `in ${plural(withBridges.length, "repo")}` : "none yet",
+        bars(withBridges.slice(0, 8).map((r) => ({ value: r.bridges, title: `${r.name}: ${plural(r.bridges, "bridge")}` })),
+          { empty: !s.bridges, cat: "var(--cat-bridge)" }))));
+}
+
+function homeDemos({ title = "Try a demo" } = {}) {
+  return el("section", { class: "home-demos", "aria-labelledby": "home-demos-title" },
+    el("h2", { class: "home-heading", id: "home-demos-title", text: title }),
+    el("div", { class: "home-demo-row" }, state.demos.map((d) => el("button", {
+      type: "button", class: "chip", title: d.description || d.name, text: d.name, onclick: () => selectRepo(d.id) }))));
+}
+
+function focusQuestion() {
+  if (isNarrow()) setView("ask");
+  $("#question").focus();
+}
+
+/** A question from Home: open its repo and restore the answer from history (that one item). */
+async function openQuestion(q, { focus = false } = {}) {
+  await selectRepo(q.repo_id);
+  if (state.demo?.id !== q.repo_id) return;                 // gone: selectRepo said so and opened a demo
+  const item = await fetchJSON(`/api/repos/${encodeURIComponent(q.repo_id)}/history?limit=1&before=${q.id + 1}`)
+    .then((h) => h.items?.[0]).catch(() => null);
+  if (item?.id === q.id) restoreHistory(item);
+  else banner("That answer is no longer in your history.");
+  if (focus) focusQuestion();
+}
+
 // ── layout / startup ────────────────────────────────────────────────────────
 function autosize() {
   const area = $("#question");
@@ -2954,6 +3113,7 @@ function setupAccount() {
   // signed out: the demo repositories are open; the header offers sign-in instead of an account
   $("#sign-in-link").hidden = Boolean(user);
   $("#user-button").hidden = !user;
+  $('.pill-nav button[data-view="home"]').hidden = !user;             // Home is the signed-in dashboard
   $("#sign-in-link").href = `/login?next=${encodeURIComponent(window.location.pathname + window.location.search)}`;
   if (!user) return;
   $("#user-initials").textContent = initials(user.name);
@@ -2992,6 +3152,7 @@ async function start() {
   setupFocus();
   setupRepos();
   const openAddRepo = setupAddRepo();
+  state.openAddRepo = openAddRepo;
   renderRepoHead(null);
   renderTiles(null);
   renderNodePanel(null);
@@ -3091,6 +3252,8 @@ async function start() {
   // a link to a repository someone added (not a demo) needs an account, as adding it did
   const demo = wanted && state.demos.some((d) => d.id === wanted || d.name === wanted);
   if (wanted && !demo && !currentUser()) { toSignIn(); return; }
+  // signed in and no deep link (?repo=, ?q=, ?view=): Home, where they left off
+  if (currentUser() && !wanted && !params.get("q") && !params.get("view")) { setView("home"); return; }
   const info = wanted ? await repoInfo(wanted) : null;
   await selectRepo(info ? info.id : state.demos[0]?.id);
   if (wanted && !info) {

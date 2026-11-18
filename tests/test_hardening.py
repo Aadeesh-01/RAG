@@ -208,7 +208,7 @@ def test_migrations_take_an_advisory_lock_on_postgres(tmp_path):
         connection.create_function("pg_advisory_xact_lock", 1, lambda key: calls.append(key) or 1)
     db.sqlite = False
     db.upgrade()
-    assert calls == [MIGRATION_LOCK] and db.current() == "0002"
+    assert calls == [MIGRATION_LOCK] and db.current() == "0003"
 
 
 # ── #5 / #10 fail fast ───────────────────────────────────────────────────────

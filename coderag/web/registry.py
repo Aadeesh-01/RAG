@@ -290,6 +290,35 @@ class Repos:
                     out[row.id] = row_info(row)
         return out
 
+    def bridge_count(self, repo_id):
+        """
+        Cross-language bridges in a repo's saved call graph (graph.json), without loading
+        the index; cached per file and modification time. 0 when unknown.
+        """
+        demo = self.demos.get(repo_id) or self.loaded.get(repo_id)
+        if demo is not None:
+            agent = demo.agents.get(demo.versions[-1]) if demo.agents and demo.versions else None
+            graph = getattr(agent, "code_graph", None)
+            if graph is not None and getattr(graph, "bridges", None) is not None:
+                return len(graph.bridges)
+        row = self._row(repo_id) if _REPO_ID.match(repo_id) else None
+        path = os.path.join(row.index_path, "graph.json") if row is not None and row.index_path else ""
+        try:
+            mtime = os.path.getmtime(path) if path else None
+        except OSError:
+            return 0
+        if mtime is None:
+            return 0
+        cache = self.__dict__.setdefault("_bridge_counts", {})
+        key = (path, mtime)
+        if key not in cache:
+            try:
+                with open(path, encoding="utf-8") as f:
+                    cache[key] = len(json.load(f).get("bridges") or [])
+            except (OSError, ValueError):
+                return 0
+        return cache[key]
+
     def private(self, repo_id):
         """True if `repo_id` is a visitor repo that is private on GitHub (read without loading it)."""
         info = self.summary(repo_id)
