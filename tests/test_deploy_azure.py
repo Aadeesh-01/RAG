@@ -70,14 +70,14 @@ def test_both_deploy_scripts_set_up_the_same_app(deploy):
                    "mountPath: /data", "--min-replicas", "minReplicas: 0", "maxReplicas: 1", "--target-port",
                    "path: /api/ready", "path: /api/health", "type: Startup", "type: Readiness", "type: Liveness",
                    "failureThreshold: 10", "initialDelaySeconds: 20", "predeploy_check.py", "CODERAG_PUBLIC_URL",
-                   "/api/auth/github/callback", "--enable-workload-profiles", "Standard_LRS", "--quota",
+                   "/api/auth/github/callback", "--environment-mode", "WorkloadProfiles", "Express", "Standard_LRS", "--quota",
                    "secretRef", "secretref:", "CODERAG_TRUSTED_PROXY_HOPS", "HF_HUB_OFFLINE", "CODERAG_LIVE_CHECK",
                    "CODERAG_MAX_LOADED_REPOS", "/opt/demos", "/app", "proxy hops"):
         assert needle in s, needle
     for name in ("session-secret", "token-key", "github-client-secret", "database-url", "groq-api-key", *SECRETS):
         assert name in s, name
     lib = read("deploy", "azure", "lib." + deploy.rsplit(".", 1)[1])
-    for needle in ("RequestDisallowedByPolicy", "southeastasia", "eastasia", "westeurope", "eastus"):
+    for needle in ("RequestDisallowedBy(Policy|Azure)", "listOfAllowedLocations", "southeastasia", "eastasia", "westeurope", "eastus"):
         assert needle in lib, needle
 
 

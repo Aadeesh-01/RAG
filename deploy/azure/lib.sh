@@ -58,12 +58,21 @@ az_value() { az_run "$@" -o tsv; printf '%s' "${AZ_OUT//$'\r'/}"; }
 # policy_check WHAT LOCATION: after an az_try that creates something.
 policy_check() {
   [ "$AZ_CODE" -eq 0 ] && return 0
-  if printf '%s' "$AZ_ERR" | grep -q 'RequestDisallowedByPolicy'; then
-    printf '\n\033[31mAzure Policy refused the %s in %s (RequestDisallowedByPolicy).\033[0m\n' "$1" "$2" >&2
-    echo "Azure for Students subscriptions only allow some regions. Re-run with one of them, e.g.:" >&2
-    echo "    LOCATION=southeastasia ./deploy/azure/deploy.sh     # or eastasia, westeurope, eastus" >&2
-    echo "The allowed list is in the policy assignment:" >&2
-    echo "    az policy assignment list --query \"[].{name:displayName, params:parameters}\" -o json" >&2
+  if printf '%s' "$AZ_ERR" | grep -Eq 'RequestDisallowedBy(Policy|Azure)'; then
+    local code allowed
+    code="$(printf '%s' "$AZ_ERR" | grep -Eo 'RequestDisallowedBy(Policy|Azure)' | head -1)"
+    printf '\n\033[31mAzure refused the %s in %s (%s).\033[0m\n' "$1" "$2" "$code" >&2
+    az_try policy assignment list --query "[].parameters.listOfAllowedLocations.value[]" -o tsv
+    allowed="$(printf '%s' "$AZ_OUT" | tr -d '\r' | tr '\n\t' '  ' | sed 's/  */ /g; s/^ //; s/ $//')"
+    if [ -n "$allowed" ]; then
+      echo "This subscription may deploy to: $allowed" >&2
+      echo "    LOCATION=${allowed%% *} ./deploy/azure/deploy.sh" >&2
+    else
+      echo "Azure for Students subscriptions only allow some regions. Re-run with one of them, e.g.:" >&2
+      echo "    LOCATION=southeastasia ./deploy/azure/deploy.sh     # or eastasia, westeurope, eastus" >&2
+      echo "The allowed list is in the policy assignment:" >&2
+      echo "    az policy assignment list --query \"[].{name:displayName, params:parameters}\" -o json" >&2
+    fi
     exit 1
   fi
   die "creating the $1 failed:
@@ -146,16 +155,19 @@ Make it public: https://github.com/users/${repo%%/*}/packages/container/${repo#*
 # unhealthy. With min replicas 0 it may then sit at zero replicas, so callers confirm with probe_url.
 wait_healthy() {
   local app="$1" rg="$2" deadline=$(( $(date +%s) + ${3:-600} )) last="" state revs latest ready info prov health running
+  # polling: a failed call (Azure answers 500s now and then) is retried, not fatal
   while [ "$(date +%s)" -lt "$deadline" ]; do
-    revs="$(az_value containerapp show -n "$app" -g "$rg" \
-      --query "join('|', [properties.latestRevisionName || '', properties.latestReadyRevisionName || ''])")"
+    az_try containerapp show -n "$app" -g "$rg" -o tsv \
+      --query "join('|', [properties.latestRevisionName || '', properties.latestReadyRevisionName || ''])"
+    revs=""; [ "$AZ_CODE" -ne 0 ] || revs="${AZ_OUT//$'\r'/}"
     IFS='|' read -r latest ready <<EOF
 $revs
 EOF
     state="waiting for the revision"
     if [ -n "$latest" ]; then
-      info="$(az_value containerapp revision show -n "$app" -g "$rg" --revision "$latest" \
-        --query "join('|', [properties.provisioningState || 'None', properties.healthState || 'None', properties.runningState || 'None'])")"
+      az_try containerapp revision show -n "$app" -g "$rg" --revision "$latest" -o tsv \
+        --query "join('|', [properties.provisioningState || 'None', properties.healthState || 'None', properties.runningState || 'None'])"
+      info="None|None|None"; [ "$AZ_CODE" -ne 0 ] || info="${AZ_OUT//$'\r'/}"
       IFS='|' read -r prov health running <<EOF
 $info
 EOF

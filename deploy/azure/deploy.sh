@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Deploy coderag to Azure Container Apps. Idempotent: re-run it after fixing anything.
 # The same steps as deploy.ps1 (see there for the details):
-#   1. resource group, Log Analytics workspace, Container Apps environment (consumption);
+#   1. resource group, Log Analytics workspace, Container Apps environment (Consumption profile);
 #   2. storage account + Azure Files share "coderag-data" (5 GB), registered in the environment,
 #      mounted at /data with uid=1000,gid=1000 (the image's user);
 #   3. scripts/predeploy_check.py against prod.env (abort on failure);
@@ -93,14 +93,18 @@ else
   WS_ID="$(az_value monitor log-analytics workspace show -g "$RG" -n "$WORKSPACE" --query customerId)"
   WS_KEY="$(az_value monitor log-analytics workspace get-shared-keys -g "$RG" -n "$WORKSPACE" --query primarySharedKey)"
   add_secret "$WS_KEY"
-  note "creating (consumption; takes a few minutes)"
-  az_try containerapp env create -n "$ENVIRONMENT" -g "$RG" -l "$LOCATION" --enable-workload-profiles false \
+  note "creating (Consumption workload profile; takes a few minutes)"
+  az_try containerapp env create -n "$ENVIRONMENT" -g "$RG" -l "$LOCATION" --environment-mode WorkloadProfiles \
     --logs-destination log-analytics --logs-workspace-id "$WS_ID" --logs-workspace-key "$WS_KEY" -o none
   policy_check "Container Apps environment" "$LOCATION"
   note created
 fi
 DEFAULT_DOMAIN="$(az_value containerapp env show -n "$ENVIRONMENT" -g "$RG" --query properties.defaultDomain)"
 ENV_LOCATION="$(az_value containerapp env show -n "$ENVIRONMENT" -g "$RG" --query location)"
+# Without workload profiles, new environments are "Express", which can't mount storage; the
+# Consumption profile of a workload-profiles environment bills the same way (per second, free grant).
+[ "$(az_value containerapp env show -n "$ENVIRONMENT" -g "$RG" --query properties.environmentMode)" != Express ] ||
+  die "$ENVIRONMENT is an Express environment, which can't mount Azure Files. Delete it (az containerapp env delete -n $ENVIRONMENT -g $RG --yes) and re-run."
 
 # ── 2. Azure Files at /data ──────────────────────────────────────────────────
 if [ -z "$STORAGE" ]; then

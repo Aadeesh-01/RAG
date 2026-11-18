@@ -4,7 +4,7 @@
 
 .DESCRIPTION
   Creates or updates, in order:
-    1. the resource group, a Log Analytics workspace and a Container Apps environment (consumption);
+    1. the resource group, a Log Analytics workspace and a Container Apps environment (Consumption profile);
     2. a storage account with the Azure Files share "coderag-data" (5 GB), registered in the
        environment and mounted at /data (uid=1000,gid=1000: the image's user);
     3. runs scripts/predeploy_check.py against prod.env (abort on failure);
@@ -107,13 +107,19 @@ if (-not $cae) {
     $wsKey = Get-AzValue @('monitor', 'log-analytics', 'workspace', 'get-shared-keys', '-g', $RG, '-n', $Workspace,
         '--query', 'primarySharedKey')
     Add-Secret $wsKey
-    Write-Note 'creating (consumption; takes a few minutes)'
+    Write-Note 'creating (Consumption workload profile; takes a few minutes)'
     Test-PolicyRefusal (Invoke-Az @('containerapp', 'env', 'create', '-n', $Environment, '-g', $RG, '-l', $Location,
-        '--enable-workload-profiles', 'false', '--logs-destination', 'log-analytics',
+        '--environment-mode', 'WorkloadProfiles', '--logs-destination', 'log-analytics',
         '--logs-workspace-id', $ws.customerId, '--logs-workspace-key', $wsKey) -AllowFail) 'Container Apps environment' $Location
     $cae = Get-AzJson @('containerapp', 'env', 'show', '-n', $Environment, '-g', $RG)
     Write-Note 'created'
 } else { Write-Note "exists ($($cae.location))" }
+# Without workload profiles, new environments are "Express", which can't mount storage; the
+# Consumption profile of a workload-profiles environment bills the same way (per second, free grant).
+if ($cae.properties.environmentMode -eq 'Express') {
+    Stop-Deploy ("$Environment is an Express environment, which can't mount Azure Files. Delete it " +
+        "(az containerapp env delete -n $Environment -g $RG --yes) and re-run.")
+}
 $defaultDomain = $cae.properties.defaultDomain
 
 # -- 2. Azure Files at /data --------------------------------------------------

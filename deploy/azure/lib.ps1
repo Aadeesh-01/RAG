@@ -41,7 +41,7 @@ function Find-Az {
         if (-not $c -or -not (Test-Path $c)) { continue }
         if ($c -like '*.cmd') {
             $python = Join-Path (Split-Path (Split-Path $c)) 'python.exe'
-            if (Test-Path $python) { return @{ Exe = $python; Prefix = @('-IBm', 'azure.cli') } }
+            if (Test-Path $python) { return @{ Exe = $python; Prefix = @('-X', 'utf8', '-IBm', 'azure.cli') } }
         } else {
             return @{ Exe = $c; Prefix = @() }
         }
@@ -71,7 +71,7 @@ function Invoke-Az {
     $psi.RedirectStandardError = $true
     $psi.StandardOutputEncoding = [System.Text.Encoding]::UTF8
     $psi.StandardErrorEncoding = [System.Text.Encoding]::UTF8
-    $psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'
+    $psi.EnvironmentVariables['PYTHONIOENCODING'] = 'utf-8'      # ignored under -I; -X utf8 (Find-Az) covers az.cmd's Python
     $psi.EnvironmentVariables['AZ_INSTALLER'] = 'MSI'
     $p = [System.Diagnostics.Process]::Start($psi)
     $out = $p.StandardOutput.ReadToEndAsync()
@@ -102,13 +102,21 @@ function Get-AzValue([string[]]$Arguments) {
 
 function Test-PolicyRefusal($Result, [string]$What, [string]$Location) {
     if ($Result.Code -eq 0) { return }
-    if ($Result.Err -match 'RequestDisallowedByPolicy') {
+    if ($Result.Err -match 'RequestDisallowedBy(Policy|Azure)') {
         Write-Host ''
-        Write-Host "Azure Policy refused the $What in '$Location' (RequestDisallowedByPolicy)." -ForegroundColor Red
-        Write-Host 'Azure for Students subscriptions only allow some regions. Re-run with one of them, e.g.:'
-        Write-Host "    .\deploy\azure\deploy.ps1 -Location southeastasia     # or eastasia, westeurope, eastus"
-        Write-Host 'The allowed list is in the policy assignment:'
-        Write-Host '    az policy assignment list --query "[].{name:displayName, params:parameters}" -o json'
+        $code = $Matches[0]
+        Write-Host "Azure refused the $What in '$Location' ($code)." -ForegroundColor Red
+        $allowed = (Invoke-Az @('policy', 'assignment', 'list', '--query',
+            "[].parameters.listOfAllowedLocations.value[]", '-o', 'tsv') -AllowFail).Out -split '\s+' | Where-Object { $_ }
+        if ($allowed) {
+            Write-Host "This subscription may deploy to: $($allowed -join ', ')"
+            Write-Host "    .\deploy\azure\deploy.ps1 -Location $($allowed[0])"
+        } else {
+            Write-Host 'Azure for Students subscriptions only allow some regions. Re-run with one of them, e.g.:'
+            Write-Host '    .\deploy\azure\deploy.ps1 -Location southeastasia     # or eastasia, westeurope, eastus'
+            Write-Host 'The allowed list is in the policy assignment:'
+            Write-Host '    az policy assignment list --query "[].{name:displayName, params:parameters}" -o json'
+        }
         exit 1
     }
     Stop-Deploy "creating the $What failed:`n$($Result.Err)"
@@ -181,12 +189,18 @@ function Wait-RevisionHealthy([string]$App, [string]$RG, [int]$TimeoutSeconds = 
        GET /api/ready through the ingress (Invoke-Probe), which starts a replica and passes its probes. #>
     $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
     $last = ''
+    # polling: a failed call (Azure answers 500s now and then) is retried, not fatal
+    function Get-Polled([string[]]$Arguments) {
+        $p = Invoke-Az -Arguments ($Arguments + @('-o', 'json')) -AllowFail
+        if ($p.Code -ne 0 -or -not $p.Out) { return $null }
+        return ($p.Out | ConvertFrom-Json)
+    }
     while ((Get-Date) -lt $deadline) {
-        $a = Get-AzJson @('containerapp', 'show', '-n', $App, '-g', $RG, '--query',
+        $a = Get-Polled @('containerapp', 'show', '-n', $App, '-g', $RG, '--query',
             '{latest:properties.latestRevisionName, ready:properties.latestReadyRevisionName, fqdn:properties.configuration.ingress.fqdn}')
         $state = 'waiting for the revision'
         if ($a -and $a.latest) {
-            $r = Get-AzJson @('containerapp', 'revision', 'show', '-n', $App, '-g', $RG, '--revision', $a.latest, '--query',
+            $r = Get-Polled @('containerapp', 'revision', 'show', '-n', $App, '-g', $RG, '--revision', $a.latest, '--query',
                 '{prov:properties.provisioningState, health:properties.healthState, running:properties.runningState}')
             if ($r) {
                 $state = "$($a.latest): provisioning $($r.prov), health $($r.health), running $($r.running)"

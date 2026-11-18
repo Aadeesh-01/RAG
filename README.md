@@ -385,7 +385,7 @@ persistent storage, mounted at `/data`, nothing needs rebuilding.
 
 ## Deploy on Azure
 
-The same image on [Azure Container Apps](https://learn.microsoft.com/azure/container-apps/) (consumption plan,
+The same image on [Azure Container Apps](https://learn.microsoft.com/azure/container-apps/) (the serverless Consumption profile,
 scale to zero), pulled from GHCR, with Neon Postgres for the database and an Azure Files share at `/data` so the
 index files survive restarts. The scripts in [deploy/azure/](deploy/azure/) do everything with the az CLI and
 are idempotent, so re-run one after fixing whatever stopped it. Use `deploy.ps1`/`update.ps1` on Windows and
@@ -421,8 +421,10 @@ Pull requests build the image without pushing it.
    .\deploy\azure\deploy.ps1 -Location southeastasia    # bash: LOCATION=southeastasia ./deploy/azure/deploy.sh
    ```
 
-   Azure for Students only allows certain regions. If one is refused (`RequestDisallowedByPolicy`), the script
-   says so: try `southeastasia`, `eastasia`, `westeurope` or `eastus`.
+   Azure for Students only allows certain regions. If one is refused (`RequestDisallowedByPolicy` or
+   `RequestDisallowedByAzure`), the script prints the regions the subscription allows, read from its
+   "Allowed resource deployment regions" policy. Without that policy, it suggests `southeastasia`, `eastasia`,
+   `westeurope` or `eastus`.
 4. Add the callback URL that the script prints, `https://<app>.<env-domain>/api/auth/github/callback`, to the
    OAuth app, and set the app's homepage to the URL.
 
@@ -432,7 +434,7 @@ What `deploy` creates and sets:
 |---|---|
 | Resource group | `coderag-rg`, holding everything below |
 | Log Analytics workspace | `coderag-logs`, 30-day retention |
-| Container Apps environment | `coderag-env`, consumption only |
+| Container Apps environment | `coderag-env`, workload-profiles mode with only the serverless `Consumption` profile. An environment without workload profiles would be *Express*, which can't mount storage |
 | Storage | account `coderag<8 hex>` (Standard LRS, TLS 1.2, no public blobs). File share `coderag-data` (5 GB), registered in the environment and mounted at `/data` with `uid=1000,gid=1000`, the image's user |
 | Container app | `coderag`: the GHCR image, 1 vCPU / 2 GiB, min 0 / max 1 replicas, external HTTPS ingress on port 7860 (HTTP redirects to HTTPS) |
 | Probes | startup and readiness on `/api/ready` (startup allows 120 s: 20 s delay plus 10 × 10 s), liveness on `/api/health` |
@@ -500,7 +502,9 @@ instead.
 
 **Cold start.** The first request after the app has scaled to zero waits for a replica to start. That means
 pulling the image if the node doesn't have it, mounting `/data`, and loading the model and the demos. The
-server itself is ready in about 10 s, and a cold request typically takes 20–60 s. The startup probe allows 120 s.
+server itself is ready in about 10 s. Measured on eastasia, a request after more than 7 idle minutes took 73 s,
+and the next one took 0.4 s. Most of the wait is the platform scheduling a replica and pulling the image. The
+startup probe allows the server 120 s.
 To avoid cold starts, use `--min-replicas 1`, but then a replica is billed for every second of the month,
 well past the free grant.
 
