@@ -383,6 +383,135 @@ restart: the site shows "Rebuilding index…" with progress. A private repo is r
 of the user who opens it. The demos are in the image and are always there. With Hugging Face's
 persistent storage, mounted at `/data`, nothing needs rebuilding.
 
+## Deploy on Azure
+
+The same image on [Azure Container Apps](https://learn.microsoft.com/azure/container-apps/) (consumption plan,
+scale to zero), pulled from GHCR, with Neon Postgres for the database and an Azure Files share at `/data` so the
+index files survive restarts. The scripts in [deploy/azure/](deploy/azure/) do everything with the az CLI and
+are idempotent, so re-run one after fixing whatever stopped it. Use `deploy.ps1`/`update.ps1` on Windows and
+`deploy.sh`/`update.sh` on Linux, macOS or Cloud Shell.
+
+**Prerequisites**
+
+- An Azure subscription. Azure for Students works and needs no credit card.
+- The az CLI, logged in (`az login`), with the Container Apps extension (`az extension add -n containerapp --upgrade`)
+  and the providers registered: `az provider register -n Microsoft.App` (and `Microsoft.OperationalInsights`,
+  `Microsoft.Storage`).
+- A Neon database (use the direct URL, as above), a GitHub OAuth app, and a Groq key.
+- Python with this repository's dependencies. The deploy runs `scripts/predeploy_check.py` locally against
+  Neon before it creates the app, and it uses `.venv` if one exists.
+
+**CI publishes the image.** Every push to `main` that passes the tests, the smoke test and the secret scan
+([scripts/scan_image.py](scripts/scan_image.py)) pushes `ghcr.io/<owner>/coderag:sha-<short>` and `:latest`.
+Pull requests build the image without pushing it.
+
+**One-time steps**
+
+1. Make the package public. Container Apps pulls the image anonymously, and the deploy checks that first.
+   After the first push to `main`, open `https://github.com/users/<owner>/packages/container/coderag/settings`,
+   then go to **Danger Zone → Change visibility → Public**. The image holds no secrets: CI scans its files, `ENV` and
+   build history before every push.
+2. `cp deploy/azure/prod.env.example deploy/azure/prod.env` and fill it in. `prod.env` is git- and docker-ignored.
+   It holds the five secrets (`CODERAG_SESSION_SECRET`, `CODERAG_TOKEN_KEY`, `CODERAG_GITHUB_CLIENT_SECRET`,
+   `CODERAG_DATABASE_URL`, `GROQ_API_KEY`) and `CODERAG_GITHUB_CLIENT_ID`.
+3. Deploy:
+
+   ```powershell
+   .\deploy\azure\deploy.ps1                            # RG coderag-rg, centralindia, app coderag
+   .\deploy\azure\deploy.ps1 -Location southeastasia    # bash: LOCATION=southeastasia ./deploy/azure/deploy.sh
+   ```
+
+   Azure for Students only allows certain regions. If one is refused (`RequestDisallowedByPolicy`), the script
+   says so: try `southeastasia`, `eastasia`, `westeurope` or `eastus`.
+4. Add the callback URL that the script prints, `https://<app>.<env-domain>/api/auth/github/callback`, to the
+   OAuth app, and set the app's homepage to the URL.
+
+What `deploy` creates and sets:
+
+| | |
+|---|---|
+| Resource group | `coderag-rg`, holding everything below |
+| Log Analytics workspace | `coderag-logs`, 30-day retention |
+| Container Apps environment | `coderag-env`, consumption only |
+| Storage | account `coderag<8 hex>` (Standard LRS, TLS 1.2, no public blobs). File share `coderag-data` (5 GB), registered in the environment and mounted at `/data` with `uid=1000,gid=1000`, the image's user |
+| Container app | `coderag`: the GHCR image, 1 vCPU / 2 GiB, min 0 / max 1 replicas, external HTTPS ingress on port 7860 (HTTP redirects to HTTPS) |
+| Probes | startup and readiness on `/api/ready` (startup allows 120 s: 20 s delay plus 10 × 10 s), liveness on `/api/health` |
+| Secrets | the five from `prod.env` as Container Apps secrets, referenced by env vars. They are passed to az as arguments, never written to a file or printed |
+| Env | `CODERAG_GITHUB_CLIENT_ID`, `CODERAG_PUBLIC_URL=https://<fqdn>`, `CODERAG_TRUSTED_PROXY_HOPS=1`, `CODERAG_DATA_DIR=/data`, `CODERAG_DEMOS_DIR=/opt/demos`, `CODERAG_MAX_LOADED_REPOS=3`, `HF_HUB_OFFLINE=1`, `CODERAG_LIVE_CHECK=false` |
+
+`CODERAG_PUBLIC_URL` is set in two phases. Phase 1 creates the app with its image, secrets, ingress and scale
+settings. The script then reads the app's FQDN, and phase 2 applies the full template: the public URL, the
+probes and the volume. The YAML for phase 2 holds no secret values.
+
+**One replica, by design.** Rate limits, the daily LLM cap, the answer cache and the indexing queue all live in
+the process's memory. A starting replica also marks running indexing jobs as interrupted. A second replica would
+split the limits and fail the first one's jobs, so `max replicas` is 1 (and uvicorn runs one worker).
+
+**Updating.** Point the app at a newer image:
+
+```powershell
+.\deploy\azure\update.ps1                    # the newest main commit whose CI passed
+.\deploy\azure\update.ps1 -Tag sha-1234567   # bash: TAG=sha-1234567 ./deploy/azure/update.sh
+```
+
+`update` only changes the image. It waits until the new revision is provisioned and `/api/ready` answers 200
+through the ingress. After editing `prod.env`, re-run `deploy`: it updates the secrets and restarts the revision.
+
+**Logs.**
+
+```bash
+az containerapp logs show -n coderag -g coderag-rg --tail 100            # console; add --follow to stream
+az containerapp logs show -n coderag -g coderag-rg --type system         # pulls, probes, scaling
+```
+
+Older lines are in Log Analytics: in the portal, open the workspace → **Logs** and run
+`ContainerAppConsoleLogs_CL | where ContainerAppName_s == "coderag" | project TimeGenerated, Log_s`.
+
+**Checking `CODERAG_TRUSTED_PROXY_HOPS=1`.** After each start, the first request that isn't a health probe logs
+how many `X-Forwarded-For` entries it carried. It never logs the addresses. Probes reach the container directly, so
+they are skipped.
+
+```bash
+az containerapp logs show -n coderag -g coderag-rg --tail 300 | grep "proxy hops"
+# INFO coderag.web: proxy hops: X-Forwarded-For has 1 entry on the first request, CODERAG_TRUSTED_PROXY_HOPS=1 (ok: the client address is entry -1)
+```
+
+From a plain browser visit, one entry means the Container Apps ingress is the only proxy and the rate limits
+key on the visitor's address. If a client sends its own `X-Forwarded-For`, the entry count is higher, and that is
+expected.
+
+**Cost.**
+
+- **Scale to zero.** With min replicas 0, nothing is billed while no replica runs. The app scales to zero about
+  5 minutes after the last request.
+- **Free monthly grant.** Container Apps gives each subscription 180,000 vCPU-seconds, 360,000 GiB-seconds and
+  2 million requests a month on the consumption plan. At 1 vCPU / 2 GiB that is about 50 hours of running
+  replica a month. Past the grant, usage is billed per second.
+- **Azure Files** (Standard LRS) bills the GiB actually used (indexes are a few MB each) plus transactions. The
+  5 GB quota is a cap, not a charge. Expect cents a month.
+- **Log Analytics.** The first 5 GB of ingestion a month is free, and this app logs a few MB.
+- **Azure for Students.** Charges come out of the credit. When the credit runs out, the resources are disabled,
+  and no card is charged. The remaining credit is at <https://www.microsoftazuresponsorships.com/Balance>.
+
+**Budget alert.** In the portal, go to **Cost Management → Budgets → Add**. Choose the subscription as the scope,
+set a monthly budget (for example $5), and add alert conditions at 50% and 100% of actual cost, sent to your
+email. Budgets may be unavailable on some sponsorship offers. In that case, check the balance page above
+instead.
+
+**Cold start.** The first request after the app has scaled to zero waits for a replica to start. That means
+pulling the image if the node doesn't have it, mounting `/data`, and loading the model and the demos. The
+server itself is ready in about 10 s, and a cold request typically takes 20–60 s. The startup probe allows 120 s.
+To avoid cold starts, use `--min-replicas 1`, but then a replica is billed for every second of the month,
+well past the free grant.
+
+**Teardown.** This deletes everything the scripts created, including the indexes on the file share and the logs:
+
+```bash
+az group delete -n coderag-rg --yes --no-wait
+```
+
+The Neon database, the GHCR package and the GitHub OAuth app are separate and stay.
+
 ## Debugging retrieval
 
 Add `?debug=1` to the site's URL, or call `agent.stream(question, debug=True)` / `POST

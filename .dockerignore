@@ -1,7 +1,9 @@
 # secrets and local state never go into the image
 .env
 *.env
-!deploy/*.env.example
+**/*.env
+# deploy scripts and their env files (nothing in the image needs them)
+deploy/
 data/
 *.db
 

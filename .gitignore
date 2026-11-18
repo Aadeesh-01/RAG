@@ -36,3 +36,7 @@ data/
 
 # local env files for docker run (deploy/local.env.example is the template)
 deploy/*.env
+
+# Azure deploy secrets (deploy/azure/prod.env.example is the template)
+deploy/azure/*.env
+!deploy/azure/prod.env.example

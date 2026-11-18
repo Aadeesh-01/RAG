@@ -71,7 +71,7 @@ from .auth import SESSION_COOKIE, Auth, GitHubError, GitHubReauth
 from .jobs import Indexer, NeedsToken, NotAllowed, QueueFull
 from .limits import LRU, AnswerCache, DailyUsage, Gate, RateLimiter, client_ip
 from .live import LiveChecker, candidate_urls
-from .middleware import BodyLimit, OriginCheck, SecurityHeaders, configure_logging
+from .middleware import BodyLimit, OriginCheck, ProxyHopsLog, SecurityHeaders, configure_logging
 from .registry import Repos, is_older, load_demos, repo_name_of
 from .settings import Settings
 from .sources import SourceUnavailable, fetch_url, read_source
@@ -250,6 +250,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                   openapi_url="/openapi.json" if docs else None)
     app.state.repos, app.state.indexer, app.state.auth, app.state.db = repos, indexer, auth, db
     app.state.cache, app.state.usage, app.state.graphs, app.state.asking = cache, usage, graphs, asking
+    app.add_middleware(ProxyHopsLog, trusted_proxy_hops=settings.trusted_proxy_hops)    # innermost; logs once
     app.add_middleware(RevalidateFrontend)
     app.add_middleware(SecurityHeaders, frontend_dir=FRONTEND_DIR if os.path.isdir(FRONTEND_DIR) else None,
                        public_url=settings.public_url)

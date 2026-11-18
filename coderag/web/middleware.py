@@ -7,6 +7,8 @@ plus the logging setup.
                     X-Frame-Options / frame-ancestors 'none', HSTS when PUBLIC_URL is https
   BodyLimit         413 for request bodies over MAX_BODY bytes (declared or streamed)
   OriginCheck       403 for POST/PUT/PATCH/DELETE whose Origin (or Referer) isn't PUBLIC_URL
+  ProxyHopsLog      one INFO line with the X-Forwarded-For chain length (never the addresses)
+                    of the first request after start, to confirm CODERAG_TRUSTED_PROXY_HOPS
   configure_logging INFO with timestamps; uvicorn's access log without query strings
 """
 
@@ -172,6 +174,45 @@ class OriginCheck:
                 ok = referer is None or origin_of(referer) == self.allowed
             if not ok:
                 return await _reject(send, 403, "Cross-site request refused")
+        return await self.app(scope, receive, send)
+
+
+PROBE_PATHS = ("/api/health", "/api/ready")
+log = logging.getLogger("coderag.web")
+
+
+class ProxyHopsLog:
+    """
+    Logs, once per process, how many X-Forwarded-For entries the first request carries,
+    next to CODERAG_TRUSTED_PROXY_HOPS. Behind one proxy that appends the client's
+    address (Azure Container Apps, HF Spaces), a plain visit shows 1, so the client is
+    the last entry. The addresses are never logged. The platform's health probes reach
+    the container directly, not through the proxy, so their paths are skipped.
+    Pass-through: the request is never changed.
+    """
+
+    def __init__(self, app, trusted_proxy_hops=0):
+        self.app = app
+        self.hops = trusted_proxy_hops
+        self.logged = False
+
+    async def __call__(self, scope, receive, send):
+        if not self.logged and scope["type"] == "http" and scope.get("path") not in PROBE_PATHS:
+            self.logged = True
+            # the first header, split as limits.client_ip does
+            entries = len([p for p in (_header(scope, b"x-forwarded-for") or "").split(",") if p.strip()])
+            if self.hops <= 0:
+                verdict = "trusted hops is 0: the socket peer is used as the client address"
+            elif entries == self.hops:
+                verdict = "ok: the client address is entry -%d" % self.hops
+            elif entries < self.hops:
+                verdict = ("too few entries: the socket peer (the proxy) is used as the client address, "
+                           "so CODERAG_TRUSTED_PROXY_HOPS is higher than the proxies in front")
+            else:
+                verdict = ("more entries than trusted hops: fine if this client sent its own X-Forwarded-For; "
+                           "otherwise another proxy is in front and CODERAG_TRUSTED_PROXY_HOPS should be higher")
+            log.info("proxy hops: X-Forwarded-For has %d entr%s on the first request, CODERAG_TRUSTED_PROXY_HOPS=%d (%s)",
+                     entries, "y" if entries == 1 else "ies", self.hops, verdict)
         return await self.app(scope, receive, send)
 
 
