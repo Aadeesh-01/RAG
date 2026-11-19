@@ -162,6 +162,7 @@ class User:
     login: str
     name: str
     avatar_url: str
+    session_version: int = 0         # every session cookie carries it; signing out bumps it
 
     def public(self):
         return {"name": self.name or self.login, "login": self.login, "avatar_url": self.avatar_url}
@@ -199,7 +200,7 @@ class Users:
 
     @staticmethod
     def _user(row):
-        return User(row.id, row.github_id, row.login, row.name, row.avatar_url) if row else None
+        return User(row.id, row.github_id, row.login, row.name, row.avatar_url, row.session_version or 0) if row else None
 
     def upsert(self, github_user, token):
         """Save (or refresh) a GitHub user and their token; returns the User."""
@@ -221,6 +222,14 @@ class Users:
         from ..db.models import User as Row
         with self.db.session() as s:
             return self._user(s.get(Row, user_id))
+
+    def end_sessions(self, user_id):
+        """Sign the user out everywhere: every session cookie issued so far stops working."""
+        from ..db.models import User as Row
+        with self.db.session() as s:
+            row = s.get(Row, user_id)
+            if row is not None:
+                row.session_version = (row.session_version or 0) + 1
 
     def touch(self, user_id):
         """Record that the user was seen (at most every SEEN_EVERY seconds)."""
@@ -366,7 +375,8 @@ class Auth:
 
     # ── sessions ─────────────────────────────────────────────────────────────
     def session_cookie(self, user_id):
-        return self._sessions.dumps({"uid": user_id})
+        user = self.users.get(user_id) if self.users else None
+        return self._sessions.dumps({"uid": user_id, "sv": user.session_version if user else 0})
 
     def current_user(self, request):
         """The signed-in User, or None."""
@@ -379,6 +389,9 @@ class Auth:
             return None
         uid = data.get("uid") if isinstance(data, dict) else None
         user = self.users.get(uid) if isinstance(uid, int) else None
+        # signed before the user last signed out (cookies from before session versions count as 0)
+        if user is not None and data.get("sv", 0) != user.session_version:
+            return None
         if user is not None:
             self.users.touch(user.id)
         return user
@@ -497,6 +510,9 @@ class Auth:
 
         @r.post("/api/auth/logout")
         def logout(request: Request):
+            user = self.current_user(request)
+            if user is not None:                      # server side too: this cookie, and any copy, stops working
+                self.users.end_sessions(user.id)
             response = Response(status_code=204)
             response.delete_cookie(SESSION_COOKIE, path="/", httponly=True, samesite="lax",
                                    secure=self._secure(request))

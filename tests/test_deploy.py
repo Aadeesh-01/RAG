@@ -46,7 +46,7 @@ def test_a_complete_production_environment_passes_without_migrating(tmp_path):
     rows = predeploy_check.check(values)
     assert all(s == "PASS" for s, _, _ in rows), rows
     detail = dict((n, d) for _, n, d in rows)
-    assert detail["migrations"] == "at 0003 (head 0003; not migrated by this check)"
+    assert detail["migrations"] == "at 0004 (head 0004; not migrated by this check)"
     assert "https://coderag.example.com/api/auth/github/callback" in detail["CODERAG_PUBLIC_URL"]
     text = predeploy_check.table(rows)
     assert text.splitlines()[-1].startswith("OK: 0 failed")
@@ -69,7 +69,7 @@ def test_the_check_never_migrates(tmp_path):
 
     Database(url).upgrade("0002")                                   # behind this checkout: reported, not upgraded
     status, detail = migrations()
-    assert status == "WARN" and detail.startswith("at 0002, behind this checkout's head 0003")
+    assert status == "WARN" and detail.startswith("at 0002, behind this checkout's head 0004")
     assert Database(url).current() == "0002"
 
     db = Database(url)                                              # ahead of this checkout (a newer image migrated it)
@@ -121,7 +121,8 @@ def test_requirements_run_the_server_and_leave_dev_tools_out():
     names = {re.split(r"[<>=\[ ]", line)[0].lower() for line in read("requirements.txt").splitlines()
              if line.strip() and not line.startswith("#")}
     assert {"fastapi", "uvicorn"} <= names and "pytest" not in names
-    assert "uvicorn[standard]" in read("requirements.txt")
+    # uvicorn's fast parser and loop, without the [standard] extras the server never uses
+    assert {"httptools", "uvloop"} <= names and "uvicorn[standard]" not in read("requirements.txt")
     dev = read("requirements-dev.txt")
     assert "-r requirements.txt" in dev and "pytest" in dev
 

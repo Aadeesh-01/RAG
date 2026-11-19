@@ -44,6 +44,18 @@ const MARK = /⟦S(\d+)⟧/g;                // ⟦S2⟧ placeholder survives ma
  * first, and nothing ever rewrites the sanitized HTML (a regex over sanitized
  * HTML can split a tag and bring attribute text back to life).
  */
+/**
+ * DOMPurify options for answers (model output, which a question or indexed code can steer): on top of
+ * DOMPurify's defaults (no scripts, event handlers or javascript: URLs), no forms or inputs (no fake
+ * sign-in boxes), no <style> and no style attributes (no page-covering overlays), no frames or media.
+ * data-* attributes stay: the citation chips use data-source.
+ */
+export const SANITIZE_OPTIONS = {
+  FORBID_TAGS: ["style", "form", "input", "button", "textarea", "select", "option", "iframe", "frame", "object", "embed",
+                "video", "audio", "source", "dialog"],
+  FORBID_ATTR: ["style", "srcset", "formaction", "autofocus"],
+};
+
 export function renderAnswer(text, nSources, { marked, sanitize }) {
   const marked_ = normalizeCitations(text).replace(CITATION, (_, group) =>
     group.split(/[,;]/).map((ref) => `⟦${ref.trim()}⟧`).join(" "));

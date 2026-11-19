@@ -57,7 +57,7 @@ from typing import Literal
 
 import httpx
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
@@ -258,7 +258,6 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                        public_url=settings.public_url)
     app.add_middleware(BodyLimit)
     app.add_middleware(OriginCheck, public_url=settings.public_url)      # outermost: refused before anything
-    app.include_router(auth.router())
 
     def can_open(repo_id, request):
         """Private repos only for users who added them; everything else for everyone."""
@@ -309,6 +308,11 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
             if not allowed:
                 raise HTTPException(429, f"Too many requests; try again in {retry:.0f}s",
                                     headers={"Retry-After": str(int(retry))})
+
+    # the auth routes (sign-in, the OAuth callback, which calls GitHub, /me on every page, logout): per IP
+    def auth_limit(request: Request):
+        limit(request, "auth", settings.auth_per_ip_per_hour)
+    app.include_router(auth.router(), dependencies=[Depends(auth_limit)])
 
     def allow_index(request, user):
         """allow_new for the indexer: the per-IP and per-user hourly limits on new repos."""
@@ -556,6 +560,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
     @app.get("/api/repos/{repo_id}/graph")
     def graph(repo_id: str, request: Request, version: str | None = None):
         demo, version, agent = resolve(repo_id, version, request)
+        limit(request, "graph", settings.retrieve_per_ip_per_hour)
         return graphs.get((repo_id, version, id(agent)), lambda: graph_data(agent))   # LRU; a re-index: new key
 
     @app.get("/api/repos/{repo_id}/file")
@@ -686,7 +691,7 @@ def create_app(settings=None, demos=None, llm_factory=None, limiter=None, embedd
                                  headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
                                  background=BackgroundTask(release))
 
-    home.add_routes(app, db, auth, repos, indexer, settings)
+    home.add_routes(app, db, auth, repos, indexer, settings, limit)
     app.state.freshness = freshness.Freshness(indexer.latest)          # new commits on a repo's branch
     freshness.add_routes(app, auth, repos, indexer, limit, allow_index, settings, app.state.freshness)
     history.add_routes(app, db, auth, repos, can_open, limit,

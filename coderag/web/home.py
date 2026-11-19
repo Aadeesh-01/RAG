@@ -45,7 +45,7 @@ def question_brief(row, repo_name, preview=False, open_id=None):
     return out
 
 
-def add_routes(app, db, auth, repos, indexer, settings):
+def add_routes(app, db, auth, repos, indexer, settings, limit=None):
     """Register GET /api/home on `app`."""
 
     @app.get("/api/home")
@@ -53,6 +53,8 @@ def add_routes(app, db, auth, repos, indexer, settings):
         user = auth.current_user(request)
         if user is None:
             raise HTTPException(401, "Not signed in")
+        if limit is not None:
+            limit(request, "home", settings.retrieve_per_ip_per_hour, user, settings.retrieve_per_ip_per_hour)
         links = auth.users.links(user.id)                          # last opened (else added) first
         summaries = repos.summaries([repo_id for repo_id, _, _ in links])
         jobs = {}

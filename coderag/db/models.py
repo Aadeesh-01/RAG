@@ -38,6 +38,7 @@ class User(Base):
     token_encrypted: Mapped[str] = mapped_column(Text, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=utcnow)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    session_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # bumped on sign-out
 
 
 class Repo(Base):

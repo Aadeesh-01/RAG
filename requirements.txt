@@ -14,4 +14,8 @@ sqlalchemy>=2.0,<2.1
 alembic>=1.13
 psycopg[binary]>=3.1
 fastapi>=0.110
-uvicorn[standard]>=0.29
+# uvicorn without [standard]: its httptools and uvloop, not watchfiles (--reload only),
+# websockets (no websocket routes) or python-dotenv (no .env files): unused code stays out
+uvicorn>=0.29
+httptools>=0.6
+uvloop>=0.19 ; sys_platform != "win32"

@@ -1,5 +1,5 @@
 // The read-only shared answer page (/a/<slug>): GET /api/shares/<slug>, works signed out.
-import { citedSources, formatDate, renderAnswer, safeHref } from "./lib.js";
+import { SANITIZE_OPTIONS, citedSources, formatDate, renderAnswer, safeHref } from "./lib.js";
 
 const $ = (s) => document.querySelector(s);
 
@@ -22,7 +22,7 @@ function el(tag, attrs = {}, ...children) {
 }
 
 const renderers = window.marked && window.DOMPurify
-  ? { marked: (s) => window.marked.parse(s), sanitize: (s) => window.DOMPurify.sanitize(s) }
+  ? { marked: (s) => window.marked.parse(s), sanitize: (s) => window.DOMPurify.sanitize(s, SANITIZE_OPTIONS) }
   : { marked: (s) => `<p>${s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]))}</p>`, sanitize: (s) => s };
 
 function snippet(source) {

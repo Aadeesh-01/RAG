@@ -15,7 +15,7 @@ class ConfigError(RuntimeError):
 class Settings:
     data_dir: str = "data"                      # visitor indexes, clones, SQLite (a persistent disk)
     demos_dir: str = ""                         # curated demo indexes; "" = <data_dir>/demos
-    database_url: str = ""                      # CODERAG_DATABASE_URL; "" = sqlite:///<data_dir>/coderag.db
+    database_url: str = field(default="", repr=False)   # CODERAG_DATABASE_URL (has the password); "" = sqlite:///<data_dir>/coderag.db
     # Server-side LLM (key from the provider's env var, e.g. GROQ_API_KEY). Models are
     # tried in order; each has its own rate limit on the provider side.
     server_llm_provider: str = "groq"
@@ -23,7 +23,8 @@ class Settings:
     # Rate limits
     ask_per_ip_per_hour: int = 30               # questions answered with the server key
     own_key_ask_per_ip_per_hour: int = 300      # questions answered with the visitor's key
-    retrieve_per_ip_per_hour: int = 600         # retrieval-only requests
+    retrieve_per_ip_per_hour: int = 600         # retrieval-only requests (also the graph, files, Home)
+    auth_per_ip_per_hour: int = 300             # sign-in, the OAuth callback, /api/auth/me, logout
     server_daily_cap: int = 800                 # all visitors, server key; keep below quota
     trusted_proxy_hops: int = 0                 # 1 behind one reverse proxy (HF Spaces)
     answer_cache_size: int = 500

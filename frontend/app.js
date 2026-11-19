@@ -1,5 +1,5 @@
 import {
-  answerLines, bridgeCounts, citedSources, createSSEParser, errorMessage, focusSubgraph, formatDate, formatLocation, hopLabel, middleTruncate,
+  SANITIZE_OPTIONS, answerLines, bridgeCounts, citedSources, createSSEParser, errorMessage, focusSubgraph, formatDate, formatLocation, hopLabel, middleTruncate,
   middleTruncateName, moduleGraph, normalizeCitations, plural, questionsPerDay, renderAnswer, repoOverview, repoStatus, suggestedQuestions,
   viaLabel, initials, avatarSrc, safeHref, timeAgo,
 } from "./lib.js";
@@ -116,7 +116,7 @@ function dot(kind, language) {
 
 // Markdown + sanitizer; if the CDN libraries failed to load, show plain escaped text.
 const renderers = window.marked && window.DOMPurify
-  ? { marked: (s) => window.marked.parse(s), sanitize: (s) => window.DOMPurify.sanitize(s) }
+  ? { marked: (s) => window.marked.parse(s), sanitize: (s) => window.DOMPurify.sanitize(s, SANITIZE_OPTIONS) }
   : { marked: (s) => `<p>${escapeHtml(s)}</p>`, sanitize: (s) => s };
 
 function banner(message, kind = "") {

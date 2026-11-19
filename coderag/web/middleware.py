@@ -4,7 +4,8 @@ plus the logging setup.
 
   SecurityHeaders   CSP (the inline-script hashes are computed from the frontend's
                     HTML at start-up, so they never go stale), nosniff, Referrer-Policy,
-                    X-Frame-Options / frame-ancestors 'none', HSTS when PUBLIC_URL is https
+                    X-Frame-Options / frame-ancestors 'none', Permissions-Policy, HSTS when
+                    PUBLIC_URL is https
   BodyLimit         413 for request bodies over MAX_BODY bytes (declared or streamed)
   OriginCheck       403 for POST/PUT/PATCH/DELETE whose Origin (or Referer) isn't PUBLIC_URL
   ProxyHopsLog      one INFO line with the X-Forwarded-For chain length (never the addresses)
@@ -83,6 +84,8 @@ class SecurityHeaders:
             (b"x-content-type-options", b"nosniff"),
             (b"referrer-policy", b"strict-origin-when-cross-origin"),
             (b"x-frame-options", b"DENY"),
+            # the app needs none of these powerful features: off for the page and anything it embeds
+            (b"permissions-policy", b"camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()"),
         ]
         if public_url.startswith("https://"):
             self.headers.append((b"strict-transport-security", b"max-age=31536000; includeSubDomains"))
